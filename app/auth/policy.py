@@ -30,7 +30,9 @@ class Actor:
 def actor_for(db: Session, user: User) -> Actor:
     regional: dict[uuid.UUID, set[str]] = {}
     global_roles: set[str] = set()
-    for grant in db.scalars(select(RoleGrant).where(RoleGrant.user_id == user.id)):
+    for grant in db.scalars(
+        select(RoleGrant).where(RoleGrant.user_id == user.id, RoleGrant.status == "ACTIVE")
+    ):
         if grant.region_id is None:
             global_roles.add(grant.role)
         else:
@@ -50,6 +52,19 @@ def can_manage_region(actor: Actor, region_id: uuid.UUID) -> bool:
 
 def can_administer_region(actor: Actor, region_id: uuid.UUID) -> bool:
     return actor.is_admin or Role.MANAGER.value in actor.roles_for(region_id)
+
+
+def can_grant_role(actor: Actor, role: str, region_id: uuid.UUID | None) -> bool:
+    if actor.is_admin:
+        return role in {item.value for item in Role} and (
+            (role == Role.ADMIN.value and region_id is None)
+            or (role != Role.ADMIN.value and region_id is not None)
+        )
+    return bool(
+        role == Role.SUB_MANAGER.value
+        and region_id is not None
+        and Role.MANAGER.value in actor.roles_for(region_id)
+    )
 
 
 def can_crew_view(actor: Actor, region_id: uuid.UUID) -> bool:

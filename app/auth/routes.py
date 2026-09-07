@@ -17,7 +17,12 @@ from app.auth.security import (
     verify_credential,
     verify_csrf,
 )
-from app.auth.service import activate_invitation, normalise_email, validated_email
+from app.auth.service import (
+    activate_invitation,
+    activate_pending_grants,
+    normalise_email,
+    validated_email,
+)
 from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -57,6 +62,7 @@ def login(
         )
     for key in keys:
         clear_failures(db, key)
+    activate_pending_grants(db, user, credential)
     raw_session, raw_csrf, device = create_device(
         db, user, request.headers.get("user-agent", "Browser")[:120]
     )

@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.accounts.routes import router as accounts_router
 from app.admin.routes import router as admin_router
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.routes import router as auth_router
@@ -41,6 +42,7 @@ app.include_router(rostering_router)
 app.include_router(open_positions_router)
 app.include_router(crew_router)
 app.include_router(admin_router)
+app.include_router(accounts_router)
 
 
 @app.get("/health/live", include_in_schema=False)

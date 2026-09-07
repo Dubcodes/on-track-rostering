@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     trusted_device_days_standard: int = Field(default=90, ge=1, le=365)
     trusted_device_days_elevated: int = Field(default=14, ge=1, le=90)
     trusted_device_limit: int = Field(default=10, ge=1, le=100)
+    fresh_auth_minutes: int = Field(default=15, ge=1, le=120)
     public_signup_enabled: bool = False
     timezone_name: str = "Pacific/Auckland"
     fortnight_anchor: str = "2026-08-31"

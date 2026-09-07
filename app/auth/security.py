@@ -132,7 +132,13 @@ def clear_failures(db: Session, key: str) -> None:
 
 def create_device(db: Session, user: User, label: str = "Browser") -> tuple[str, str, TrustedDevice]:
     session_token, csrf_token = secrets.token_urlsafe(40), secrets.token_urlsafe(32)
-    roles = set(db.scalars(select(RoleGrant.role).where(RoleGrant.user_id == user.id)))
+    roles = set(
+        db.scalars(
+            select(RoleGrant.role).where(
+                RoleGrant.user_id == user.id, RoleGrant.status == "ACTIVE"
+            )
+        )
+    )
     elevated = bool(roles & ELEVATED_ROLES)
     days = (
         get_settings().trusted_device_days_elevated
@@ -147,6 +153,7 @@ def create_device(db: Session, user: User, label: str = "Browser") -> tuple[str,
         label=label[:120],
         auth_epoch=user.auth_epoch,
         elevated=elevated,
+        primary_authenticated_at=now,
         created_at=now,
         last_seen_at=now,
         expires_at=now + timedelta(days=days),
@@ -166,6 +173,19 @@ def create_device(db: Session, user: User, label: str = "Browser") -> tuple[str,
             old.revoked_at = now
     db.commit()
     return session_token, csrf_token, device
+
+
+def require_fresh_auth(request: Request) -> None:
+    device = getattr(request.state, "device", None)
+    authenticated_at = device.primary_authenticated_at if device else None
+    if authenticated_at and authenticated_at.tzinfo is None:
+        authenticated_at = authenticated_at.replace(tzinfo=UTC)
+    cutoff = utcnow() - timedelta(minutes=get_settings().fresh_auth_minutes)
+    if not authenticated_at or authenticated_at < cutoff:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Recent authentication is required. Re-enter your credential in Settings.",
+        )
 
 
 def resolve_device(db: Session, raw_token: str) -> tuple[User, TrustedDevice] | None:

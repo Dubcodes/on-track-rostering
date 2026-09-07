@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
 from app.auth.policy import require_admin
-from app.auth.security import active_device_count, credential_error, hash_credential, verify_csrf
+from app.auth.security import (
+    active_device_count,
+    credential_error,
+    hash_credential,
+    require_fresh_auth,
+    verify_csrf,
+)
 from app.auth.service import create_invitation, validated_email
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.catalog.service import close_colour_warnings
@@ -198,6 +204,7 @@ def create_user(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
     if role not in {item.value for item in Role}:
         raise HTTPException(400, "Invalid role")
     if error := credential_error(credential, role):
@@ -248,6 +255,7 @@ def invite_user(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
     try:
         _, raw = create_invitation(
             db,
@@ -273,6 +281,7 @@ def update_user_status(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
     if user_id == request.state.user.id:
         raise HTTPException(400, "You cannot disable your own active Admin session.")
     if account_status not in {"ACTIVE", "DISABLED"}:
@@ -280,6 +289,27 @@ def update_user_status(
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404)
+    if account_status == "DISABLED":
+        target_is_admin = db.scalar(
+            select(RoleGrant.id).where(
+                RoleGrant.user_id == user.id,
+                RoleGrant.role == Role.ADMIN.value,
+                RoleGrant.status == "ACTIVE",
+            ).limit(1)
+        )
+        another_admin = db.scalar(
+            select(RoleGrant.id)
+            .join(User, User.id == RoleGrant.user_id)
+            .where(
+                RoleGrant.user_id != user.id,
+                RoleGrant.role == Role.ADMIN.value,
+                RoleGrant.status == "ACTIVE",
+                User.status == "ACTIVE",
+            )
+            .limit(1)
+        )
+        if target_is_admin and not another_admin:
+            raise HTTPException(409, "The final active Admin account cannot be disabled.")
     user.status = account_status
     user.auth_epoch += 1
     now = utcnow()
@@ -310,6 +340,7 @@ def revoke_user_devices(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404)
@@ -334,6 +365,7 @@ def revoke_invitation(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
     invitation = db.get(Invitation, invitation_id)
     if not invitation or invitation.consumed_at:
         raise HTTPException(409, "Invitation is unavailable.")
@@ -354,6 +386,7 @@ def reject_signup(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
     signup = db.get(SignupRequest, signup_id)
     if not signup or signup.status != "PENDING":
         raise HTTPException(409, "Signup request is no longer pending.")

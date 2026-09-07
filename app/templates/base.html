@@ -20,6 +20,7 @@
       {% if show_open_positions %}<a href="/open-positions">Open</a>{% endif %}
       {% if show_manage %}<a href="/manage/workdays/new">Build</a>{% endif %}
       {% if show_manage %}<a href="/manage/crew">Manage</a>{% endif %}
+      {% if show_accounts %}<a href="/manage/accounts">Accounts</a>{% endif %}
       {% if actor.is_admin %}<a href="/admin">Admin</a>{% endif %}
       <a href="/settings">Settings</a>
       <a href="/help?context_key={{ help_context|default('general') }}">Help</a>

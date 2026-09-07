@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
 from app.auth.policy import can_crew_view, can_manage_region, can_view_published
-from app.auth.security import verify_csrf
+from app.auth.security import verify_credential, verify_csrf
 from app.catalog.models import BasePosition, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
 from app.core.time import worked_minutes
 from app.employee.read_models import day_assignments, month_items
+from app.identity.models import TrustedDevice, User
 from app.positions.service import set_preference_signal
 from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 from app.rostering.service import decline_published_assignment
@@ -244,6 +245,25 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         "settings.html", context(request, positions=positions, capability_signals=signals)
     )
+
+
+@router.post("/settings/reauthenticate")
+def reauthenticate(
+    request: Request,
+    credential: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    user = db.get(User, request.state.user.id)
+    device = db.get(TrustedDevice, request.state.device.id)
+    if not user or not device or not verify_credential(credential, user.credential_hash):
+        raise HTTPException(400, "Credential could not be verified.")
+    from app.core.time import utcnow
+
+    device.primary_authenticated_at = utcnow()
+    db.commit()
+    return RedirectResponse("/settings?reauthenticated=1", status_code=303)
 
 
 @router.post("/settings/capabilities/{position_id}")

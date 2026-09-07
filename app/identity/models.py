@@ -64,8 +64,8 @@ class RoleGrant(Base):
             "user_id",
             "role",
             unique=True,
-            postgresql_where=text("region_id IS NULL"),
-            sqlite_where=text("region_id IS NULL"),
+            postgresql_where=text("region_id IS NULL AND status <> 'REVOKED'"),
+            sqlite_where=text("region_id IS NULL AND status <> 'REVOKED'"),
         ),
         Index(
             "uq_role_grants_regional",
@@ -73,16 +73,19 @@ class RoleGrant(Base):
             "role",
             "region_id",
             unique=True,
-            postgresql_where=text("region_id IS NOT NULL"),
-            sqlite_where=text("region_id IS NOT NULL"),
+            postgresql_where=text("region_id IS NOT NULL AND status <> 'REVOKED'"),
+            sqlite_where=text("region_id IS NOT NULL AND status <> 'REVOKED'"),
         ),
     )
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(24))
     region_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("regions.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE", index=True)
     granted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     user: Mapped[User] = relationship(back_populates="grants", foreign_keys=[user_id])
 
 
@@ -95,6 +98,7 @@ class TrustedDevice(Base):
     label: Mapped[str] = mapped_column(String(120), default="Browser")
     auth_epoch: Mapped[int]
     elevated: Mapped[bool] = mapped_column(Boolean, default=False)
+    primary_authenticated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -135,6 +139,10 @@ class SignupRequest(Base):
     requested_region_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("regions.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_person_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("people.id"), nullable=True)
+    invitation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("invitations.id"), nullable=True)
 
 
 class PasskeyCredential(Base):
