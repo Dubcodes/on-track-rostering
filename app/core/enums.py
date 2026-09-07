@@ -1,0 +1,59 @@
+from enum import StrEnum
+
+
+class Lifecycle(StrEnum):
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class Role(StrEnum):
+    CONTRACTOR = "CONTRACTOR"
+    EMPLOYEE = "EMPLOYEE"
+    SUB_MANAGER = "SUB_MANAGER"
+    MANAGER = "MANAGER"
+    VIEWER = "VIEWER"
+    ADMIN = "ADMIN"
+
+
+class WorkdayCategory(StrEnum):
+    RACE_DAY = "RACE_DAY"
+    TRIALS = "TRIALS"
+    TRAVEL_DAY = "TRAVEL_DAY"
+    RIG_DAY = "RIG_DAY"
+    OFFICE_DAY = "OFFICE_DAY"
+    TRAINING_DAY = "TRAINING_DAY"
+    OTHER = "OTHER"
+
+
+class RevisionState(StrEnum):
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+
+
+class AssignmentStatus(StrEnum):
+    ASSIGNED = "ASSIGNED"
+    OPEN = "OPEN"
+    TBC = "TBC"
+    MANAGER_ACTION_REQUIRED = "MANAGER_ACTION_REQUIRED"
+
+
+class CapabilitySignal(StrEnum):
+    WORKED = "WORKED"
+    EMPLOYEE_ALLOW = "EMPLOYEE_ALLOW"
+    EMPLOYEE_OPT_OUT = "EMPLOYEE_OPT_OUT"
+    MANAGER_ALLOW = "MANAGER_ALLOW"
+    MANAGER_BLOCK = "MANAGER_BLOCK"
+
+
+class DeclinePolicy(StrEnum):
+    OPEN_IMMEDIATELY = "OPEN_IMMEDIATELY"
+    MANAGER_REVIEW = "MANAGER_REVIEW"
+
+
+class OpenApplicationStatus(StrEnum):
+    APPLIED = "APPLIED"
+    SELECTED = "SELECTED"
+    ACCEPTED = "ACCEPTED"
+    NOT_SELECTED = "NOT_SELECTED"
+    WITHDRAWN = "WITHDRAWN"
+    CLOSED = "CLOSED"

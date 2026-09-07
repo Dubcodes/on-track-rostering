@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Sign in · On Track{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <p class="eyebrow">Authoritative race-day rostering</p>
+  <h1>Good to see you.</h1>
+  <p class="lede">Sign in with your account email and PIN or password.</p>
+  {% if error %}<div class="alert error" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/login" class="stack">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Email<input name="email" type="email" autocomplete="username" required autofocus></label>
+    <label>PIN or password<input name="credential" type="password" autocomplete="current-password" required></label>
+    <button type="submit">Sign in</button>
+  </form>
+  <p class="muted"><a href="/signup">Request an account</a></p>
+</section>
+{% endblock %}
+

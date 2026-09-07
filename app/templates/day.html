@@ -1,0 +1,22 @@
+{% extends "base.html" %}{% set help_context = 'day' %}
+{% block title %}{{ revision.title }} · On Track{% endblock %}
+{% block content %}
+<a class="back-link" href="/month">← Back to month</a>
+<section class="hero-card" style="--track:{{ revision.track_colour_snapshot }}">
+  <div><p class="eyebrow">{{ workday.category.replace('_',' ').title() }}</p><h1>{{ revision.track_name_snapshot }}</h1><p class="hero-date">{{ revision.work_date.strftime('%A') }} {{ revision.work_date.day }} {{ revision.work_date.strftime('%B') }}</p></div>
+  {% if management %}<a class="button secondary" href="/manage/workdays/{{ workday.id }}">Edit draft</a>{% endif %}
+</section>
+<section class="timing-strip">
+  <div><small>Start</small><strong>{{ revision.start_time|display_time or 'TBC' }}</strong></div>
+  <div><small>On track</small><strong>{{ revision.on_track_time|display_time or 'TBC' }}</strong></div>
+  <div><small>First race</small><strong>{{ revision.first_race_time|display_time or 'TBC' }}</strong></div>
+  <div><small>Finish</small><strong>{{ revision.end_time|display_time or 'TBC' }}</strong></div>
+</section>
+{% if request.query_params.get('declined') %}<div class="alert success">Your assignment was removed from the authoritative roster.</div>{% endif %}
+{% if revision.day_note %}<section class="notice-card"><h2>Day notes</h2><p>{{ revision.day_note }}</p></section>{% endif %}
+<section class="panel"><div class="section-head"><div><p class="eyebrow">Published crew</p><h2>Assignments</h2></div><span class="revision-badge">Revision {{ revision.revision_number }}</span></div>
+  <div class="assignment-list">{% for row in assignments %}<article class="assignment{% if row.is_own %} own{% endif %}"><div><strong>{{ row.role }}</strong><span>{{ row.person }}</span>{% if row.can_decline %}<a class="text-action" href="/day/{{ workday.id }}/assignments/{{ row.slot_key }}/decline">I’m not available</a>{% endif %}</div><div class="assignment-meta">{% if row.start or row.end %}{{ row.start|display_time }}–{{ row.end|display_time }}{% endif %}{% if row.note %}<small>{{ row.note }}</small>{% endif %}</div></article>{% else %}<p class="muted">No positions have been added.</p>{% endfor %}</div>
+</section>
+<details class="panel"><summary>Time calculation</summary><p>Authoritative roster span: {% if minutes %}{{ minutes // 60 }}h {{ minutes % 60 }}m{% else %}not complete{% endif %}. No break has been deducted.</p></details>
+<details class="panel"><summary>Change history</summary><div class="record-list">{% for change in history %}<span>{{ change.summary }} <small>{{ change.occurred_at|display_datetime }}</small></span>{% else %}<span>No published changes recorded.</span>{% endfor %}</div></details>
+{% endblock %}

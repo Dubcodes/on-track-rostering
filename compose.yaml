@@ -1,0 +1,52 @@
+name: on-track-rostering
+services:
+  db:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ontrack}
+      POSTGRES_USER: ${POSTGRES_USER:-ontrack}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TZ: ${TZ:-Pacific/Auckland}
+    volumes:
+      - ontrack_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [ontrack_internal]
+
+  app:
+    build:
+      context: .
+      args:
+        BUILD_ID: ${ONTRACK_BUILD_ID:-unknown}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ONTRACK_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ontrack}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ontrack}
+      ONTRACK_SECRET_KEY: ${ONTRACK_SECRET_KEY:?Set a 32+ character ONTRACK_SECRET_KEY in .env}
+      ONTRACK_CREDENTIAL_PEPPER: ${ONTRACK_CREDENTIAL_PEPPER:?Set ONTRACK_CREDENTIAL_PEPPER in .env}
+      TZ: ${TZ:-Pacific/Auckland}
+    ports:
+      - "${ONTRACK_HOST_PORT:-8080}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [ontrack_internal]
+
+networks:
+  ontrack_internal:
+    name: ontrack_internal
+
+volumes:
+  ontrack_postgres_data:
+    name: ontrack_postgres_data

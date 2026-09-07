@@ -1,0 +1,23 @@
+# Domain rules
+
+- On Track stores authoritative workdays directly. External calendar/programme records are planning assistance.
+- Workday categories have stable codes: Race Day, Trials, Travel Day, Rig Day, Office Day, Training Day, Other.
+- Publication follows Draft → Preview → Publish. Drafts are invisible to crew; old publications remain readable history.
+- An account is not a rosterable person. Linking must not create duplicate crew identities.
+- Home region is a default, not a prison. Event assignment can grant one-off cross-region visibility.
+- Roles combine authority and independent region scope. Viewer is broad read-only, not quasi-Manager. Sub-Manager can perform practical regional rostering but not system security administration.
+- Crew groups are editable many-to-many browsing/suggestion data, never authorization barriers.
+- Capability attaches to a base position such as CCU or VT. `CCU 1`/`CCU 2` are event slots of CCU unless deliberately modelled otherwise.
+- Effective position recommendation: Manager block wins; employee opt-out suppresses offers; otherwise worked history, Manager allow, or employee allow establishes eligibility. Managers may still manually assign with a warning.
+- Worked history is learned only from published assigned slots, never drafts.
+- ASSIGNED, OPEN, TBC, and MANAGER_ACTION_REQUIRED are distinct assignment states.
+- Open-position applications attach to a specific published revision and stable slot key. Managers select an applicant into a draft; only Publish makes the assignment authoritative. Duplicate and stale applications are rejected.
+- Employee decline is an exceptional direct authoritative action. It creates a new immutable published revision atomically: `OPEN_IMMEDIATELY` produces OPEN, while `MANAGER_REVIEW` produces MANAGER_ACTION_REQUIRED. It never mutates an older publication.
+- Track colours are data and may repeat across regions. Names/text always accompany colour.
+- Normal day notes are visible to rostered Contractors, scoped Crew View, operational management, scoped Viewers, and Admin.
+- Private assignment notes are visible only to the assigned person and operational management. Viewers do not inherit access. Management-only crew notes are a separate future concept.
+- Roster hours are authoritative start/end spans, including overnight spans. No automatic half-hour or meal-break deduction occurs.
+- Allowances and public holidays are informational and never payroll calculations.
+- Operations group related days without enforcing hotel, vehicle, or travel continuity. Explicit individual exceptions must remain possible.
+- Master records are archived instead of casually deleted once historically referenced.
+- Notification generation is an idempotent event-outbox concern. Push delivery failure must never roll back roster publication or employee decline.

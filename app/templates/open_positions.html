@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% set help_context = 'open_positions' %}
+{% block title %}Open positions · On Track{% endblock %}
+{% block content %}
+<section class="page-head"><p class="eyebrow">Eligible opportunities</p><h1>Open positions</h1><p class="lede">Only roles supported by your base-position history or an explicit allowance appear here.</p></section>
+{% if request.query_params.get('applied') %}<div class="alert success">Application recorded. A Manager will choose an applicant, preview the roster, and publish the change.</div>{% endif %}
+<div class="card-list">
+{% for item in positions %}<article class="panel opportunity"><div><p class="eyebrow">{{ item.revision.work_date.strftime('%a %d %b') }}</p><h2>{{ item.assignment.display_name_snapshot }}</h2><p>{{ item.revision.track_name_snapshot }} · {{ item.revision.title }}</p><small>{{ item.eligibility_reason }}</small></div>
+{% set state = applied.get((item.revision.id, item.assignment.slot_key)) %}
+{% if state %}<span class="revision-badge">{{ state.replace('_',' ').title() }}</span>{% else %}<form method="post" action="/open-positions/{{ item.workday.id }}/{{ item.assignment.slot_key }}/apply"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Apply</button></form>{% endif %}</article>
+{% else %}<section class="empty-state panel"><h2>No eligible Open positions</h2><p>Unknown capabilities are not offered automatically. Your position preferences and published work history determine eligibility.</p></section>{% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#123b35">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/static/style.css">
+  <title>{% block title %}On Track{% endblock %}</title>
+</head>
+<body data-user-namespace="{{ user.id if user else '' }}">
+  <header class="app-header">
+    <a class="brand" href="/month" aria-label="On Track home">
+      <span class="brand-mark">OT</span><span><strong>On Track</strong><small>Rostering</small></span>
+    </a>
+    {% if user %}
+    <nav aria-label="Main navigation">
+      <a href="/month">Roster</a>
+      {% if show_crew %}<a href="/crew">Crew</a>{% endif %}
+      {% if show_open_positions %}<a href="/open-positions">Open</a>{% endif %}
+      {% if show_manage %}<a href="/manage/workdays/new">Build</a>{% endif %}
+      {% if show_manage %}<a href="/manage/crew">Manage</a>{% endif %}
+      {% if actor.is_admin %}<a href="/admin">Admin</a>{% endif %}
+      <a href="/settings">Settings</a>
+      <a href="/help?context_key={{ help_context|default('general') }}">Help</a>
+    </nav>
+    <form method="post" action="/logout" class="logout-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="quiet" type="submit">Sign out</button>
+    </form>
+    {% endif %}
+  </header>
+  <div id="offline-banner" class="offline-banner" hidden>Offline — showing the last roster saved on this device</div>
+  <main class="page-shell">{% block content %}{% endblock %}</main>
+  <footer class="app-footer">On Track {{ app_version }}{% if build_id %} · {{ build_id }}{% endif %}</footer>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

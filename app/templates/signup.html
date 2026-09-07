@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Request account · On Track{% endblock %}
+{% block content %}<section class="auth-card">
+  <p class="eyebrow">Account request</p><h1>Request access</h1>
+  {% if sent %}<div class="alert success">Your account is pending approval. A Manager will review your details.</div>
+  {% elif not enabled %}<div class="alert">Public account requests are currently closed. Ask your Manager for an invitation.</div>
+  {% else %}<form method="post" class="stack">
+    <label>Name<input name="display_name" required maxlength="120"></label>
+    <label>Email<input name="email" type="email" required maxlength="320"></label>
+    <label>Requested region<select name="requested_region_id"><option value="">Choose later</option>{% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}</select><small>This is a request only and grants no access.</small></label>
+    <button>Submit request</button>
+  </form>{% endif %}
+  <p class="muted"><a href="/login">Back to sign in</a></p>
+</section>{% endblock %}
+
