@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.crew.routes import router as crew_router
 from app.employee.routes import router as employee_router
+from app.hours.routes import router as hours_router
 from app.open_positions.routes import router as open_positions_router
 from app.rostering.routes import router as rostering_router
 
@@ -38,6 +39,7 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(get_settings().allo
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.include_router(auth_router)
 app.include_router(employee_router)
+app.include_router(hours_router)
 app.include_router(rostering_router)
 app.include_router(open_positions_router)
 app.include_router(crew_router)

@@ -4,6 +4,11 @@ const SHELL = ["/static/style.css", "/static/app.js", "/manifest.webmanifest"];
 const ACTIVE_USER_KEY = "/__ontrack_active_user";
 
 async function setActiveUser(namespace) {
+  const ownRosterCache = ROSTER_PREFIX + String(namespace);
+  const keys = await caches.keys();
+  await Promise.all(keys
+    .filter((key) => key.startsWith(ROSTER_PREFIX) && key !== ownRosterCache)
+    .map((key) => caches.delete(key)));
   const cache = await caches.open(SHELL_CACHE);
   await cache.put(ACTIVE_USER_KEY, new Response(String(namespace)));
 }
@@ -55,7 +60,8 @@ self.addEventListener("fetch", (event) => {
       if (!response.ok) return response;
       const copy = response.clone();
       const payload = await copy.clone().json();
-      const namespace = String(payload.user_namespace || "unknown");
+      const namespace = String(payload.user_namespace || "");
+      if (!/^[a-f0-9-]+$/i.test(namespace)) return response;
       await setActiveUser(namespace);
       const cache = await caches.open(ROSTER_PREFIX + namespace);
       await cache.put(event.request, copy);

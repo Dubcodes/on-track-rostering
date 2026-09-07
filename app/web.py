@@ -60,6 +60,16 @@ def context(request: Request, **values: object) -> dict[str, object]:
             or any("MANAGER" in roles for roles in actor.regional_roles.values())
         )
     )
+    show_hours_management = bool(
+        actor
+        and (
+            actor.is_admin
+            or any(
+                {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
+                for roles in actor.regional_roles.values()
+            )
+        )
+    )
     return {
         "request": request,
         "user": getattr(request.state, "user", None),
@@ -68,6 +78,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
         "show_crew": show_crew,
         "show_open_positions": show_open_positions,
         "show_accounts": show_accounts,
+        "show_hours_management": show_hours_management,
         "csrf_token": request.cookies.get(CSRF_COOKIE, ""),
         "app_version": get_settings().app_version,
         "build_id": get_settings().build_id,

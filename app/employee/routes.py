@@ -15,7 +15,7 @@ from app.auth.security import verify_credential, verify_csrf
 from app.catalog.models import BasePosition, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
-from app.core.time import worked_minutes
+from app.core.time import utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
 from app.identity.models import TrustedDevice, User
 from app.positions.service import set_preference_signal
@@ -210,8 +210,12 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
     management = can_manage_region(request.state.actor, workday.region_id)
     return {
         "user_namespace": str(request.state.user.id),
+        "saved_at": utcnow().isoformat(),
         "workday": {
             "id": str(workday.id),
+            "revision_id": str(revision.id),
+            "revision_number": revision.revision_number,
+            "published_at": revision.published_at,
             "date": revision.work_date,
             "title": revision.title,
             "track": revision.track_name_snapshot,

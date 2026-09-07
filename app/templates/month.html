@@ -13,14 +13,13 @@
     <article class="calendar-day{% if not day.in_month %} outside{% endif %}{% if day.today %} today{% endif %}">
       <header><span>{{ day.date.day }}</span>{% if day.holiday %}<span class="holiday" title="{{ day.holiday }}" aria-label="Public holiday: {{ day.holiday }}">★</span>{% endif %}</header>
       {% for item in items_by_date.get(day.date, []) %}
-      <a href="/day/{{ item.id }}" class="shift-chip{% if item.cross_region %} cross-region{% endif %}" style="--track:{{ item.colour }}">
+      <a href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" class="shift-chip{% if item.cross_region %} cross-region{% endif %}" style="--track:{{ item.colour }}">
         <strong>{{ item.track }}</strong><span>{{ item.start|display_time }} · {{ item.role }}</span>
       </a>{% endfor %}
     </article>
   {% endfor %}</div>{% endfor %}
 </section>
 <section class="roster-list" id="list-view" hidden>
-  {% for day, items in items_by_date.items() %}<div class="list-day"><div class="date-tile"><strong>{{ day.day }}</strong><span>{{ day.strftime('%a') }}</span></div><div>{% for item in items %}<a href="/day/{{ item.id }}" class="list-shift"><span class="track-dot" style="--track:{{ item.colour }}"></span><span><strong>{{ item.track }}</strong><small>{{ item.start|display_time }} · {{ item.role }}</small></span></a>{% endfor %}</div></div>{% else %}<div class="empty-state"><h2>Nothing rostered yet</h2><p>Published workdays will appear here.</p></div>{% endfor %}
+  {% for day, items in items_by_date.items() %}<div class="list-day"><div class="date-tile"><strong>{{ day.day }}</strong><span>{{ day.strftime('%a') }}</span></div><div>{% for item in items %}<a href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" class="list-shift"><span class="track-dot" style="--track:{{ item.colour }}"></span><span><strong>{{ item.track }}</strong><small>{{ item.start|display_time }} · {{ item.role }}</small></span></a>{% endfor %}</div></div>{% else %}<div class="empty-state"><h2>Nothing rostered yet</h2><p>Published workdays will appear here.</p></div>{% endfor %}
 </section>
 {% endblock %}
-

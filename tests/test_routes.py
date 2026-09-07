@@ -156,6 +156,10 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     assert "Ellerslie" in month.text and "CCU 2" in month.text
     day = employee_client.get(f"/day/{workday_id}")
     assert "Private transport" in day.text
+    day_payload = employee_client.get(f"/api/day/{workday_id}").json()
+    assert day_payload["saved_at"]
+    assert day_payload["workday"]["revision_id"]
+    assert day_payload["workday"]["revision_number"] == 1
     crew = employee_client.get(f"/crew?region_id={region_id}&year=2026&month=9")
     assert crew.status_code == 200 and "Ellerslie" in crew.text
     assert employee_client.get("/manage/workdays/new").status_code == 403

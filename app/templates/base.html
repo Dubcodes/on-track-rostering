@@ -16,10 +16,12 @@
     {% if user %}
     <nav aria-label="Main navigation">
       <a href="/month">Roster</a>
+      {% if actor.person_id %}<a href="/hours">Hours</a>{% endif %}
       {% if show_crew %}<a href="/crew">Crew</a>{% endif %}
       {% if show_open_positions %}<a href="/open-positions">Open</a>{% endif %}
       {% if show_manage %}<a href="/manage/workdays/new">Build</a>{% endif %}
       {% if show_manage %}<a href="/manage/crew">Manage</a>{% endif %}
+      {% if show_hours_management %}<a href="/manage/hours">Team hours</a>{% endif %}
       {% if show_accounts %}<a href="/manage/accounts">Accounts</a>{% endif %}
       {% if actor.is_admin %}<a href="/admin">Admin</a>{% endif %}
       <a href="/settings">Settings</a>

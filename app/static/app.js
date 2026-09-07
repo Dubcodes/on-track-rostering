@@ -34,10 +34,23 @@
       registration.active?.postMessage({ type: "SET_USER", namespace: document.body.dataset.userNamespace });
     });
     const prefetch = async () => {
-      const ids = [...new Set([...document.querySelectorAll('a[href^="/day/"]')]
-        .map((link) => link.getAttribute("href")?.split("/").pop()).filter(Boolean))].slice(0, 3);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const upcoming = [...document.querySelectorAll('a[data-work-date][href^="/day/"]')]
+        .map((link) => ({
+          id: link.getAttribute("href")?.split("/").pop(),
+          date: link.dataset.workDate
+        }))
+        .filter((item) => item.id && item.date && new Date(`${item.date}T00:00:00`) >= today)
+        .sort((left, right) => left.date.localeCompare(right.date));
+      const ids = [...new Set(upcoming.map((item) => item.id))].slice(0, 3);
       for (const id of ids) {
-        try { await fetch(`/api/day/${id}`, { headers: { "X-OnTrack-Prefetch": "1" } }); }
+        try {
+          const response = await fetch(`/api/day/${id}`, { headers: { "X-OnTrack-Prefetch": "1" } });
+          if (!response.ok) break;
+          const payload = await response.json();
+          if (payload.saved_at) localStorage.setItem("ontrack-last-saved-at", payload.saved_at);
+        }
         catch (_) { break; }
       }
     };
