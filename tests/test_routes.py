@@ -1,6 +1,8 @@
 import uuid
 import warnings
+from urllib.parse import parse_qs, urlsplit
 
+import pyotp
 import pytest
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
@@ -10,10 +12,12 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
     from fastapi.testclient import TestClient
 
+from app.auth.factors import begin_totp
 from app.auth.security import hash_credential
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base
 from app.core.enums import Role
+from app.core.time import utcnow
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.main import app
 from app.rostering.models import Assignment, Workday, WorkdayRevision
@@ -217,3 +221,43 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     )
     assert disabled.status_code == 303
     assert viewer_client.get("/month", follow_redirects=False).status_code == 303
+
+
+def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    employee_client = TestClient(app)
+    csrf = _login(employee_client, "amy@example.test", "654321")
+    options = employee_client.post(
+        "/settings/passkeys/options", data={"csrf_token": csrf}
+    )
+    assert options.status_code == 200
+    assert options.json()["challenge_id"]
+    assert options.json()["rp"]["id"] == "localhost"
+
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        factor, secret, _ = begin_totp(db, manager)
+        factor.confirmed_at = utcnow()
+        db.commit()
+
+    manager_client = TestClient(app)
+    first = manager_client.post(
+        "/login",
+        data={"email": "manager@example.test", "credential": "123456", "next": "/month"},
+        follow_redirects=False,
+    )
+    assert first.status_code == 303 and first.headers["location"].startswith("/login/totp?")
+    query = parse_qs(urlsplit(first.headers["location"]).query)
+    challenge_id = query["challenge_id"][0]
+    assert manager_client.get(first.headers["location"]).status_code == 200
+    completed = manager_client.post(
+        "/login/totp",
+        data={
+            "challenge_id": challenge_id,
+            "code": pyotp.TOTP(secret).now(),
+            "next": "/month",
+        },
+        follow_redirects=False,
+    )
+    assert completed.status_code == 303
+    assert manager_client.cookies.get("ontrack_session")

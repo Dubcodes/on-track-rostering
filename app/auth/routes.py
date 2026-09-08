@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import binascii
+import uuid
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.factors import (
+    active_totp,
+    consume_challenge,
+    create_challenge,
+    mfa_required,
+    verify_totp_factor,
+)
 from app.auth.security import (
     CSRF_COOKIE,
     SESSION_COOKIE,
@@ -13,6 +23,7 @@ from app.auth.security import (
     is_safe_next,
     is_throttled,
     record_failure,
+    set_auth_cookies,
     throttle_keys,
     verify_credential,
     verify_csrf,
@@ -26,10 +37,11 @@ from app.auth.service import (
 from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.identity.models import Invitation, SignupRequest, TrustedDevice, User
+from app.identity.models import Invitation, SignupRequest, TrustedDevice, User, WebAuthnChallenge
 from app.web import context, templates
 
 router = APIRouter()
+TOTP_LOGIN_COOKIE = "ontrack_totp_login"
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -63,33 +75,97 @@ def login(
     for key in keys:
         clear_failures(db, key)
     activate_pending_grants(db, user, credential)
+    if mfa_required(db, user):
+        if not active_totp(db, user.id):
+            return templates.TemplateResponse(
+                "login.html",
+                context(
+                    request,
+                    next=next,
+                    error="This account requires authenticator MFA but has no active factor.",
+                ),
+                status_code=403,
+            )
+        challenge, raw = create_challenge(db, purpose="TOTP_LOGIN", user_id=user.id)
+        encoded = __import__("base64").urlsafe_b64encode(raw).decode().rstrip("=")
+        response = RedirectResponse(f"/login/totp?challenge_id={challenge.id}&next={next}", status_code=303)
+        response.set_cookie(
+            TOTP_LOGIN_COOKIE,
+            encoded,
+            max_age=get_settings().webauthn_challenge_minutes * 60,
+            httponly=True,
+            secure=get_settings().cookie_secure,
+            samesite="strict",
+            path="/login/totp",
+        )
+        return response
     raw_session, raw_csrf, device = create_device(
         db, user, request.headers.get("user-agent", "Browser")[:120]
     )
     response = RedirectResponse(next if is_safe_next(next) else "/month", status_code=303)
-    max_days = (
-        get_settings().trusted_device_days_elevated
-        if device.elevated
-        else get_settings().trusted_device_days_standard
+    set_auth_cookies(response, raw_session, raw_csrf, device)
+    return response
+
+
+@router.get("/login/totp", response_class=HTMLResponse)
+def totp_login_page(request: Request, challenge_id: str, next: str = "/month"):
+    return templates.TemplateResponse(
+        "totp_login.html",
+        context(request, challenge_id=challenge_id, next=next, error=""),
+        headers={"Cache-Control": "no-store"},
     )
-    response.set_cookie(
-        SESSION_COOKIE,
-        raw_session,
-        max_age=max_days * 86400,
-        httponly=True,
-        secure=get_settings().cookie_secure,
-        samesite="lax",
-        path="/",
+
+
+@router.post("/login/totp", response_class=HTMLResponse)
+def totp_login(
+    request: Request,
+    challenge_id: uuid.UUID = Form(...),
+    code: str = Form(...),
+    next: str = Form("/month"),
+    db: Session = Depends(get_db),
+):
+    import base64
+
+    encoded = request.cookies.get(TOTP_LOGIN_COOKIE, "")
+    try:
+        raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    except (ValueError, binascii.Error):
+        raw = b""
+    challenge = db.get(WebAuthnChallenge, challenge_id)
+    user = db.get(User, challenge.user_id) if challenge and challenge.user_id else None
+    factor = active_totp(db, user.id) if user else None
+    try:
+        if not user or not factor:
+            raise ValueError("Unavailable login challenge.")
+        consume_challenge(
+            db,
+            challenge_id=challenge_id,
+            purpose="TOTP_LOGIN",
+            raw_challenge=raw,
+            user_id=user.id,
+        )
+    except ValueError:
+        return templates.TemplateResponse(
+            "totp_login.html",
+            context(request, challenge_id=challenge_id, next=next, error="Login challenge expired."),
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    if not verify_totp_factor(factor, code):
+        db.commit()
+        return templates.TemplateResponse(
+            "totp_login.html",
+            context(request, challenge_id=challenge_id, next=next, error="Authenticator code was not accepted."),
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    db.commit()
+    raw_session, raw_csrf, device = create_device(
+        db, user, request.headers.get("user-agent", "Browser")[:120]
     )
-    response.set_cookie(
-        CSRF_COOKIE,
-        raw_csrf,
-        max_age=max_days * 86400,
-        httponly=False,
-        secure=get_settings().cookie_secure,
-        samesite="strict",
-        path="/",
-    )
+    response = RedirectResponse(next if is_safe_next(next) else "/month", status_code=303)
+    response.delete_cookie(TOTP_LOGIN_COOKIE, path="/login/totp")
+    set_auth_cookies(response, raw_session, raw_csrf, device)
     return response
 
 

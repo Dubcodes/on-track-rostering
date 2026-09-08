@@ -11,6 +11,9 @@ from app.core.database import SessionLocal
 
 PUBLIC_PATHS = {
     "/login",
+    "/login/totp",
+    "/login/passkey/options",
+    "/login/passkey/verify",
     "/signup",
     "/health/live",
     "/health/ready",

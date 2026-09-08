@@ -13,18 +13,16 @@ def run(*command: str, env: dict[str, str] | None = None) -> None:
     subprocess.run(command, cwd=ROOT, check=True, env=env)
 
 
+def run_quiet(*command: str, env: dict[str, str] | None = None) -> None:
+    print("+", " ".join(command), flush=True)
+    subprocess.run(command, cwd=ROOT, check=True, env=env, stdout=subprocess.DEVNULL)
+
+
 def main() -> int:
     python = sys.executable
     run(python, "-m", "compileall", "-q", "app", "migrations", "scripts", "tests")
     run(python, "-m", "ruff", "check", "app", "migrations", "scripts", "tests")
-    run(python, "-m", "pytest")
-    run(python, "-m", "pip", "check")
-    if os.environ.get("ONTRACK_SKIP_DEPENDENCY_AUDIT") == "1":
-        print("PENDING dependency vulnerability audit: explicitly skipped", flush=True)
-    else:
-        run(python, "-m", "pip_audit", "--local")
-    run("node", "--check", "app/static/app.js")
-    run("node", "--check", "app/static/service-worker.js")
+    run_quiet(python, "-m", "alembic", "upgrade", "head", "--sql")
     postgres_url = os.environ.get("ONTRACK_TEST_DATABASE_URL", "")
     if postgres_url:
         migration_env = os.environ.copy()
@@ -38,6 +36,16 @@ def main() -> int:
             "no SQLite fallback is used for PostgreSQL qualification",
             flush=True,
         )
+    run(python, "-m", "pytest", "--ignore", "tests/browser")
+    run(python, "-m", "pip", "check")
+    if os.environ.get("ONTRACK_SKIP_DEPENDENCY_AUDIT") == "1":
+        print("PENDING dependency vulnerability audit: explicitly skipped", flush=True)
+    else:
+        run(python, "-m", "pip_audit", "--local")
+    run("node", "--check", "app/static/app.js")
+    run("node", "--check", "app/static/passkeys.js")
+    run("node", "--check", "app/static/notifications.js")
+    run("node", "--check", "app/static/service-worker.js")
     if os.environ.get("ONTRACK_RUN_BROWSER_TESTS") == "1":
         run(python, "-m", "pytest", "tests/browser")
     else:

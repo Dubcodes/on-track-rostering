@@ -6,6 +6,7 @@
 - An account is not a rosterable person. Linking must not create duplicate crew identities.
 - Home region is a default, not a prison. Event assignment can grant one-off cross-region visibility.
 - Roles combine authority and independent region scope. Viewer is broad read-only, not quasi-Manager. Sub-Manager can perform practical regional rostering but not system security administration.
+- Pending role grants authorize nothing. Existing-account grants activate only after the account owner next proves their primary credential. Managers may grant only regional Sub-Manager authority in a region they manage.
 - Crew groups are editable many-to-many browsing/suggestion data, never authorization barriers.
 - Capability attaches to a base position such as CCU or VT. `CCU 1`/`CCU 2` are event slots of CCU unless deliberately modelled otherwise.
 - Effective position recommendation: Manager block wins; employee opt-out suppresses offers; otherwise worked history, Manager allow, or employee allow establishes eligibility. Managers may still manually assign with a warning.
@@ -21,3 +22,4 @@
 - Operations group related days without enforcing hotel, vehicle, or travel continuity. Explicit individual exceptions must remain possible.
 - Master records are archived instead of casually deleted once historically referenced.
 - Notification generation is an idempotent event-outbox concern. Push delivery failure must never roll back roster publication or employee decline.
+- Fortnight totals use only the current published revision and the assigned person's authoritative start/end span. Allowance entitlements never increase that worked total.

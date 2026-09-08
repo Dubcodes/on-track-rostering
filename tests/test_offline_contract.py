@@ -15,3 +15,10 @@ def test_prefetch_is_date_sorted_limited_and_sequential() -> None:
     assert ".slice(0, 3)" in source
     assert "for (const id of ids)" in source
     assert "payload.saved_at" in source
+
+
+def test_offline_html_is_roster_only_and_strips_csrf_values() -> None:
+    source = Path("app/static/service-worker.js").read_text(encoding="utf-8")
+    assert "^\\/day\\/[a-f0-9-]+$" in source
+    assert 'name="csrf_token"' in source
+    assert "offlineResponse" in source

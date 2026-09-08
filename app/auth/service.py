@@ -93,7 +93,9 @@ def create_invitation(
     return invite, raw
 
 
-def activate_pending_grants(db: Session, user: User, secret: str) -> int:
+def activate_pending_grants(
+    db: Session, user: User, secret: str = "", *, strong_auth: bool = False
+) -> int:
     pending = list(
         db.scalars(
             select(RoleGrant)
@@ -104,7 +106,11 @@ def activate_pending_grants(db: Session, user: User, secret: str) -> int:
     now = utcnow()
     activated = 0
     for grant in pending:
-        if grant.role == Role.ADMIN.value and credential_error(secret, Role.ADMIN.value):
+        if (
+            grant.role == Role.ADMIN.value
+            and not strong_auth
+            and credential_error(secret, Role.ADMIN.value)
+        ):
             continue
         grant.status = "ACTIVE"
         grant.activated_at = now

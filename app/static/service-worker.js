@@ -1,6 +1,6 @@
 const SHELL_CACHE = "ontrack-shell-v1";
 const ROSTER_PREFIX = "ontrack-roster-";
-const SHELL = ["/static/style.css", "/static/app.js", "/manifest.webmanifest"];
+const SHELL = ["/static/style.css", "/static/app.js", "/static/passkeys.js", "/static/notifications.js", "/manifest.webmanifest"];
 const ACTIVE_USER_KEY = "/__ontrack_active_user";
 
 async function setActiveUser(namespace) {
@@ -35,14 +35,20 @@ self.addEventListener("message", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
-  if (event.request.mode === "navigate" && (url.pathname === "/month" || url.pathname.startsWith("/day/"))) {
+  const rosterPage = url.pathname === "/month" || /^\/day\/[a-f0-9-]+$/i.test(url.pathname);
+  if (event.request.mode === "navigate" && rosterPage) {
     event.respondWith(fetch(event.request).then(async (response) => {
       if (!response.ok) return response;
       const text = await response.clone().text();
       const match = text.match(/data-user-namespace="([a-f0-9-]+)"/i);
       if (match) {
         await setActiveUser(match[1]);
-        await (await caches.open(ROSTER_PREFIX + match[1])).put(event.request, response.clone());
+        const offlineText = text.replace(/(<input[^>]+name="csrf_token"[^>]+value=")[^"]*/gi, "$1");
+        const offlineResponse = new Response(offlineText, {
+          status: response.status,
+          headers: {"Content-Type": "text/html; charset=utf-8", "X-OnTrack-Offline-Copy": "1"}
+        });
+        await (await caches.open(ROSTER_PREFIX + match[1])).put(event.request, offlineResponse);
       }
       return response;
     }).catch(async () => {
@@ -73,4 +79,21 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (SHELL.includes(url.pathname)) event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
+});
+self.addEventListener("push", (event) => {
+  let payload = {title: "On Track update", body: "Open On Track for details.", url: "/month"};
+  try { payload = {...payload, ...event.data.json()}; } catch (_) { /* use safe defaults */ }
+  event.waitUntil(self.registration.showNotification(payload.title, {
+    body: payload.body,
+    data: {url: payload.url},
+    tag: payload.event_key || "ontrack-update"
+  }));
+});
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || "/month";
+  event.waitUntil(self.clients.matchAll({type: "window", includeUncontrolled: true}).then((clients) => {
+    const existing = clients.find((client) => new URL(client.url).pathname === url);
+    return existing ? existing.focus() : self.clients.openWindow(url);
+  }));
 });

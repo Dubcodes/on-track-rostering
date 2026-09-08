@@ -5,10 +5,15 @@ from sqlalchemy import select
 
 from app.auth.policy import actor_for
 from app.auth.security import create_device, hash_credential
-from app.auth.service import activate_pending_grants, grant_role, revoke_role_grant
+from app.auth.service import (
+    activate_pending_grants,
+    approve_signup,
+    grant_role,
+    revoke_role_grant,
+)
 from app.catalog.models import Region
 from app.core.enums import Role
-from app.identity.models import RoleGrant, User
+from app.identity.models import Person, RoleGrant, SignupRequest, User, UserPersonLink
 
 
 def _user(db, email: str, secret: str = "123456") -> User:  # type: ignore[no-untyped-def]
@@ -115,3 +120,72 @@ def test_revoking_active_grant_invalidates_all_sessions(db) -> None:  # type: ig
     db.refresh(device)
     assert target.auth_epoch == old_epoch + 1
     assert device.revoked_at is not None
+
+
+def test_signup_approval_requires_explicit_available_person_link(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Northern")
+    admin = _user(db, "admin@example.test", "12345678")
+    person = Person(display_name="Existing Crew", email="new@example.com")
+    signup = SignupRequest(
+        email="new@example.com",
+        display_name="New Account",
+        requested_region_id=region.id,
+    )
+    db.add_all([region, person, signup])
+    db.flush()
+    db.add(RoleGrant(user_id=admin.id, role=Role.ADMIN.value, status="ACTIVE"))
+    db.commit()
+
+    raw = approve_signup(
+        db,
+        signup=signup,
+        actor=actor_for(db, admin),
+        role=Role.EMPLOYEE.value,
+        region_id=region.id,
+        person_id=person.id,
+        create_person=False,
+    )
+    assert raw and signup.status == "APPROVED"
+    assert signup.approved_person_id == person.id and signup.invitation_id is not None
+
+
+def test_signup_link_collision_and_unrelated_manager_scope_are_rejected(db) -> None:  # type: ignore[no-untyped-def]
+    north, south = Region(name="Northern"), Region(name="Southern")
+    manager = _user(db, "manager@example.test")
+    linked_user = _user(db, "linked@example.test")
+    person = Person(display_name="Already Linked")
+    signup = SignupRequest(
+        email="candidate@example.com",
+        display_name="Candidate",
+        requested_region_id=south.id,
+    )
+    db.add_all([north, south, person, signup])
+    db.flush()
+    db.add_all(
+        [
+            RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=north.id),
+            UserPersonLink(user_id=linked_user.id, person_id=person.id),
+        ]
+    )
+    db.commit()
+    actor = actor_for(db, manager)
+    with pytest.raises(PermissionError):
+        approve_signup(
+            db,
+            signup=signup,
+            actor=actor,
+            role=Role.EMPLOYEE.value,
+            region_id=south.id,
+            person_id=None,
+            create_person=True,
+        )
+    with pytest.raises(ValueError, match="already linked"):
+        approve_signup(
+            db,
+            signup=signup,
+            actor=actor,
+            role=Role.EMPLOYEE.value,
+            region_id=north.id,
+            person_id=person.id,
+            create_person=False,
+        )

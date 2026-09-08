@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.auth.service import create_admin
 from app.catalog.models import Region
 from app.core.database import SessionLocal
+from app.notifications.service import process_pending
 
 
 def create_admin_command(args: argparse.Namespace) -> int:
@@ -30,6 +31,13 @@ def show_regions(_: argparse.Namespace) -> int:
     return 0
 
 
+def deliver_notifications_command(args: argparse.Namespace) -> int:
+    with SessionLocal() as db:
+        count = process_pending(db, limit=args.limit)
+    print(f"Processed {count} notification event(s).")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(required=True)
@@ -39,6 +47,11 @@ def main() -> int:
     create.set_defaults(func=create_admin_command)
     regions = sub.add_parser("regions", help="list configured regions")
     regions.set_defaults(func=show_regions)
+    deliver = sub.add_parser(
+        "deliver-notifications", help="process pending Web Push outbox events"
+    )
+    deliver.add_argument("--limit", type=int, default=50)
+    deliver.set_defaults(func=deliver_notifications_command)
     args = parser.parse_args()
     return args.func(args)
 

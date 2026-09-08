@@ -34,9 +34,13 @@ Mutations require a random per-device CSRF token whose hash is stored server-sid
 
 Only purpose-built Month/Day JSON is cached and caches are namespaced by authenticated user ID. Management datasets are never put in the offline cache. Logout sends `Clear-Site-Data`. Remote revocation cannot erase a device that stays physically offline, so payloads remain minimal.
 
-## Passkey and push boundaries
+## Pending privilege grants and fresh authentication
 
-The schema stores WebAuthn public credentials and encrypted push-subscription payloads. Browser ceremonies and push delivery require a focused security pass and are not falsely presented as complete in this build.
+Manager-created Sub-Manager grants remain `PENDING` until the account owner completes a primary authentication. The login that activates a grant does not inherit it: activation rotates `auth_epoch`, invalidates older devices, and requires a new login. Sensitive account and authenticator changes require primary authentication within the preceding 15 minutes. Active privilege removal also rotates the epoch and revokes sessions, and the final active Admin cannot be removed.
+
+## WebAuthn and optional TOTP
+
+Passkeys use the maintained `webauthn` library, discoverable credentials, required user verification, one-use server challenges, and deployment-bound RP ID/origin verification. Public-key credentials remain server-readable by design; TOTP secrets and push endpoint payloads are encrypted at rest with a key derived from the application secret and a domain separator. TOTP is optional unless the deployment enables the Admin or Manager requirement flags. Accepted TOTP counters are stored so a valid code cannot be replayed inside its time window. Recovery codes are not implemented and are not presented as available.
 
 ## Open applications and direct decline publication
 
@@ -44,4 +48,8 @@ Applications bind to a published revision plus stable slot key so stale decision
 
 ## Notification event outbox
 
-Roster publication and decline record deterministic event keys in the same database transaction as the authoritative change. This prevents duplicate event creation and isolates future optional push failures from roster integrity. Recipient expansion, preference enforcement, encryption, delivery, and retries remain a separate incomplete worker.
+Roster publication and decline record deterministic event keys in the same database transaction as the authoritative change. This prevents duplicate event creation and isolates optional push failures from roster integrity. Recipient expansion, preference enforcement, encrypted subscriptions, per-endpoint idempotency, VAPID delivery, permanent endpoint deactivation, and bounded exponential retry run in the independent `deliver-notifications` worker. Authoritative roster transactions never wait for the push provider. Reminder preference fields exist, but producing scheduled reminder events remains future work.
+
+## Hours are derived from publication snapshots
+
+Fortnight views calculate from the configured anchor and current published assignment spans. They do not infer breaks or deduct them, handle overnight spans, and show holiday and allowance markers without treating allowances as time. Employee access is personal; management access follows explicit regional visibility policy.

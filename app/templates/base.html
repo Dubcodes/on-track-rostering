@@ -6,6 +6,8 @@
   <meta name="theme-color" content="#123b35">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/passkeys.js" defer></script>
+  <script src="/static/notifications.js" defer></script>
   <title>{% block title %}On Track{% endblock %}</title>
 </head>
 <body data-user-namespace="{{ user.id if user else '' }}">

@@ -17,7 +17,8 @@ from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
 from app.core.time import utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
-from app.identity.models import TrustedDevice, User
+from app.identity.models import PasskeyCredential, TotpFactor, TrustedDevice, User
+from app.notifications.models import NotificationPreference, PushSubscription
 from app.positions.service import set_preference_signal
 from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 from app.rostering.service import decline_published_assignment
@@ -247,7 +248,29 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
             )
         }
     return templates.TemplateResponse(
-        "settings.html", context(request, positions=positions, capability_signals=signals)
+        "settings.html",
+        context(
+            request,
+            positions=positions,
+            capability_signals=signals,
+            passkeys=list(
+                db.scalars(
+                    select(PasskeyCredential)
+                    .where(PasskeyCredential.user_id == request.state.user.id)
+                    .order_by(PasskeyCredential.created_at)
+                )
+            ),
+            totp_factor=db.get(TotpFactor, request.state.user.id),
+            notification_preference=db.get(NotificationPreference, request.state.user.id),
+            push_subscriptions=list(
+                db.scalars(
+                    select(PushSubscription).where(
+                        PushSubscription.user_id == request.state.user.id,
+                        PushSubscription.active.is_(True),
+                    )
+                )
+            ),
+        ),
     )
 
 

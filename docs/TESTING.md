@@ -8,7 +8,7 @@ Create the Windows development environment and run directly under Python:
 
 The deterministic gate compiles Python, lints app/migrations/scripts/tests, runs pytest, checks installed dependencies, audits them for known vulnerabilities, checks application and service-worker JavaScript syntax, and renders every Jinja template with autoescape enabled. Set `ONTRACK_SKIP_DEPENDENCY_AUDIT=1` only when advisory network access is unavailable; the result is then explicitly pending rather than passed.
 
-The unit suite covers credential minimums, safe redirects, role/scope separation, base-position eligibility precedence, published-history learning, draft isolation, Month/Crew/Day reads, private-note filtering, Open application deduplication and selection, atomic policy-driven decline snapshots, notification outbox creation, overnight/no-deduction hours, national holidays, and template escaping. SQLite is used only for these narrow deterministic tests. It is not an application runtime, integration-test substitute, or PostgreSQL qualification.
+The unit suite covers credential minimums, safe redirects, pending-grant isolation/activation/revocation, final-Admin safety, fresh authentication, WebAuthn challenge expiry/binding/replay, encrypted TOTP setup/login/replay, base-position eligibility, draft isolation, Month/Crew/Day reads, private-note filtering, Open applications and decline snapshots, encrypted/idempotent push delivery with retry/permanent failures, fortnight boundaries and region scope, overnight/no-deduction hours, holiday/allowance presentation, cross-user cache deletion, and template escaping. SQLite is used only for these narrow deterministic tests. It is not an application runtime, integration-test substitute, or PostgreSQL qualification.
 
 For real PostgreSQL migration checks, point the gate at a blank disposable database:
 
@@ -17,7 +17,7 @@ $env:ONTRACK_TEST_DATABASE_URL='postgresql+psycopg://ontrack:test@localhost:5432
 .\.venv\Scripts\python.exe scripts\release_gate.py
 ```
 
-`ONTRACK_TEST_DATABASE_URL` must identify a blank or disposable PostgreSQL test database, never a production database. The runner passes it to the application as `DATABASE_URL` and upgrades twice to prove migration idempotence. If the variable is absent, the gate reports PostgreSQL integration as pending and does not fall back to SQLite.
+`ONTRACK_TEST_DATABASE_URL` must identify a blank or disposable PostgreSQL test database, never a production database. The runner always generates the full PostgreSQL-dialect migration SQL, then when the URL is present passes it to the application as `DATABASE_URL` and upgrades twice before tests. If the variable is absent, the gate reports PostgreSQL integration as pending and does not fall back to SQLite.
 
 Additional local qualification:
 

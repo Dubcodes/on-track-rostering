@@ -23,11 +23,21 @@ class Settings(BaseSettings):
     trusted_device_days_elevated: int = Field(default=14, ge=1, le=90)
     trusted_device_limit: int = Field(default=10, ge=1, le=100)
     fresh_auth_minutes: int = Field(default=15, ge=1, le=120)
+    webauthn_rp_id: str = "localhost"
+    webauthn_rp_name: str = "On Track Rostering"
+    webauthn_origin: str = "http://localhost:8000"
+    webauthn_challenge_minutes: int = Field(default=5, ge=1, le=15)
+    mfa_required_admin: bool = False
+    mfa_required_manager: bool = False
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = "mailto:operations@example.invalid"
+    notification_max_attempts: int = Field(default=5, ge=1, le=20)
     public_signup_enabled: bool = False
     timezone_name: str = "Pacific/Auckland"
     fortnight_anchor: str = "2026-08-31"
     lunch_allowance_hours: float = Field(default=12.0, ge=0)
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     build_id: str = ""
 
     @field_validator("allowed_hosts", "trusted_proxy_cidrs", mode="before")

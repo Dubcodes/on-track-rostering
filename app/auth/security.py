@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import HTTPException, Request, status
+from fastapi.responses import Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -186,6 +187,37 @@ def require_fresh_auth(request: Request) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Recent authentication is required. Re-enter your credential in Settings.",
         )
+
+
+def set_auth_cookies(
+    response: Response,
+    raw_session: str,
+    raw_csrf: str,
+    device: TrustedDevice,
+) -> None:
+    days = (
+        get_settings().trusted_device_days_elevated
+        if device.elevated
+        else get_settings().trusted_device_days_standard
+    )
+    response.set_cookie(
+        SESSION_COOKIE,
+        raw_session,
+        max_age=days * 86400,
+        httponly=True,
+        secure=get_settings().cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        CSRF_COOKIE,
+        raw_csrf,
+        max_age=days * 86400,
+        httponly=False,
+        secure=get_settings().cookie_secure,
+        samesite="strict",
+        path="/",
+    )
 
 
 def resolve_device(db: Session, raw_token: str) -> tuple[User, TrustedDevice] | None:

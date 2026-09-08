@@ -20,7 +20,13 @@ Open `http://127.0.0.1:8000` and sign in. Do not use Docker or Docker Desktop on
 
 The Admin page creates regions, tracks, base positions, people, linked accounts, and one-time invitations. A Manager or Sub-Manager uses **Build** to create a private draft, add position slots, preview it, and publish it. Authorized employees then see only the published revision in Month and Day views.
 
-The operational continuation adds regional Crew View and crew management, employee base-position preferences, explicit Open-position applications with Manager draft selection, policy-driven authoritative decline, Admin account/device revocation, and an idempotent notification-event outbox. Push delivery and privilege-safe role mutation remain intentionally disabled until their security workflows are complete.
+The operational continuation adds regional Crew View and crew management, employee base-position preferences, explicit Open-position applications with Manager draft selection, policy-driven authoritative decline, privilege-safe account approval and role grants, WebAuthn passkeys, optional encrypted TOTP, fortnight hours, isolated offline roster caches, and an idempotent Web Push delivery worker.
+
+WebAuthn defaults to `localhost` and `http://localhost:8000`; use that exact origin in local development or update both RP/origin settings consistently. Production requires HTTPS and deployment-specific RP/origin values. Web Push remains visibly unavailable until real VAPID public/private keys are supplied in environment configuration. Process its outbox independently of the web request:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli deliver-notifications --limit 50
+```
 
 ## Production deployment
 

@@ -12,11 +12,13 @@ Invitations use 40-byte URL-safe random tokens; only SHA-256 hashes are stored. 
 
 Trusted-device cookies contain opaque random tokens; only hashes are stored. Session cookies are HttpOnly, SameSite=Lax, and Secure when configured. CSRF cookies are SameSite=Strict and compared with a server-stored hash on every mutation. Origin and Sec-Fetch-Site are checked as defense in depth.
 
-Standard trust defaults to 90 days; elevated roles default to 14. Both slide on authenticated activity and the oldest devices over the configured limit are revoked. Role elevation must validate credential strength, increment `User.auth_epoch`, and require login; an older device with a stale epoch is rejected. The Admin UI in this foundation does not yet expose role mutation, reducing accidental bypass risk.
+Standard trust defaults to 90 days; elevated roles default to 14. Both slide on authenticated activity and the oldest devices over the configured limit are revoked. Primary-authentication time is stored separately; sensitive factor, privilege, invitation, and account-lifecycle actions require it within the configurable 15-minute default. Role changes increment `User.auth_epoch`; an older device with a stale epoch is rejected.
 
-Passkey rows store credential IDs, public keys, counters, and transports—never biometrics or private keys. WebAuthn registration/authentication ceremonies and optional TOTP are not yet implemented.
+Passkey rows store credential IDs, public keys, counters, and transports—never biometrics or private keys. Registration challenges are random, hashed at rest, five-minute, one-use, and bound to the authenticated account and trusted device. Authentication challenges are one-use. The maintained `webauthn` library verifies RP ID, configured origin, signature, and counter. Registration requires a discoverable credential so username-less login works. Removing a passkey requires fresh authentication.
 
-Disabling or reactivating another account increments its authentication epoch and revokes every active trusted device. An Admin cannot disable their own current account through this route. Role mutation remains unavailable until credential-policy validation and fresh privileged authentication are implemented together.
+Optional TOTP secrets are encrypted with Fernet using domain-separated key material derived from the deployment `ONTRACK_SECRET_KEY`. Setup remains inactive until a valid code confirms it. Verification tolerates one 30-second step either side and stores the last accepted counter to prevent replay. Enabling/disabling a factor requires fresh authentication, advances the auth epoch, retains only the current trusted device, and creates redacted audit events. Admin/Manager enforcement flags default false to avoid locking out bootstrap accounts; a user who enables TOTP is always challenged on PIN/password login. A verified passkey is a strong login path and does not also require TOTP.
+
+New grants to existing accounts are `PENDING` and confer no authority. A primary credential login activates eligible pending grants and mints a device with the correct shorter elevated lifetime. Managers may stage only Sub-Manager grants in regions they manage; Admins may stage broader explicit grants. Active-grant revocation invalidates every target session. The final active Admin grant/account cannot be revoked or disabled through the UI, and an Admin cannot disable their own current session.
 
 ## Authorization and data visibility
 
@@ -30,6 +32,8 @@ Jinja autoescaping remains enabled. User text is rendered as text, never as a te
 
 Audit detail is recursively redacted for credential/token/cookie/secret keys. The application must never log raw invitation URLs beyond their one-time Admin display.
 
-## Remaining security work
+## Push and residual risks
 
-Complete WebAuthn ceremonies, TOTP fallback, role-change/elevation UI/service, invitation issuance for regional Managers/Sub-Managers, push recipient expansion/encryption/delivery, explicit trusted proxy forwarding rules, dependency audit remediation workflow, and penetration tests for IDOR/CSRF/note visibility before production use.
+Push subscription endpoints and key material are encrypted at rest with separate domain-separated Fernet key material. The VAPID private key is environment-only. Delivery stores bounded retry/permanent failure state and never logs endpoint or key material. Already-cached offline content cannot be remotely erased while a device never reconnects; caches are therefore narrowly scoped to roster reads and are deleted on the next observed account switch/logout.
+
+Recovery codes are not implemented. Production readiness still requires real HTTPS WebAuthn browser qualification, deployment VAPID keys, trusted-proxy review for the selected reverse proxy, and targeted penetration testing.

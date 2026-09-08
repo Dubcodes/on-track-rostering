@@ -12,7 +12,7 @@
     <label>PIN or password<input name="credential" type="password" autocomplete="current-password" required></label>
     <button type="submit">Sign in</button>
   </form>
+  <div class="stack"><button id="passkey-login" class="secondary" type="button" data-next="{{ next }}">Sign in with a passkey</button><p class="muted" data-passkey-login-status></p></div>
   <p class="muted"><a href="/signup">Request an account</a></p>
 </section>
 {% endblock %}
-

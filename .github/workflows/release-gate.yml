@@ -38,6 +38,8 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: echo "ONTRACK_RUN_BROWSER_TESTS=1" >> "$GITHUB_ENV"
       - run: python scripts/release_gate.py
       - run: docker compose config --quiet
       - run: docker build --build-arg BUILD_ID="$GITHUB_SHA" -t ontrack-rostering:ci .
