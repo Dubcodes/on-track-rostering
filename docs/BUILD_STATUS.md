@@ -2,7 +2,7 @@
 
 ## Current result
 
-The requested foundation, privilege lifecycle, employee delivery, WebAuthn/TOTP, notification worker, hours, and offline-cache hardening are implemented. Local Windows qualification is green for every check that does not require PostgreSQL or an installed Playwright browser. Docker was not invoked locally. Real PostgreSQL, Chromium, migration execution, and production-image checks are delegated to GitHub Actions and must be green before this build is considered qualified.
+The requested foundation, privilege lifecycle, employee delivery, WebAuthn/TOTP, notification worker, hours, and offline-cache hardening are implemented. Local Windows qualification is green for every check that does not require PostgreSQL or an installed Playwright browser. Docker was not invoked locally. GitHub Actions supplied and passed the real PostgreSQL, Chromium, migration execution, Compose, and production-image checks.
 
 ## Implemented
 
@@ -23,7 +23,7 @@ The requested foundation, privilege lifecycle, employee delivery, WebAuthn/TOTP,
 - Full Alembic PostgreSQL-dialect SQL generation through revisions `7a91d36e5b20` and `ab24e50d17c4`: passed. This checks SQL generation, not execution.
 - Dependency consistency: `pip check` passed. `pip-audit --local` passed with no known vulnerabilities after an approved network retry; the release gate can explicitly mark the audit pending when advisory access is unavailable.
 - Responsive Playwright coverage exists for 1280, 430, 375, and 320 pixel widths. Local execution is pending because there is no configured PostgreSQL test database and no project-installed browser binary.
-- GitHub Actions provisions PostgreSQL 17, upgrades Alembic twice, runs the PostgreSQL concurrency/constraint suite and Chromium responsive suite, validates production artifacts, and builds the production image. Its exact result is recorded here after the first push.
+- GitHub Actions run [34175150433](https://github.com/Dubcodes/on-track-rostering/actions/runs/34175150433) passed for implementation commit `2a01531`: PostgreSQL 17 migrations upgraded twice; **38 tests passed** including the five PostgreSQL-only tests; **4 Chromium tests passed** across all target widths; `pip-audit` found no known vulnerabilities; Compose validation and the production image build passed.
 
 ## Explicitly pending or deferred
 
