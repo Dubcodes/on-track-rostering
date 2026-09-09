@@ -28,7 +28,7 @@ class NotificationPreference(Base):
     roster_changes: Mapped[bool] = mapped_column(Boolean, default=True)
     night_before: Mapped[bool] = mapped_column(Boolean, default=True)
     two_days_before: Mapped[bool] = mapped_column(Boolean, default=False)
-    one_hour_before: Mapped[bool] = mapped_column(Boolean, default=False)
+    one_hour_before: Mapped[bool] = mapped_column(Boolean, default=True)
     open_positions: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -51,6 +51,8 @@ class NotificationEvent(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class NotificationDelivery(Base):

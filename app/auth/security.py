@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import ipaddress
 import secrets
 from datetime import UTC, timedelta
 from urllib.parse import urlsplit
@@ -14,6 +13,7 @@ from fastapi.responses import Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.auth.network import same_origin
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import utcnow
@@ -64,22 +64,6 @@ def is_safe_next(value: str) -> bool:
     )
 
 
-def same_origin(request: Request) -> bool:
-    if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
-        return False
-    origin = request.headers.get("origin")
-    if not origin:
-        return True
-    parsed = urlsplit(origin)
-    expected_port = request.url.port or (443 if request.url.scheme == "https" else 80)
-    actual_port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return (
-        parsed.scheme == request.url.scheme
-        and parsed.hostname == request.url.hostname
-        and actual_port == expected_port
-    )
-
-
 def verify_csrf(request: Request, submitted: str) -> None:
     device = getattr(request.state, "device", None)
     cookie = request.cookies.get(CSRF_COOKIE, "")
@@ -94,10 +78,6 @@ def verify_csrf(request: Request, submitted: str) -> None:
 
 
 def throttle_keys(email: str, ip: str) -> tuple[str, str]:
-    try:
-        ip = str(ipaddress.ip_address(ip))
-    except ValueError:
-        ip = "unknown"
     return keyed_hash(f"account|{email.strip().lower()}"), keyed_hash(f"address|{ip}")
 
 

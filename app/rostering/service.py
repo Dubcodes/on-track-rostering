@@ -18,9 +18,10 @@ from app.core.enums import (
     RevisionState,
 )
 from app.core.time import utcnow
-from app.identity.models import Person
+from app.identity.models import Person, User
 from app.notifications.service import record_event
 from app.positions.service import set_signal
+from app.rostering.diff import PublicationChange, publication_diff
 from app.rostering.models import (
     AllowanceIndicator,
     Assignment,
@@ -43,6 +44,8 @@ class AssignmentInput:
     status: str
     note: str = ""
     note_private: bool = True
+    start_time: time | None = None
+    end_time: time | None = None
 
 
 def _track_snapshot(db: Session, track_id: uuid.UUID | None) -> tuple[str, str]:
@@ -155,6 +158,7 @@ def update_draft_details(
     start_time: time | None,
     end_time: time | None,
     on_track_time: time | None,
+    first_trial_time: time | None,
     first_race_time: time | None,
     last_race_time: time | None,
     race_count: int | None,
@@ -171,6 +175,7 @@ def update_draft_details(
     draft.track_name_snapshot, draft.track_colour_snapshot = _validated_track(db, track_id, workday.region_id)
     draft.title = title.strip() or "Workday"
     draft.start_time, draft.end_time, draft.on_track_time = start_time, end_time, on_track_time
+    draft.first_trial_time = first_trial_time
     draft.first_race_time, draft.last_race_time, draft.race_count = (
         first_race_time,
         last_race_time,
@@ -204,6 +209,8 @@ def add_assignment(db: Session, draft: WorkdayRevision, item: AssignmentInput) -
         status=status,
         note=item.note.strip(),
         note_private=item.note_private,
+        start_time=item.start_time,
+        end_time=item.end_time,
     )
     db.add(assignment)
     db.commit()
@@ -219,6 +226,8 @@ def update_assignment(
     status: str,
     note: str,
     note_private: bool,
+    start_time: time | None = None,
+    end_time: time | None = None,
 ) -> Assignment:
     if draft.state != RevisionState.DRAFT.value:
         raise ValueError("Assignments can only be changed in a draft.")
@@ -237,41 +246,31 @@ def update_assignment(
     assignment.status = AssignmentStatus.ASSIGNED.value if person else status
     assignment.note = note.strip()
     assignment.note_private = note_private
+    assignment.start_time = start_time
+    assignment.end_time = end_time
     db.commit()
     return assignment
 
 
-def preview_diff(db: Session, workday: Workday, draft: WorkdayRevision) -> list[str]:
-    if not workday.current_published_revision_id:
-        return ["First publication will make this workday visible to authorized crew."]
-    old = db.get(WorkdayRevision, workday.current_published_revision_id)
-    changes: list[str] = []
-    assert old is not None
-    for attr, label in (
-        ("work_date", "Date"),
-        ("track_name_snapshot", "Track"),
-        ("start_time", "Start"),
-        ("end_time", "Finish"),
-        ("day_note", "Day note"),
-    ):
-        if getattr(old, attr) != getattr(draft, attr):
-            changes.append(
-                f"{label} changed from {getattr(old, attr) or 'not set'} to {getattr(draft, attr) or 'not set'}."
-            )
-    old_rows = {
-        str(row.slot_key): (row.display_name_snapshot, row.person_name_snapshot, row.status)
-        for row in db.scalars(select(Assignment).where(Assignment.revision_id == old.id))
-    }
-    new_rows = {
-        str(row.slot_key): (row.display_name_snapshot, row.person_name_snapshot, row.status)
-        for row in db.scalars(select(Assignment).where(Assignment.revision_id == draft.id))
-    }
-    for key in sorted(old_rows.keys() | new_rows.keys()):
-        if old_rows.get(key) != new_rows.get(key):
-            changes.append(
-                f"Assignment changed: {old_rows.get(key) or 'new slot'} → {new_rows.get(key) or 'removed'}."
-            )
-    return changes or ["No visible changes from the current publication."]
+def remove_assignment(db: Session, draft: WorkdayRevision, assignment_id: uuid.UUID) -> None:
+    if draft.state != RevisionState.DRAFT.value:
+        raise ValueError("Assignments can only be changed in a draft.")
+    assignment = db.scalar(
+        select(Assignment).where(Assignment.id == assignment_id, Assignment.revision_id == draft.id)
+    )
+    if assignment is None:
+        raise ValueError("Assignment not found in this draft.")
+    db.delete(assignment)
+    db.commit()
+
+
+def preview_diff(db: Session, workday: Workday, draft: WorkdayRevision) -> list[PublicationChange]:
+    previous = (
+        db.get(WorkdayRevision, workday.current_published_revision_id)
+        if workday.current_published_revision_id
+        else None
+    )
+    return publication_diff(db, previous, draft)
 
 
 def publish(
@@ -286,6 +285,12 @@ def publish(
             raise PublishConflict("This revision has already been published.")
         if draft.based_on_revision_id != workday.current_published_revision_id:
             raise PublishConflict("The published roster changed while this draft was being edited.")
+        previous = (
+            db.get(WorkdayRevision, workday.current_published_revision_id)
+            if workday.current_published_revision_id
+            else None
+        )
+        changes = publication_diff(db, previous, draft)
         draft.state = RevisionState.PUBLISHED.value
         draft.published_at = utcnow()
         draft.published_by_user_id = actor_user_id
@@ -335,13 +340,23 @@ def publish(
                 else OpenApplicationStatus.NOT_SELECTED.value
             )
             application.decided_at = utcnow()
-        summary = f"Published revision {draft.revision_number}."
+        actor = db.get(User, actor_user_id)
+        actor_name = actor.display_name if actor else "A roster manager"
+        summaries = [f"{actor_name} {change.summary[0].lower() + change.summary[1:]}" for change in changes]
+        if not summaries:
+            summaries = [f"{actor_name} published revision {draft.revision_number} with no crew-visible changes."]
         if draft.change_reason:
-            summary += f" Reason: {draft.change_reason}"
-        db.add(
-            HumanChange(
-                workday_id=workday.id, revision_id=draft.id, actor_user_id=actor_user_id, summary=summary
-            )
+            summaries.append(f"{actor_name} recorded a reason for this publication.")
+        db.add_all(
+            [
+                HumanChange(
+                    workday_id=workday.id,
+                    revision_id=draft.id,
+                    actor_user_id=actor_user_id,
+                    summary=summary,
+                )
+                for summary in summaries
+            ]
         )
         record_audit(
             db,
@@ -358,7 +373,11 @@ def publish(
             event_type="ROSTER_PUBLISHED",
             region_id=workday.region_id,
             workday_id=workday.id,
-            payload={"revision_id": str(draft.id)},
+            payload={
+                "revision_id": str(draft.id),
+                "previous_revision_id": str(previous.id) if previous else None,
+                "summary": summaries[0],
+            },
         )
         for row in db.scalars(
             select(Assignment).where(

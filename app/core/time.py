@@ -9,6 +9,14 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def local_today(now: datetime | None = None) -> date:
+    """Return the product calendar date in its configured operating timezone."""
+    value = now or utcnow()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(get_settings().timezone).date()
+
+
 def display_datetime(value: datetime | None, fmt: str = "%d %b %Y %H:%M") -> str:
     if value is None:
         return ""

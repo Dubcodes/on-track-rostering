@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
-from app.auth.policy import Actor, can_grant_role
+from app.auth.policy import Actor, can_administer_person, can_administer_user, can_grant_role
 from app.auth.security import credential_error, hash_credential, token_hash
 from app.core.enums import Role
 from app.core.time import utcnow
@@ -96,6 +96,8 @@ def create_invitation(
 def activate_pending_grants(
     db: Session, user: User, secret: str = "", *, strong_auth: bool = False
 ) -> int:
+    # A passkey/TOTP can prove a strong login but cannot upgrade the stored primary credential policy.
+    _ = strong_auth
     pending = list(
         db.scalars(
             select(RoleGrant)
@@ -105,12 +107,12 @@ def activate_pending_grants(
     )
     now = utcnow()
     activated = 0
+    admin_eligible = bool(user.credential_admin_eligible)
+    if secret and not credential_error(secret, Role.ADMIN.value):
+        user.credential_admin_eligible = True
+        admin_eligible = True
     for grant in pending:
-        if (
-            grant.role == Role.ADMIN.value
-            and not strong_auth
-            and credential_error(secret, Role.ADMIN.value)
-        ):
+        if grant.role == Role.ADMIN.value and not admin_eligible:
             continue
         grant.status = "ACTIVE"
         grant.activated_at = now
@@ -140,6 +142,10 @@ def grant_role(
 ) -> RoleGrant:
     if not can_grant_role(actor, role, region_id):
         raise PermissionError("You cannot grant that role and scope.")
+    if not actor.is_admin and region_id is not None and not can_administer_user(
+        db, actor, target_user, region_id
+    ):
+        raise PermissionError("That account is outside your regional administration scope.")
     existing = db.scalar(
         select(RoleGrant).where(
             RoleGrant.user_id == target_user.id,
@@ -228,6 +234,8 @@ def approve_signup(
         raise ValueError("Signup approval may only grant Employee or Contractor access.")
     if not (actor.is_admin or Role.MANAGER.value in actor.roles_for(region_id)):
         raise PermissionError("You cannot approve accounts for that region.")
+    if not actor.is_admin and signup.requested_region_id != region_id:
+        raise PermissionError("That signup request is outside this regional scope.")
     if create_person == bool(person_id):
         raise ValueError("Choose exactly one: link an existing person or create a new person.")
     if create_person:
@@ -239,6 +247,18 @@ def approve_signup(
         db.add(person)
         db.flush()
         person_id = person.id
+    else:
+        person = db.get(Person, person_id)
+        if not person:
+            raise ValueError("The selected crew identity does not exist.")
+        if person.lifecycle != "ACTIVE":
+            raise ValueError("The selected crew identity is archived.")
+        if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
+            raise ValueError("That crew identity is already linked to an account.")
+        if not actor.is_admin and person.home_region_id is None:
+            raise PermissionError("An unscoped crew identity cannot be linked through signup approval.")
+        if not actor.is_admin and not can_administer_person(actor, person, region_id):
+            raise PermissionError("The selected crew identity is outside this regional scope.")
     assert person_id is not None
     invitation, raw = create_invitation(
         db,
@@ -284,6 +304,7 @@ def activate_invitation(db: Session, raw_token: str, display_name: str, secret: 
         display_name=(display_name.strip() or invite.display_name),
         credential_hash=hash_credential(secret),
         credential_kind="pin" if secret.isdigit() else "password",
+        credential_admin_eligible=not bool(credential_error(secret, Role.ADMIN.value)),
     )
     db.add(user)
     db.flush()
@@ -317,6 +338,7 @@ def create_admin(db: Session, email: str, display_name: str, secret: str) -> Use
         display_name=display_name.strip(),
         credential_hash=hash_credential(secret),
         credential_kind="pin" if secret.isdigit() else "password",
+        credential_admin_eligible=True,
     )
     db.add(user)
     db.flush()

@@ -256,10 +256,10 @@ def begin_totp_setup(
         content=(
             "<!doctype html><meta name=viewport content='width=device-width'>"
             "<title>Set up authenticator · On Track</title>"
-            "<main style='font:16px system-ui;max-width:34rem;margin:3rem auto;padding:1rem'>"
+            "<link rel=stylesheet href='/static/style.css'><main class='auth-setup'>"
             "<h1>Set up authenticator</h1><p>Scan this once, then enter the current code.</p>"
             f"<img alt='Authenticator QR code' src='data:image/svg+xml;base64,{qr_svg}' "
-            "style='max-width:18rem;width:100%'>"
+            "class='auth-qr'>"
             f"<p>Manual key: <code>{secret}</code></p>"
             "<form method=post action='/settings/totp/confirm'>"
             f"<input type=hidden name=csrf_token value='{csrf_token}'>"

@@ -48,7 +48,11 @@ Applications bind to a published revision plus stable slot key so stale decision
 
 ## Notification event outbox
 
-Roster publication and decline record deterministic event keys in the same database transaction as the authoritative change. This prevents duplicate event creation and isolates optional push failures from roster integrity. Recipient expansion, preference enforcement, encrypted subscriptions, per-endpoint idempotency, VAPID delivery, permanent endpoint deactivation, and bounded exponential retry run in the independent `deliver-notifications` worker. Authoritative roster transactions never wait for the push provider. Reminder preference fields exist, but producing scheduled reminder events remains future work.
+Roster publication and decline record deterministic event keys in the same database transaction as the authoritative change. This prevents duplicate event creation and isolates optional push failures from roster integrity. Recipient expansion, preference enforcement, encrypted subscriptions, per-endpoint idempotency, VAPID delivery, permanent endpoint deactivation, and bounded exponential retry run in the independent `deliver-notifications` worker. The worker uses PostgreSQL row locks with skip-locked claims and expiring leases, so workers do not concurrently own the same event and abandoned work can recover. It also creates deterministic two-day, night-before, and one-hour reminder events from the current published person/day effective start. Authoritative roster transactions never wait for the push provider.
+
+## Regional administration boundary
+
+Manager and Admin may administer regional tracks and scoped accounts. Region policy/lifecycle and the current global Crew Group/Base Position catalogues require Admin. Sub-Manager retains practical roster mutation but has no broad account or catalogue administration. Historical workday snapshots are never rewritten by catalogue rename, colour, or lifecycle changes.
 
 ## Hours are derived from publication snapshots
 

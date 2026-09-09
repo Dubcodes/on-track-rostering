@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.enums import Role
-from app.identity.models import RoleGrant, User, UserPersonLink
+from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 
 
@@ -54,6 +54,32 @@ def can_administer_region(actor: Actor, region_id: uuid.UUID) -> bool:
     return actor.is_admin or Role.MANAGER.value in actor.roles_for(region_id)
 
 
+def can_administer_person(actor: Actor, person: Person, region_id: uuid.UUID) -> bool:
+    if person.lifecycle != "ACTIVE" or person.home_region_id != region_id:
+        return False
+    return can_administer_region(actor, region_id)
+
+
+def can_administer_user(db: Session, actor: Actor, user: User, region_id: uuid.UUID) -> bool:
+    if actor.is_admin:
+        return True
+    if not can_administer_region(actor, region_id):
+        return False
+    link = db.get(UserPersonLink, user.id)
+    person = db.get(Person, link.person_id) if link else None
+    if person and can_administer_person(actor, person, region_id):
+        return True
+    return bool(
+        db.scalar(
+            select(RoleGrant.id).where(
+                RoleGrant.user_id == user.id,
+                RoleGrant.region_id == region_id,
+                RoleGrant.status != "REVOKED",
+            ).limit(1)
+        )
+    )
+
+
 def can_grant_role(actor: Actor, role: str, region_id: uuid.UUID | None) -> bool:
     if actor.is_admin:
         return role in {item.value for item in Role} and (
@@ -69,6 +95,12 @@ def can_grant_role(actor: Actor, role: str, region_id: uuid.UUID | None) -> bool
 
 def can_crew_view(actor: Actor, region_id: uuid.UUID) -> bool:
     allowed = {Role.EMPLOYEE.value, Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
+    return actor.is_admin or bool(actor.roles_for(region_id) & allowed)
+
+
+def can_view_management_detail(actor: Actor, region_id: uuid.UUID) -> bool:
+    """Read-only operational/HR detail, independent from roster write authority."""
+    allowed = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
     return actor.is_admin or bool(actor.roles_for(region_id) & allowed)
 
 

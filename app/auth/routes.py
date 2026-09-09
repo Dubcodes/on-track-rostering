@@ -15,6 +15,7 @@ from app.auth.factors import (
     mfa_required,
     verify_totp_factor,
 )
+from app.auth.network import resolve_request
 from app.auth.security import (
     CSRF_COOKIE,
     SESSION_COOKIE,
@@ -58,7 +59,7 @@ def login(
     db: Session = Depends(get_db),
 ):
     email = normalise_email(email)
-    keys = throttle_keys(email, request.client.host if request.client else "unknown")
+    keys = throttle_keys(email, resolve_request(request).client_address)
     user = db.scalar(select(User).where(User.email == email, User.status == "ACTIVE"))
     if (
         any(is_throttled(db, key) for key in keys)
@@ -253,9 +254,7 @@ def signup(
         signup_email = validated_email(email)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    signup_keys = throttle_keys(
-        "signup:" + signup_email, request.client.host if request.client else "unknown"
-    )
+    signup_keys = throttle_keys("signup:" + signup_email, resolve_request(request).client_address)
     if any(is_throttled(db, key) for key in signup_keys):
         return templates.TemplateResponse(
             "signup.html", context(request, regions=regions, enabled=True, sent=True)

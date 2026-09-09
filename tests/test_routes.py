@@ -1,5 +1,7 @@
 import uuid
 import warnings
+from calendar import monthrange
+from datetime import time, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import pyotp
@@ -17,7 +19,7 @@ from app.auth.security import hash_credential
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base
 from app.core.enums import Role
-from app.core.time import utcnow
+from app.core.time import local_today, utcnow
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.main import app
 from app.rostering.models import Assignment, Workday, WorkdayRevision
@@ -51,8 +53,9 @@ def routed_db(monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setattr(database_module, "SessionLocal", factory)
     with factory() as db:
         region = Region(name="Northern")
+        other_region = Region(name="Southern")
         group = CrewGroup(name="OB Crew")
-        db.add_all([region, group])
+        db.add_all([region, other_region, group])
         db.flush()
         track = Track(name="Ellerslie", region_id=region.id, display_colour="#C33D52")
         position = BasePosition(name="CCU", crew_group_id=group.id)
@@ -81,7 +84,37 @@ def routed_db(monkeypatch):  # type: ignore[no-untyped-def]
             credential_hash=hash_credential("99887766"),
             credential_kind="pin",
         )
-        db.add_all([track, position, person, manager, employee, viewer, admin])
+        submanager = User(
+            email="submanager@example.test",
+            display_name="Submanager",
+            credential_hash=hash_credential("445566"),
+            credential_kind="pin",
+        )
+        outside_user = User(
+            email="private-south@example.test",
+            display_name="Private South Account",
+            credential_hash=hash_credential("778899"),
+            credential_kind="pin",
+        )
+        outside_person = Person(
+            display_name="South Crew",
+            email="private-south@example.test",
+            home_region_id=other_region.id,
+        )
+        db.add_all(
+            [
+                track,
+                position,
+                person,
+                manager,
+                employee,
+                viewer,
+                admin,
+                submanager,
+                outside_user,
+                outside_person,
+            ]
+        )
         db.flush()
         db.add_all(
             [
@@ -90,6 +123,8 @@ def routed_db(monkeypatch):  # type: ignore[no-untyped-def]
                 RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value, region_id=None),
+                RoleGrant(user_id=submanager.id, role=Role.SUB_MANAGER.value, region_id=region.id),
+                UserPersonLink(user_id=outside_user.id, person_id=outside_person.id),
             ]
         )
         db.commit()
@@ -160,6 +195,8 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     assert "Ellerslie" in month.text and "CCU 2" in month.text
     day = employee_client.get(f"/day/{workday_id}")
     assert "Private transport" in day.text
+    assert "'unsafe-inline'" not in day.headers["content-security-policy"]
+    assert 'style nonce="' in day.text and 'data-track-colour="#C33D52"' in day.text
     day_payload = employee_client.get(f"/api/day/{workday_id}").json()
     assert day_payload["saved_at"]
     assert day_payload["workday"]["revision_id"]
@@ -170,7 +207,7 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     assert manager_client.get("/admin").status_code == 403
     viewer_client = TestClient(app)
     _login(viewer_client, "viewer@example.test", "112233")
-    assert "Private transport" not in viewer_client.get(f"/day/{workday_id}").text
+    assert "Private transport" in viewer_client.get(f"/day/{workday_id}").text
 
     # A later draft cannot leak into the employee read path.
     assert manager_client.get(workday_path).status_code == 200
@@ -221,6 +258,133 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     )
     assert disabled.status_code == 303
     assert viewer_client.get("/month", follow_redirects=False).status_code == 303
+
+
+def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    manager_client = TestClient(app)
+    manager_csrf = _login(manager_client, "manager@example.test", "123456")
+    accounts = manager_client.get("/manage/accounts")
+    assert accounts.status_code == 200
+    assert "private-south@example.test" not in accounts.text
+    catalog = manager_client.get("/manage/catalog")
+    assert catalog.status_code == 200 and "Ellerslie" in catalog.text
+    created_track = manager_client.post(
+        "/manage/catalog/tracks",
+        data={
+            "region_id": str(region_id),
+            "name": "Pukekohe",
+            "display_colour": "#123ABC",
+            "csrf_token": manager_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created_track.status_code == 303
+
+    submanager_client = TestClient(app)
+    _login(submanager_client, "submanager@example.test", "445566")
+    assert submanager_client.get("/manage/workdays/new").status_code == 200
+    assert submanager_client.get("/manage/catalog").status_code == 403
+    assert submanager_client.get("/manage/accounts").status_code == 403
+
+    viewer_client = TestClient(app)
+    _login(viewer_client, "viewer@example.test", "112233")
+    assert viewer_client.get("/manage/catalog").status_code == 403
+    assert viewer_client.get("/manage/accounts").status_code == 403
+
+    admin_client = TestClient(app)
+    admin_csrf = _login(admin_client, "admin@example.test", "99887766")
+    with factory() as db:
+        group_id = db.scalar(select(CrewGroup.id).where(CrewGroup.name == "OB Crew"))
+    region_update = admin_client.post(
+        f"/manage/catalog/regions/{region_id}",
+        data={
+            "name": "Northern Operations",
+            "lifecycle": "ACTIVE",
+            "decline_policy": "MANAGER_REVIEW",
+            "lead_minutes_race_day": "90",
+            "statutory_holiday_region": "Auckland",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert region_update.status_code == 303
+    position_update = admin_client.post(
+        f"/manage/catalog/positions/{position_id}",
+        data={
+            "name": "CCU Operator",
+            "crew_group_id": str(group_id),
+            "lifecycle": "ACTIVE",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert position_update.status_code == 303
+
+    employee_client = TestClient(app)
+    employee_csrf = _login(employee_client, "amy@example.test", "654321")
+    changed_theme = employee_client.post(
+        "/settings/theme",
+        data={"theme": "moss", "csrf_token": employee_csrf},
+        follow_redirects=False,
+    )
+    assert changed_theme.status_code == 303
+    assert '<html lang="en" data-theme="moss">' in employee_client.get("/settings").text
+
+    today = local_today()
+    boundary = today.replace(day=monthrange(today.year, today.month)[1])
+    if boundary < today:
+        boundary = today
+    dates = [boundary + timedelta(days=offset) for offset in range(5)]
+    with factory() as db:
+        user_id = db.scalar(select(User.id).where(User.email == "manager@example.test"))
+        other_region_id = db.scalar(select(Region.id).where(Region.name == "Southern"))
+        for index, work_date in enumerate(dates, start=1):
+            workday = Workday(
+                region_id=other_region_id if index == 1 else region_id,
+                created_by_user_id=user_id,
+            )
+            db.add(workday)
+            db.flush()
+            revision = WorkdayRevision(
+                workday_id=workday.id,
+                revision_number=1,
+                state="PUBLISHED",
+                work_date=work_date,
+                title=f"Boundary {index}",
+                track_name_snapshot="South Track" if index == 1 else "North Track",
+                track_colour_snapshot="#00AA11" if index == 1 else "#123ABC",
+                start_time=time(8),
+                end_time=time(17),
+                published_at=utcnow(),
+                created_by_user_id=user_id,
+            )
+            db.add(revision)
+            db.flush()
+            db.add(
+                Assignment(
+                    revision_id=revision.id,
+                    base_position_id=position_id,
+                    display_name_snapshot="CCU",
+                    person_id=person_id,
+                    person_name_snapshot="Amy Crew",
+                    status="ASSIGNED",
+                )
+            )
+            workday.current_published_revision_id = revision.id
+        db.commit()
+    upcoming = employee_client.get("/api/upcoming-work")
+    assert upcoming.status_code == 200
+    payload = upcoming.json()
+    assert len(payload["days"]) == 4
+    assert [row["date"] for row in payload["days"]] == [value.isoformat() for value in dates[:4]]
+    assert dates[0].month != dates[1].month
+    assert payload["saved_at"]
+    cross_region_month = employee_client.get(
+        f"/month?year={dates[0].year}&month={dates[0].month}"
+    )
+    assert "cross-region" in cross_region_month.text
+    assert 'data-track-colour="#00AA11"' in cross_region_month.text
 
 
 def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore[no-untyped-def]

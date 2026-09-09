@@ -18,6 +18,7 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(120))
     credential_hash: Mapped[str] = mapped_column(String(512))
     credential_kind: Mapped[str] = mapped_column(String(16), default="pin")
+    credential_admin_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
     theme: Mapped[str] = mapped_column(String(24), default="trackside")
     auth_epoch: Mapped[int] = mapped_column(default=1)

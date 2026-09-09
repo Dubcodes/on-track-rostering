@@ -13,7 +13,8 @@ from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, Region, Track
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, WorkdayCategory
-from app.identity.models import Person
+from app.identity.models import Person, UserPersonLink
+from app.positions.service import eligibility
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
@@ -23,6 +24,7 @@ from app.rostering.service import (
     ensure_draft,
     preview_diff,
     publish,
+    remove_assignment,
     update_assignment,
     update_draft_details,
 )
@@ -86,6 +88,38 @@ def _builder_context(
     db: Session, request: Request, workday: Workday, draft: WorkdayRevision, **extra: object
 ):
     require_manage_region(request.state.actor, workday.region_id)
+    assignments = list(
+        db.scalars(
+            select(Assignment)
+            .where(Assignment.revision_id == draft.id)
+            .order_by(Assignment.display_name_snapshot)
+        )
+    )
+    people = list(
+        db.scalars(select(Person).where(Person.lifecycle == "ACTIVE").order_by(Person.display_name))
+    )
+    same_date_people = set(
+        db.scalars(
+            select(Assignment.person_id)
+            .join(WorkdayRevision, WorkdayRevision.id == Assignment.revision_id)
+            .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
+            .where(
+                WorkdayRevision.work_date == draft.work_date,
+                Workday.id != workday.id,
+                Assignment.person_id.is_not(None),
+            )
+        )
+    )
+    person_hints: dict[tuple[uuid.UUID, uuid.UUID], str] = {}
+    for assignment in assignments:
+        if assignment.base_position_id is None:
+            continue
+        for person in people:
+            _, reason = eligibility(db, person.id, assignment.base_position_id)
+            hint = reason
+            if person.id in same_date_people:
+                hint += "; also rostered this date"
+            person_hints[(assignment.id, person.id)] = hint
     application_rows = db.execute(
         select(OpenPositionApplication, Person)
         .join(Person, Person.id == OpenPositionApplication.person_id)
@@ -114,20 +148,76 @@ def _builder_context(
                 select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name)
             )
         ),
-        people=list(
-            db.scalars(select(Person).where(Person.lifecycle == "ACTIVE").order_by(Person.display_name))
-        ),
-        assignments=list(
-            db.scalars(
-                select(Assignment)
-                .where(Assignment.revision_id == draft.id)
-                .order_by(Assignment.display_name_snapshot)
-            )
-        ),
+        people=people,
+        assignments=assignments,
+        person_hints=person_hints,
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
         **extra,
     )
+
+
+def _publication_warnings(
+    db: Session, workday: Workday, draft: WorkdayRevision
+) -> list[str]:
+    assignments = list(
+        db.scalars(select(Assignment).where(Assignment.revision_id == draft.id))
+    )
+    warnings: list[str] = []
+    if draft.track_id is None:
+        warnings.append("Track is still to be confirmed.")
+    if draft.start_time is None:
+        warnings.append("Workday start is not set.")
+    if any(row.status == "TBC" for row in assignments):
+        warnings.append("One or more positions are TBC.")
+    if any(row.status == "OPEN" for row in assignments):
+        warnings.append("One or more positions are open for applications.")
+    if any(row.status == "MANAGER_ACTION_REQUIRED" for row in assignments):
+        warnings.append("One or more positions require Manager action.")
+    person_ids = {row.person_id for row in assignments if row.person_id}
+    linked = set(
+        db.scalars(
+            select(UserPersonLink.person_id).where(UserPersonLink.person_id.in_(person_ids))
+        )
+    ) if person_ids else set()
+    if person_ids - linked:
+        warnings.append("One or more assigned people do not have a linked app account.")
+    if any(
+        row.person_id
+        and row.base_position_id
+        and not eligibility(db, row.person_id, row.base_position_id)[0]
+        for row in assignments
+    ):
+        warnings.append("One or more assignments have a capability conflict.")
+    elsewhere = bool(
+        person_ids
+        and db.scalar(
+            select(Assignment.id)
+            .join(WorkdayRevision, WorkdayRevision.id == Assignment.revision_id)
+            .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
+            .where(
+                Workday.id != workday.id,
+                WorkdayRevision.work_date == draft.work_date,
+                Assignment.person_id.in_(person_ids),
+            )
+            .limit(1)
+        )
+    )
+    if elsewhere:
+        warnings.append("A person is also rostered on another workday on this date.")
+    if any(
+        value is None
+        for value in (
+            draft.on_track_time,
+            draft.first_trial_time,
+            draft.first_race_time,
+            draft.last_race_time,
+            draft.race_count,
+            draft.end_time,
+        )
+    ):
+        warnings.append("Race Day timing is incomplete; publication is still allowed.")
+    return warnings
 
 
 @router.get("/workdays/{workday_id}", response_class=HTMLResponse)
@@ -150,6 +240,7 @@ def save_details(
     start_time: str = Form(""),
     end_time: str = Form(""),
     on_track_time: str = Form(""),
+    first_trial_time: str = Form(""),
     first_race_time: str = Form(""),
     last_race_time: str = Form(""),
     race_count: str = Form(""),
@@ -179,6 +270,7 @@ def save_details(
             start_time=_parse_time(start_time),
             end_time=_parse_time(end_time),
             on_track_time=_parse_time(on_track_time),
+            first_trial_time=_parse_time(first_trial_time),
             first_race_time=_parse_time(first_race_time),
             last_race_time=_parse_time(last_race_time),
             race_count=count,
@@ -200,6 +292,8 @@ def create_assignment(
     status: str = Form(AssignmentStatus.TBC.value),
     note: str = Form(""),
     note_private: bool = Form(False),
+    assignment_start_time: str = Form(""),
+    assignment_end_time: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -222,6 +316,8 @@ def create_assignment(
                 status=status,
                 note=note,
                 note_private=note_private,
+                start_time=_parse_time(assignment_start_time),
+                end_time=_parse_time(assignment_end_time),
             ),
         )
     except ValueError as exc:
@@ -238,6 +334,8 @@ def change_assignment(
     status: str = Form(AssignmentStatus.TBC.value),
     note: str = Form(""),
     note_private: bool = Form(False),
+    assignment_start_time: str = Form(""),
+    assignment_end_time: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -258,7 +356,32 @@ def change_assignment(
             status=status,
             note=note,
             note_private=note_private,
+            start_time=_parse_time(assignment_start_time),
+            end_time=_parse_time(assignment_end_time),
         )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return RedirectResponse(f"/manage/workdays/{workday_id}#assignments", status_code=303)
+
+
+@router.post("/workdays/{workday_id}/assignments/{assignment_id}/remove")
+def delete_assignment(
+    workday_id: uuid.UUID,
+    assignment_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    workday = db.get(Workday, workday_id)
+    if not workday:
+        raise HTTPException(404)
+    require_manage_region(request.state.actor, workday.region_id)
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    if not draft:
+        raise HTTPException(409)
+    try:
+        remove_assignment(db, draft, assignment_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return RedirectResponse(f"/manage/workdays/{workday_id}#assignments", status_code=303)
@@ -275,7 +398,14 @@ def preview(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
         raise HTTPException(409)
     return templates.TemplateResponse(
         "workday_preview.html",
-        _builder_context(db, request, workday, draft, changes=preview_diff(db, workday, draft)),
+        _builder_context(
+            db,
+            request,
+            workday,
+            draft,
+            changes=preview_diff(db, workday, draft),
+            warnings=_publication_warnings(db, workday, draft),
+        ),
     )
 
 

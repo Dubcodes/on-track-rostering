@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
-from app.auth.policy import can_manage_region, require_manage_region
+from app.auth.policy import can_administer_region
 from app.auth.security import verify_csrf
 from app.auth.service import validated_email
 from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region
@@ -24,14 +24,15 @@ router = APIRouter(prefix="/manage/crew")
 
 def _regions(db: Session, request: Request) -> list[Region]:
     rows = list(db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)))
-    return [row for row in rows if can_manage_region(request.state.actor, row.id)]
+    return [row for row in rows if can_administer_region(request.state.actor, row.id)]
 
 
 def _person_in_scope(db: Session, request: Request, person_id: uuid.UUID) -> Person:
     person = db.get(Person, person_id)
     if not person or not person.home_region_id:
         raise HTTPException(404)
-    require_manage_region(request.state.actor, person.home_region_id)
+    if not can_administer_region(request.state.actor, person.home_region_id):
+        raise HTTPException(403, "Regional administration authority required.")
     return person
 
 
@@ -109,7 +110,8 @@ def create_crew_member(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_manage_region(request.state.actor, region_id)
+    if not can_administer_region(request.state.actor, region_id):
+        raise HTTPException(403, "Regional administration authority required.")
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
         raise HTTPException(400, "Enter a crew name between 2 and 120 characters.")
@@ -183,12 +185,15 @@ def update_manager_capability(
     if signal not in {
         CapabilitySignal.MANAGER_ALLOW.value,
         CapabilitySignal.MANAGER_BLOCK.value,
+        "CLEAR",
     }:
         raise HTTPException(400, "Invalid Manager capability decision.")
     position = db.get(BasePosition, position_id)
     if not position or position.lifecycle != Lifecycle.ACTIVE.value:
         raise HTTPException(404)
-    set_preference_signal(db, person.id, position.id, signal, request.state.user.id)
+    set_preference_signal(
+        db, person.id, position.id, signal, request.state.user.id, family="manager"
+    )
     record_audit(
         db,
         "person.capability.updated",

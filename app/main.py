@@ -14,6 +14,7 @@ from app.admin.routes import router as admin_router
 from app.auth.factor_routes import router as factor_router
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.routes import router as auth_router
+from app.catalog.routes import router as catalog_router
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.crew.routes import router as crew_router
@@ -49,6 +50,7 @@ app.include_router(notifications_router)
 app.include_router(crew_router)
 app.include_router(admin_router)
 app.include_router(accounts_router)
+app.include_router(catalog_router)
 
 
 @app.get("/health/live", include_in_schema=False)

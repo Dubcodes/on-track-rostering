@@ -8,6 +8,7 @@ import time
 import uuid
 from datetime import date
 from datetime import time as clock_time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -31,6 +32,7 @@ def browser_site():  # type: ignore[no-untyped-def]
     suffix = uuid.uuid4().hex[:10]
     with SessionLocal() as db:
         region = Region(name=f"Browser Region {suffix}")
+        cross_region = Region(name=f"Cross Region {suffix}")
         group = CrewGroup(name=f"Browser Crew {suffix}")
         manager = User(
             email=f"manager-{suffix}@example.com",
@@ -50,15 +52,26 @@ def browser_site():  # type: ignore[no-untyped-def]
             credential_hash=hash_credential("12345678"),
             credential_kind="pin",
         )
+        viewer = User(
+            email=f"viewer-{suffix}@example.com",
+            display_name="Browser Viewer",
+            credential_hash=hash_credential("112233"),
+            credential_kind="pin",
+        )
         person = Person(display_name="Browser Crew Member")
-        db.add_all([region, group, manager, employee, admin, person])
+        db.add_all([region, cross_region, group, manager, employee, admin, viewer, person])
         db.flush()
         track = Track(
             name=f"Browser Track {suffix}", region_id=region.id, display_colour="#2E7D6A"
         )
+        cross_track = Track(
+            name=f"Cross Track {suffix}",
+            region_id=cross_region.id,
+            display_colour="#8A2BE2",
+        )
         position = BasePosition(name=f"Browser Position {suffix}", crew_group_id=group.id)
         person.home_region_id = region.id
-        db.add_all([track, position])
+        db.add_all([track, cross_track, position])
         db.flush()
         db.add_all(
             [
@@ -66,6 +79,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                 RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
                 RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
+                RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
             ]
         )
         workday = Workday(region_id=region.id, created_by_user_id=manager.id)
@@ -95,15 +109,50 @@ def browser_site():  # type: ignore[no-untyped-def]
                 person_id=person.id,
                 person_name_snapshot=person.display_name,
                 status="ASSIGNED",
+                note="Browser private roster detail",
+                note_private=True,
             )
         )
         workday.current_published_revision_id = revision.id
+        cross_workday = Workday(region_id=cross_region.id, created_by_user_id=manager.id)
+        db.add(cross_workday)
+        db.flush()
+        cross_revision = WorkdayRevision(
+            workday_id=cross_workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date.today(),
+            track_id=cross_track.id,
+            track_name_snapshot=cross_track.name,
+            track_colour_snapshot=cross_track.display_colour,
+            title="Cross-region qualification day",
+            start_time=clock_time(8),
+            end_time=clock_time(17),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add(cross_revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=cross_revision.id,
+                base_position_id=position.id,
+                display_name_snapshot=position.name,
+                person_id=person.id,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        cross_workday.current_published_revision_id = cross_revision.id
         db.commit()
         values = {
             "manager": (manager.email, "123456"),
             "employee": (employee.email, "654321"),
             "admin": (admin.email, "12345678"),
+            "viewer": (viewer.email, "112233"),
             "workday_id": str(workday.id),
+            "cross_workday_id": str(cross_workday.id),
+            "region_id": str(region.id),
         }
 
     with socket.socket() as probe:
@@ -126,7 +175,13 @@ def browser_site():  # type: ignore[no-untyped-def]
         else:
             raise RuntimeError("Browser qualification server did not start.")
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
+            configured_browser = os.environ.get("ONTRACK_PLAYWRIGHT_CHROMIUM_PATH", "")
+            launch_options = (
+                {"executable_path": str(Path(configured_browser).resolve())}
+                if configured_browser and Path(configured_browser).is_file()
+                else {}
+            )
+            browser = playwright.chromium.launch(**launch_options)
             try:
                 yield browser, base_url, values
             finally:
@@ -151,38 +206,103 @@ def _assert_page(page: Page, url: str) -> None:
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
 
 
+def _watch_browser_errors(page: Page) -> list[str]:
+    errors: list[str] = []
+    page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    return errors
+
+
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])
 def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
     context = browser.new_context(viewport={"width": width, "height": 900})
     page = context.new_page()
+    errors = _watch_browser_errors(page)
     _assert_page(page, base_url + "/login")
     _login(page, base_url, values["employee"])
     for path in (
         "/month",
         f"/day/{values['workday_id']}",
+        "/crew",
         "/settings",
         "/open-positions",
         "/hours",
     ):
         _assert_page(page, base_url + path)
+    page.goto(base_url + f"/day/{values['workday_id']}")
+    assert page.locator(".hero-card").evaluate(
+        "element => getComputedStyle(element).getPropertyValue('--track').trim().toUpperCase()"
+    ) == "#2E7D6A"
+    page.goto(base_url + "/month")
+    assert page.locator(".shift-chip.cross-region").count() == 1
+    assert page.locator(".shift-chip.cross-region").evaluate(
+        "element => getComputedStyle(element).getPropertyValue('--track').trim().toUpperCase()"
+    ) == "#8A2BE2"
+    if width <= 760:
+        page.locator('[data-view="list"]').click()
+        assert page.locator("#list-view").is_visible()
+    else:
+        assert page.locator("#calendar-view").is_visible()
+    page.goto(base_url + "/settings")
+    page.locator('select[name="theme"]').select_option("moss")
+    page.locator('form[action="/settings/theme"] button').click()
+    page.wait_for_url("**/settings?theme=saved")
+    assert page.locator("html").get_attribute("data-theme") == "moss"
+    assert not errors
     context.close()
 
     context = browser.new_context(viewport={"width": width, "height": 900})
     page = context.new_page()
+    errors = _watch_browser_errors(page)
     _login(page, base_url, values["manager"])
     for path in (
+        "/month",
         "/crew",
         "/manage/workdays/new",
+        f"/manage/workdays/{values['workday_id']}",
+        f"/manage/workdays/{values['workday_id']}/preview",
         "/manage/crew",
         "/manage/accounts",
+        "/manage/catalog",
         "/manage/hours",
     ):
         _assert_page(page, base_url + path)
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+    page.locator("[data-crew-search]").fill("Browser Crew")
+    assert page.locator("[data-crew-picker] option", has_text="Browser Crew Member").count() >= 1
+    assert not errors
     context.close()
 
     context = browser.new_context(viewport={"width": width, "height": 900})
     page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["viewer"])
+    _assert_page(page, base_url + f"/day/{values['workday_id']}")
+    assert page.get_by_text("Browser private roster detail").is_visible()
+    csrf = next(
+        cookie["value"] for cookie in context.cookies() if cookie["name"] == "ontrack_csrf"
+    )
+    response = page.request.post(
+        base_url + "/manage/workdays",
+        form={
+            "region_id": values["region_id"],
+            "category": "RACE_DAY",
+            "work_date": date.today().isoformat(),
+            "csrf_token": csrf,
+        },
+    )
+    assert response.status == 403
+    assert not errors
+    context.close()
+
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
     _login(page, base_url, values["admin"])
-    _assert_page(page, base_url + "/admin")
+    for path in ("/admin", "/manage/catalog", "/manage/accounts"):
+        _assert_page(page, base_url + path)
+    page.goto(base_url + "/manage/catalog")
+    assert page.get_by_text("Regions", exact=True).is_visible()
+    assert not errors
     context.close()

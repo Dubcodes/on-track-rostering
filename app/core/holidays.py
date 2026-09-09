@@ -62,6 +62,10 @@ def _mondayised(value: date) -> date:
     return value + timedelta(days=2 if value.weekday() == 5 else 1 if value.weekday() == 6 else 0)
 
 
+def _nearest_monday(value: date) -> date:
+    return value + timedelta(days=-value.weekday() if value.weekday() <= 3 else 7 - value.weekday())
+
+
 def _pair(first: date, second: date) -> tuple[date, date]:
     if first.weekday() == 5:
         return first + timedelta(days=2), second + timedelta(days=2)
@@ -70,8 +74,8 @@ def _pair(first: date, second: date) -> tuple[date, date]:
     return first, second
 
 
-@lru_cache(maxsize=64)
-def holidays_for_year(year: int) -> dict[date, tuple[str, ...]]:
+@lru_cache(maxsize=256)
+def holidays_for_year(year: int, region: str = "") -> dict[date, tuple[str, ...]]:
     rows: dict[date, list[str]] = {}
 
     def add(day: date, name: str) -> None:
@@ -105,8 +109,35 @@ def holidays_for_year(year: int) -> dict[date, tuple[str, ...]]:
     ):
         if observed != actual:
             add(observed, name + " (observed)")
+    region_key = region.strip().casefold().replace("_", "-").replace(" ", "-")
+    if region_key in {"auckland", "northland", "waikato", "bay-of-plenty", "gisborne"}:
+        add(_nearest_monday(date(year, 1, 29)), "Auckland Anniversary Day")
+    elif region_key == "wellington":
+        add(_nearest_monday(date(year, 1, 22)), "Wellington Anniversary Day")
+    elif region_key in {"nelson", "tasman", "buller's", "buller"}:
+        add(_nearest_monday(date(year, 2, 1)), "Nelson Anniversary Day")
+    elif region_key == "taranaki":
+        add(_nth_weekday(year, 3, calendar.MONDAY, 2), "Taranaki Anniversary Day")
+    elif region_key in {"hawkes-bay", "hawke's-bay"}:
+        add(
+            _nth_weekday(year, 10, calendar.MONDAY, 4) - timedelta(days=3),
+            "Hawke's Bay Anniversary Day",
+        )
+    elif region_key == "marlborough":
+        add(_nth_weekday(year, 10, calendar.MONDAY, 4) + timedelta(days=7), "Marlborough Anniversary Day")
+    elif region_key == "canterbury":
+        second_tuesday = _nth_weekday(year, 11, calendar.TUESDAY, 2)
+        add(second_tuesday + timedelta(days=3), "Canterbury Anniversary Day")
+    elif region_key == "south-canterbury":
+        add(_nth_weekday(year, 9, calendar.MONDAY, 4), "South Canterbury Anniversary Day")
+    elif region_key == "westland":
+        add(_nearest_monday(date(year, 12, 1)), "Westland Anniversary Day")
+    elif region_key == "otago":
+        add(_nearest_monday(date(year, 3, 23)), "Otago Anniversary Day")
+    elif region_key == "southland":
+        add(easter + timedelta(days=2), "Southland Anniversary Day")
     return {day: tuple(names) for day, names in rows.items()}
 
 
-def holiday_for_date(value: date) -> str:
-    return " / ".join(holidays_for_year(value.year).get(value, ()))
+def holiday_for_date(value: date, region: str = "") -> str:
+    return " / ".join(holidays_for_year(value.year, region).get(value, ()))

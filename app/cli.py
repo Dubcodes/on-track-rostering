@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.auth.service import create_admin
 from app.catalog.models import Region
 from app.core.database import SessionLocal
-from app.notifications.service import process_pending
+from app.notifications.service import generate_reminders, process_pending
 
 
 def create_admin_command(args: argparse.Namespace) -> int:
@@ -33,8 +33,9 @@ def show_regions(_: argparse.Namespace) -> int:
 
 def deliver_notifications_command(args: argparse.Namespace) -> int:
     with SessionLocal() as db:
+        generated = generate_reminders(db)
         count = process_pending(db, limit=args.limit)
-    print(f"Processed {count} notification event(s).")
+    print(f"Generated {generated} reminder(s); processed {count} notification event(s).")
     return 0
 
 

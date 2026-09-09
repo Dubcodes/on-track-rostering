@@ -14,7 +14,8 @@ from app.auth.security import hash_credential
 from app.auth.service import activate_pending_grants
 from app.catalog.models import BasePosition, Region
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
-from app.notifications.models import NotificationEvent
+from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
+from app.notifications.service import encrypt_subscription, process_pending
 from app.rostering.models import OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
@@ -275,3 +276,65 @@ def test_decline_detaches_stale_manager_draft_without_losing_it(pg_factory) -> N
         db.expire_all()
         assert db.get(WorkdayRevision, stale_draft.id).state == "DRAFT"
         assert db.get(Workday, workday.id).current_published_revision_id != first.id
+
+
+def test_notification_claim_prevents_concurrent_delivery_and_expired_lease_recovers(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+
+    from app.core.time import utcnow
+
+    user_id, region_id = _authority(pg_factory)
+    suffix = uuid.uuid4().hex
+    with pg_factory() as db:
+        subscription = PushSubscription(
+            user_id=user_id,
+            endpoint_hash=suffix,
+            encrypted_subscription=encrypt_subscription(
+                {"endpoint": f"https://push.example/{suffix}", "keys": {"p256dh": "x", "auth": "y"}}
+            ),
+        )
+        event = NotificationEvent(
+            event_key=f"claim:{suffix}",
+            event_type="ONE_HOUR_BEFORE",
+            region_id=region_id,
+            audience_user_id=user_id,
+        )
+        expired = NotificationEvent(
+            event_key=f"expired:{suffix}",
+            event_type="ONE_HOUR_BEFORE",
+            region_id=region_id,
+            audience_user_id=user_id,
+            status="PROCESSING",
+            claim_token=str(uuid.uuid4()),
+            claimed_at=utcnow() - timedelta(minutes=6),
+        )
+        db.add_all([subscription, event, expired])
+        db.commit()
+
+    barrier = threading.Barrier(2)
+    sent: list[str] = []
+    lock = threading.Lock()
+
+    def sender(_subscription: dict[str, object], payload: str) -> None:
+        with lock:
+            sent.append(payload)
+
+    def worker() -> None:
+        with pg_factory() as db:
+            barrier.wait()
+            process_pending(db, sender=sender)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert len(sent) == 2  # one delivery for each distinct event, never duplicated
+    with pg_factory() as db:
+        assert db.get(NotificationEvent, event.event_key).status == "PROCESSED"
+        assert db.get(NotificationEvent, expired.event_key).status == "PROCESSED"
+        assert db.scalar(
+            select(func.count()).select_from(NotificationDelivery).where(
+                NotificationDelivery.event_key.in_([event.event_key, expired.event_key])
+            )
+        ) == 2

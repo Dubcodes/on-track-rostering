@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ user.theme if user else 'trackside' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -22,7 +22,8 @@
       {% if show_crew %}<a href="/crew">Crew</a>{% endif %}
       {% if show_open_positions %}<a href="/open-positions">Open</a>{% endif %}
       {% if show_manage %}<a href="/manage/workdays/new">Build</a>{% endif %}
-      {% if show_manage %}<a href="/manage/crew">Manage</a>{% endif %}
+      {% if show_regional_admin %}<a href="/manage/crew">Manage</a>{% endif %}
+      {% if show_regional_admin %}<a href="/manage/catalog">Masters</a>{% endif %}
       {% if show_hours_management %}<a href="/manage/hours">Team hours</a>{% endif %}
       {% if show_accounts %}<a href="/manage/accounts">Accounts</a>{% endif %}
       {% if actor.is_admin %}<a href="/admin">Admin</a>{% endif %}

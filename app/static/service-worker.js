@@ -19,6 +19,20 @@ async function activeRosterCache() {
   return caches.open(ROSTER_PREFIX + await marker.text());
 }
 
+function html(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[character]);
+}
+
+async function offlineRosterPage() {
+  const cache = await activeRosterCache();
+  const response = cache ? await cache.match("/api/upcoming-work") : null;
+  if (!response) return new Response("On Track is offline and no roster has been saved for this account.", {status: 503, headers: {"Content-Type": "text/plain; charset=utf-8"}});
+  const payload = await response.json();
+  const rows = (payload.days || []).map((day) => `<li><strong>${html(day.date)}</strong> — ${html(day.track)} · ${html(day.role)} · ${html(day.start || "Start TBC")}</li>`).join("");
+  const saved = html(payload.saved_at ? new Date(payload.saved_at).toLocaleString() : "unknown");
+  return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><title>On Track offline</title><link rel="stylesheet" href="/static/style.css"><main class="page-shell"><h1>Upcoming work</h1><div class="offline-banner">Offline — showing roster saved at ${saved}</div><section class="panel"><ul>${rows || "<li>No upcoming work was saved.</li>"}</ul></section><p>Reconnect to view or edit the authoritative roster.</p></main>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
+}
+
 self.addEventListener("install", (event) => event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL))));
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 self.addEventListener("message", (event) => {
@@ -37,37 +51,17 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
   const rosterPage = url.pathname === "/month" || /^\/day\/[a-f0-9-]+$/i.test(url.pathname);
   if (event.request.mode === "navigate" && rosterPage) {
-    event.respondWith(fetch(event.request).then(async (response) => {
-      if (!response.ok) return response;
-      const text = await response.clone().text();
-      const match = text.match(/data-user-namespace="([a-f0-9-]+)"/i);
-      if (match) {
-        await setActiveUser(match[1]);
-        const offlineText = text.replace(/(<input[^>]+name="csrf_token"[^>]+value=")[^"]*/gi, "$1");
-        const offlineResponse = new Response(offlineText, {
-          status: response.status,
-          headers: {"Content-Type": "text/html; charset=utf-8", "X-OnTrack-Offline-Copy": "1"}
-        });
-        await (await caches.open(ROSTER_PREFIX + match[1])).put(event.request, offlineResponse);
-      }
-      return response;
-    }).catch(async () => {
-      const userCache = await activeRosterCache();
-      const cached = userCache ? await userCache.match(event.request) : null;
-      if (cached) return cached;
-      return new Response("On Track is offline and this page has not been saved on this device.", {
-        status: 503, headers: {"Content-Type": "text/plain; charset=utf-8"}
-      });
-    }));
+    event.respondWith(fetch(event.request).catch(offlineRosterPage));
     return;
   }
-  if (url.pathname.startsWith("/api/month") || url.pathname.startsWith("/api/day/")) {
+  if (url.pathname === "/api/upcoming-work" || url.pathname.startsWith("/api/day/")) {
     event.respondWith(fetch(event.request).then(async (response) => {
       if (!response.ok) return response;
       const copy = response.clone();
       const payload = await copy.clone().json();
       const namespace = String(payload.user_namespace || "");
       if (!/^[a-f0-9-]+$/i.test(namespace)) return response;
+      if (payload.offline_cacheable === false) return response;
       await setActiveUser(namespace);
       const cache = await caches.open(ROSTER_PREFIX + namespace);
       await cache.put(event.request, copy);

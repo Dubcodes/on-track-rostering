@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import secrets
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
+from app.auth.network import resolve_request, same_origin
 from app.auth.policy import actor_for
-from app.auth.security import CSRF_COOKIE, SESSION_COOKIE, resolve_device, same_origin
+from app.auth.security import CSRF_COOKIE, SESSION_COOKIE, resolve_device
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 
@@ -28,6 +31,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         request.state.user = None
         request.state.actor = None
         request.state.device = None
+        request.state.network = resolve_request(request)
+        request.state.csp_nonce = secrets.token_urlsafe(18)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not same_origin(request):
             return Response("Cross-site request rejected", status_code=403)
         resolved = None
@@ -74,7 +79,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
+            f"default-src 'self'; img-src 'self' data:; style-src 'self' 'nonce-{request.state.csp_nonce}'; script-src 'self'; "
             "connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
         )
         return response

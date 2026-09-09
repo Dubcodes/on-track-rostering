@@ -58,6 +58,10 @@ def test_manager_can_only_stage_submanager_in_managed_region(db) -> None:  # typ
     db.add_all([managed, other])
     manager = _user(db, "manager@example.test")
     target = _user(db, "target@example.test")
+    person = Person(display_name="Target", home_region_id=managed.id)
+    db.add(person)
+    db.flush()
+    db.add(UserPersonLink(user_id=target.id, person_id=person.id))
     db.add(RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=managed.id))
     db.commit()
     actor = actor_for(db, manager)
@@ -151,6 +155,8 @@ def test_signup_approval_requires_explicit_available_person_link(db) -> None:  #
 
 def test_signup_link_collision_and_unrelated_manager_scope_are_rejected(db) -> None:  # type: ignore[no-untyped-def]
     north, south = Region(name="Northern"), Region(name="Southern")
+    db.add_all([north, south])
+    db.flush()
     manager = _user(db, "manager@example.test")
     linked_user = _user(db, "linked@example.test")
     person = Person(display_name="Already Linked")
@@ -159,7 +165,12 @@ def test_signup_link_collision_and_unrelated_manager_scope_are_rejected(db) -> N
         display_name="Candidate",
         requested_region_id=south.id,
     )
-    db.add_all([north, south, person, signup])
+    in_scope_signup = SignupRequest(
+        email="in-scope@example.com",
+        display_name="In Scope",
+        requested_region_id=north.id,
+    )
+    db.add_all([person, signup, in_scope_signup])
     db.flush()
     db.add_all(
         [
@@ -182,7 +193,7 @@ def test_signup_link_collision_and_unrelated_manager_scope_are_rejected(db) -> N
     with pytest.raises(ValueError, match="already linked"):
         approve_signup(
             db,
-            signup=signup,
+            signup=in_scope_signup,
             actor=actor,
             role=Role.EMPLOYEE.value,
             region_id=north.id,

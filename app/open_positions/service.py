@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.auth.policy import Actor, can_apply_for_open_position
 from app.catalog.models import BasePosition
 from app.core.enums import AssignmentStatus, OpenApplicationStatus
+from app.core.time import local_today
 from app.identity.models import Person
 from app.positions.service import eligibility
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
@@ -34,7 +34,7 @@ def available_positions(db: Session, actor: Actor) -> list[AvailablePosition]:
         .join(BasePosition, BasePosition.id == Assignment.base_position_id)
         .where(
             Assignment.status == AssignmentStatus.OPEN.value,
-            WorkdayRevision.work_date >= date.today(),
+            WorkdayRevision.work_date >= local_today(),
         )
         .order_by(WorkdayRevision.work_date, Assignment.display_name_snapshot)
     ).all()

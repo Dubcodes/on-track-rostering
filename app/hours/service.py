@@ -12,14 +12,15 @@ from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.holidays import holiday_for_date
-from app.core.time import worked_minutes
+from app.core.time import local_today
 from app.identity.models import Person
 from app.rostering.models import AllowanceIndicator, Assignment, Workday, WorkdayRevision
+from app.rostering.participation import person_day_participation
 
 
 def fortnight_bounds(offset: int = 0, today: date | None = None) -> tuple[date, date]:
     anchor = date.fromisoformat(get_settings().fortnight_anchor)
-    current = today or date.today()
+    current = today or local_today()
     start = anchor + timedelta(days=((current - anchor).days // 14 + offset) * 14)
     return start, start + timedelta(days=13)
 
@@ -86,16 +87,18 @@ def published_hours(
         ):
             indicators[(indicator.revision_id, indicator.person_id)].append(indicator)
 
-    result: list[dict[str, object]] = []
-    seen: set[tuple[uuid.UUID, uuid.UUID]] = set()
+    grouped_rows: dict[
+        tuple[uuid.UUID, uuid.UUID],
+        tuple[WorkdayRevision, Workday, Person, Region, list[Assignment]],
+    ] = {}
     for assignment, revision, workday, person, region in rows:
         key = (revision.id, person.id)
-        if key in seen:
-            continue
-        seen.add(key)
-        start_time = assignment.start_time or revision.start_time
-        end_time = assignment.end_time or revision.end_time
-        minutes = worked_minutes(revision.work_date, start_time, end_time)
+        grouped_rows.setdefault(key, (revision, workday, person, region, []))[4].append(assignment)
+
+    result: list[dict[str, object]] = []
+    for key, (revision, workday, person, region, assignments) in grouped_rows.items():
+        participation = person_day_participation(revision, assignments)
+        start_time, end_time, minutes = participation.start, participation.end, participation.minutes
         allowance_rows = [
             {
                 "kind": item.kind,
@@ -127,11 +130,12 @@ def published_hours(
                 "category": workday.category.replace("_", " ").title(),
                 "region": region.name,
                 "track": revision.track_name_snapshot,
+                "role": participation.role_summary,
                 "start": start_time,
                 "end": end_time,
                 "minutes": minutes,
                 "duration": format_minutes(minutes),
-                "holiday": holiday_for_date(revision.work_date),
+                "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
                 "allowances": allowance_rows,
                 "raw": (
                     f"{start_time.strftime('%H:%M') if start_time else 'not set'} → "

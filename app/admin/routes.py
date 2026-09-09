@@ -219,6 +219,7 @@ def create_user(
         display_name=display_name.strip()[:120],
         credential_hash=hash_credential(credential),
         credential_kind="pin" if credential.isdigit() else "password",
+        credential_admin_eligible=not bool(credential_error(credential, Role.ADMIN.value)),
     )
     db.add(user)
     db.flush()

@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -48,6 +48,19 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
             RoleGrant.region_id.in_(region_ids), RoleGrant.role == Role.SUB_MANAGER.value
         )
     linked_people = select(UserPersonLink.person_id)
+    users_query = select(User).where(User.status == "ACTIVE")
+    if not request.state.actor.is_admin:
+        linked_user_ids = (
+            select(UserPersonLink.user_id)
+            .join(Person, Person.id == UserPersonLink.person_id)
+            .where(Person.home_region_id.in_(region_ids))
+        )
+        granted_user_ids = select(RoleGrant.user_id).where(
+            RoleGrant.region_id.in_(region_ids), RoleGrant.status != "REVOKED"
+        )
+        users_query = users_query.where(
+            User.id.in_(linked_user_ids) | User.id.in_(granted_user_ids)
+        )
     return templates.TemplateResponse(
         "accounts.html",
         context(
@@ -60,12 +73,12 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                     .where(
                         Person.lifecycle == "ACTIVE",
                         Person.id.not_in(linked_people),
-                        or_(Person.home_region_id.in_(region_ids), Person.home_region_id.is_(None)),
+                        Person.home_region_id.in_(region_ids),
                     )
                     .order_by(Person.display_name)
                 )
             ),
-            users=list(db.scalars(select(User).where(User.status == "ACTIVE").order_by(User.display_name))),
+            users=list(db.scalars(users_query.order_by(User.display_name))),
             grants=list(db.scalars(grants_query.order_by(RoleGrant.granted_at.desc()))),
             grant_roles=(
                 [role.value for role in Role]

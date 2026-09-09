@@ -2,24 +2,26 @@
 {% set help_context = 'month' %}
 {% block title %}{{ month_label }} · On Track{% endblock %}
 {% block content %}
+<style nonce="{{ csp_nonce }}">{% for day_items in items_by_date.values() %}{% for item in day_items %}[data-track-colour="{{ item.colour }}"]{--track:{{ item.colour }}}{% endfor %}{% endfor %}</style>
 <section class="month-head">
   <div><p class="eyebrow">Your authoritative roster</p><h1>{{ month_label }}</h1></div>
   <div class="month-nav"><a class="icon-button" href="/month?year={{ previous.year }}&month={{ previous.month }}" aria-label="Previous month">←</a><a class="button secondary" href="/month">Today</a><a class="icon-button" href="/month?year={{ following.year }}&month={{ following.month }}" aria-label="Next month">→</a></div>
 </section>
+{% if next_up %}<section class="panel next-up"><div class="section-head"><div><p class="eyebrow">Next Up</p><h2>Your next workdays</h2></div>{% if actor.person_id %}<a class="button secondary" href="/hours">Fortnight hours</a>{% endif %}</div><div class="record-list">{% for item in next_up %}<span><a href="/day/{{ item.id }}"><strong>{{ item.date.strftime('%a %d %b') }} · {{ item.track }}</strong></a><small>{{ item.start|display_time or 'Start TBC' }} · {{ item.role }}</small></span>{% endfor %}</div></section>{% endif %}
 <div class="view-switch" role="group"><button type="button" class="active" data-view="calendar">Calendar</button><button type="button" data-view="list">List</button></div>
 <section class="calendar" id="calendar-view" aria-label="Month calendar">
   <div class="weekdays">{% for label in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<span>{{ label }}</span>{% endfor %}</div>
   {% for week in grid %}<div class="week">{% for day in week %}
     <article class="calendar-day{% if not day.in_month %} outside{% endif %}{% if day.today %} today{% endif %}">
-      <header><span>{{ day.date.day }}</span>{% if day.holiday %}<span class="holiday" title="{{ day.holiday }}" aria-label="Public holiday: {{ day.holiday }}">★</span>{% endif %}</header>
+      <header><span>{{ day.date.day }}</span>{% set regional_holiday = items_by_date.get(day.date, [])|selectattr('holiday')|map(attribute='holiday')|first %}{% if regional_holiday or day.holiday %}<span class="holiday" title="{{ regional_holiday or day.holiday }}" aria-label="Public holiday: {{ regional_holiday or day.holiday }}">★</span>{% endif %}</header>
       {% for item in items_by_date.get(day.date, []) %}
-      <a href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" class="shift-chip{% if item.cross_region %} cross-region{% endif %}" style="--track:{{ item.colour }}">
+      <a href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-track-colour="{{ item.colour }}" class="shift-chip{% if item.cross_region %} cross-region{% endif %}">
         <strong>{{ item.track }}</strong><span>{{ item.start|display_time }} · {{ item.role }}</span>
       </a>{% endfor %}
     </article>
-  {% endfor %}</div>{% endfor %}
+  {% endfor %}</div><div class="week-total">Your rostered week: {{ week_minutes[loop.index0] // 60 }}h {{ week_minutes[loop.index0] % 60 }}m</div>{% endfor %}
 </section>
 <section class="roster-list" id="list-view" hidden>
-  {% for day, items in items_by_date.items() %}<div class="list-day"><div class="date-tile"><strong>{{ day.day }}</strong><span>{{ day.strftime('%a') }}</span></div><div>{% for item in items %}<a href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" class="list-shift"><span class="track-dot" style="--track:{{ item.colour }}"></span><span><strong>{{ item.track }}</strong><small>{{ item.start|display_time }} · {{ item.role }}</small></span></a>{% endfor %}</div></div>{% else %}<div class="empty-state"><h2>Nothing rostered yet</h2><p>Published workdays will appear here.</p></div>{% endfor %}
+  {% for day, items in items_by_date.items() %}<div class="list-day"><div class="date-tile"><strong>{{ day.day }}</strong><span>{{ day.strftime('%a') }}</span></div><div>{% for item in items %}<a href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" class="list-shift"><span class="track-dot" data-track-colour="{{ item.colour }}"></span><span><strong>{{ item.track }}</strong><small>{{ item.start|display_time }} · {{ item.role }}</small></span></a>{% endfor %}</div></div>{% else %}<div class="empty-state"><h2>Nothing rostered yet</h2><p>Published workdays will appear here.</p></div>{% endfor %}
 </section>
 {% endblock %}

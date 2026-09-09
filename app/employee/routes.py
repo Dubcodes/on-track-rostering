@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import calendar
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -10,17 +10,29 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
-from app.auth.policy import can_crew_view, can_manage_region, can_view_published
-from app.auth.security import verify_credential, verify_csrf
+from app.audit.service import record_audit
+from app.auth.policy import (
+    can_crew_view,
+    can_view_management_detail,
+    can_view_published,
+)
+from app.auth.security import credential_error, hash_credential, verify_credential, verify_csrf
 from app.catalog.models import BasePosition, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
-from app.core.time import utcnow, worked_minutes
+from app.core.time import local_today, utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
-from app.identity.models import PasskeyCredential, TotpFactor, TrustedDevice, User
+from app.identity.models import PasskeyCredential, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notifications.models import NotificationPreference, PushSubscription
 from app.positions.service import set_preference_signal
-from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
+from app.rostering.models import (
+    AllowanceIndicator,
+    Assignment,
+    PositionCapability,
+    Workday,
+    WorkdayRevision,
+)
+from app.rostering.participation import person_day_participation
 from app.rostering.service import decline_published_assignment
 from app.web import context, month_grid, templates
 
@@ -43,7 +55,7 @@ def root():
 def month_view(
     request: Request, year: int | None = None, month: int | None = None, db: Session = Depends(get_db)
 ):
-    today = date.today()
+    today = local_today()
     year, month = year or today.year, month or today.month
     if not 1 <= month <= 12 or not 2020 <= year <= 2100:
         raise HTTPException(400, "Invalid month")
@@ -52,14 +64,31 @@ def month_view(
     by_date: dict[date, list[dict[str, object]]] = {}
     for item in items:
         by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
+    grid = month_grid(year, month)
+    week_minutes = [
+        sum(
+            int(item["minutes"])
+            for cell in week
+            for item in by_date.get(cell["date"], [])  # type: ignore[arg-type]
+            if item["own"]
+        )
+        for week in grid
+    ]
+    upcoming = [
+        item
+        for item in month_items(db, request.state.actor, today, today + timedelta(days=370))
+        if item["own"]
+    ][:3]
     previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
     following = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
     return templates.TemplateResponse(
         "month.html",
         context(
             request,
-            grid=month_grid(year, month),
+            grid=grid,
             items_by_date=by_date,
+            week_minutes=week_minutes,
+            next_up=upcoming,
             month_label=f"{calendar.month_name[month]} {year}",
             previous=previous,
             following=following,
@@ -73,7 +102,8 @@ def month_api(
 ):
     start, end = _month_bounds(year, month)
     rows = month_items(db, request.state.actor, start, end)
-    return {"user_namespace": str(request.state.user.id), "saved_at": date.today().isoformat(), "days": rows}
+    saved_at = max((row["published_at"] for row in rows if row["published_at"]), default=None)
+    return {"user_namespace": str(request.state.user.id), "saved_at": saved_at, "days": rows}
 
 
 @router.get("/day/{workday_id}", response_class=HTMLResponse)
@@ -82,8 +112,17 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
-    management = can_manage_region(request.state.actor, workday.region_id)
+    management = can_view_management_detail(request.state.actor, workday.region_id)
     assignments = day_assignments(db, request.state.actor, revision, management)
+    own_rows = list(
+        db.scalars(
+            select(Assignment).where(
+                Assignment.revision_id == revision.id,
+                Assignment.person_id == request.state.actor.person_id,
+            )
+        )
+    ) if request.state.actor.person_id else []
+    participation = person_day_participation(revision, own_rows) if own_rows else None
     history = list(
         db.scalars(
             select(HumanChange)
@@ -91,6 +130,8 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             .order_by(HumanChange.occurred_at.desc())
         )
     )
+    if not management:
+        history = [row for row in history if not row.summary.startswith("Publication reason:")]
     return templates.TemplateResponse(
         "day.html",
         context(
@@ -99,7 +140,22 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             revision=revision,
             assignments=assignments,
             management=management,
-            minutes=worked_minutes(revision.work_date, revision.start_time, revision.end_time),
+            minutes=(
+                participation.minutes
+                if participation
+                else worked_minutes(revision.work_date, revision.start_time, revision.end_time)
+            ),
+            participation=participation,
+            allowances=list(
+                db.scalars(
+                    select(AllowanceIndicator).where(
+                        AllowanceIndicator.revision_id == revision.id,
+                        AllowanceIndicator.person_id.in_(
+                            [row.person_id for row in own_rows if row.person_id]
+                        ),
+                    )
+                )
+            ) if own_rows else [],
             history=history,
         ),
     )
@@ -162,7 +218,7 @@ def crew_view(
     month: int | None = None,
     db: Session = Depends(get_db),
 ):
-    today = date.today()
+    today = local_today()
     year, month = year or today.year, month or today.month
     start, end = _month_bounds(year, month)
     regions = list(db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)))
@@ -185,7 +241,10 @@ def crew_view(
             "workday": workday,
             "revision": revision,
             "assignments": day_assignments(
-                db, request.state.actor, revision, can_manage_region(request.state.actor, workday.region_id)
+                db,
+                request.state.actor,
+                revision,
+                can_view_management_detail(request.state.actor, workday.region_id),
             ),
         }
         for workday, revision in rows
@@ -208,10 +267,10 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
     revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
-    management = can_manage_region(request.state.actor, workday.region_id)
     return {
         "user_namespace": str(request.state.user.id),
-        "saved_at": utcnow().isoformat(),
+        "saved_at": revision.published_at,
+        "offline_cacheable": request.state.actor.person_id is not None,
         "workday": {
             "id": str(workday.id),
             "revision_id": str(revision.id),
@@ -223,8 +282,26 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             "start": revision.start_time,
             "end": revision.end_time,
             "note": revision.day_note,
-            "assignments": day_assignments(db, request.state.actor, revision, management),
+            "assignments": day_assignments(db, request.state.actor, revision, False),
         },
+    }
+
+
+@router.get("/api/upcoming-work")
+def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
+    """Return own work across month boundaries for sequential offline prefetch."""
+    if request.state.actor.person_id is None:
+        return {"user_namespace": str(request.state.user.id), "saved_at": None, "days": []}
+    today = local_today()
+    rows = month_items(db, request.state.actor, today, today + timedelta(days=370))
+    own_rows = [row for row in rows if row["own"]][:4]
+    saved_at = max(
+        (row["published_at"] for row in own_rows if row["published_at"]), default=None
+    )
+    return {
+        "user_namespace": str(request.state.user.id),
+        "saved_at": saved_at,
+        "days": own_rows,
     }
 
 
@@ -274,6 +351,24 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/settings/theme")
+def update_theme(
+    request: Request,
+    theme: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    if theme not in {"trackside", "steel", "moss", "daylight", "high-contrast"}:
+        raise HTTPException(400, "Invalid theme.")
+    user = db.get(User, request.state.user.id)
+    if not user:
+        raise HTTPException(404)
+    user.theme = theme
+    db.commit()
+    return RedirectResponse("/settings?theme=saved", status_code=303)
+
+
 @router.post("/settings/reauthenticate")
 def reauthenticate(
     request: Request,
@@ -293,6 +388,50 @@ def reauthenticate(
     return RedirectResponse("/settings?reauthenticated=1", status_code=303)
 
 
+@router.post("/settings/credential")
+def update_credential(
+    request: Request,
+    current_credential: str = Form(...),
+    new_credential: str = Form(...),
+    confirmation: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    user = db.get(User, request.state.user.id)
+    if not user or not verify_credential(current_credential, user.credential_hash):
+        raise HTTPException(400, "Current credential could not be verified.")
+    if new_credential != confirmation:
+        raise HTTPException(400, "New credentials did not match.")
+    has_admin_grant = bool(
+        db.scalar(
+            select(RoleGrant.user_id).where(
+                RoleGrant.user_id == user.id,
+                RoleGrant.role == Role.ADMIN.value,
+                RoleGrant.status.in_(["ACTIVE", "PENDING"]),
+            )
+        )
+    )
+    policy_role = Role.ADMIN.value if has_admin_grant else Role.EMPLOYEE.value
+    if error := credential_error(new_credential, policy_role):
+        raise HTTPException(400, error)
+    user.credential_hash = hash_credential(new_credential)
+    user.credential_kind = "pin" if new_credential.isdigit() else "password"
+    user.credential_admin_eligible = not bool(
+        credential_error(new_credential, Role.ADMIN.value)
+    )
+    user.auth_epoch += 1
+    for device in db.scalars(
+        select(TrustedDevice).where(
+            TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None)
+        )
+    ):
+        device.revoked_at = utcnow()
+    record_audit(db, "user.credential.updated", "user", user.id, user.id)
+    db.commit()
+    return RedirectResponse("/login?credential=updated", status_code=303)
+
+
 @router.post("/settings/capabilities/{position_id}")
 def update_capability_preference(
     position_id: uuid.UUID,
@@ -309,6 +448,7 @@ def update_capability_preference(
     if signal not in {
         CapabilitySignal.EMPLOYEE_ALLOW.value,
         CapabilitySignal.EMPLOYEE_OPT_OUT.value,
+        "CLEAR",
     }:
         raise HTTPException(400, "Invalid capability preference.")
     position = db.get(BasePosition, position_id)
@@ -320,6 +460,7 @@ def update_capability_preference(
         position.id,
         signal,
         request.state.user.id,
+        family="employee",
     )
     db.commit()
     return RedirectResponse("/settings#capabilities", status_code=303)
