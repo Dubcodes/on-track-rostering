@@ -1,8 +1,8 @@
-# Build status — 2026-09-09
+# Build status — 2026-09-10
 
 ## Current result
 
-The Foundation Corrections and Re-Deputy UX Convergence implementation is complete in the current local checkpoint. It adds the security/P1 corrections, shared person-day and publication-diff models, regional administration, reminder/worker hardening, and employee/offline UX described below. Local PostgreSQL execution remains pending because no disposable `ONTRACK_TEST_DATABASE_URL` is configured. Docker was not invoked locally. No production deployment is claimed.
+The Foundation Corrections and Re-Deputy UX Convergence implementation is complete and qualified on GitHub `main` at `4d900803d8f4353757b3705cb49ed7acb56000fa`. It adds the security/P1 corrections, shared person-day and publication-diff models, regional administration, reminder/worker hardening, and employee/offline UX described below. Local PostgreSQL execution remains pending because no disposable `ONTRACK_TEST_DATABASE_URL` is configured. Docker was not invoked locally. No production deployment is claimed.
 
 ## Implemented
 
@@ -23,9 +23,9 @@ The Foundation Corrections and Re-Deputy UX Convergence implementation is comple
 - Pytest local deterministic suite: **44 passed, 6 PostgreSQL-only tests skipped** because `ONTRACK_TEST_DATABASE_URL` is not configured. SQLite is used only by narrow unit/route tests and is not PostgreSQL qualification.
 - Node syntax: passed for passkey, notification, application, and service-worker scripts.
 - Full Alembic PostgreSQL-dialect SQL generation through `c8e451d10a77`: passed during development; the final release gate repeats it. This checks SQL generation, not execution.
-- Dependency consistency: `pip check` passed. `pip-audit --local` is **pending**: advisory access was unavailable in the sandbox and permission to transmit the installed dependency inventory externally was not granted.
-- Responsive Playwright: **4 passed** at 1280, 430, 375, and 320 pixels against installed local Chromium, covering Employee, Manager, Viewer, and Admin routes, overflow, theme, track colour, picker, responsive list behavior, write denial, and browser console/page errors. This narrow browser run used a disposable SQLite database and does not qualify PostgreSQL.
-- GitHub Actions run [34175150433](https://github.com/Dubcodes/on-track-rostering/actions/runs/34175150433) is inherited historical evidence for commit `2a01531`, not evidence for this unpushed checkpoint.
+- Dependency consistency: local `pip check` passed. The exact-head GitHub gate also passed `pip check` and `pip-audit --local` with no known vulnerabilities; the local advisory check remains pending because advisory access was unavailable in the sandbox.
+- Responsive Playwright: the exact-head GitHub gate passed **4 tests** at 1280, 430, 375, and 320 pixels, covering Employee, Manager, Viewer, and Admin routes, overflow, theme, track colour, picker, responsive list behavior, write denial, and browser console/page errors.
+- GitHub Actions run [34395787093](https://github.com/Dubcodes/on-track-rostering/actions/runs/34395787093) passed on exact commit `4d900803d8f4353757b3705cb49ed7acb56000fa`: PostgreSQL-dialect SQL generation, real PostgreSQL migration execution, **50 PostgreSQL-backed tests**, dependency audit, JavaScript syntax, all four browser widths, `docker compose config --quiet`, and the production Docker image build.
 
 ## Explicitly pending or deferred
 
