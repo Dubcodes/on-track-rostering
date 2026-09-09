@@ -203,7 +203,68 @@ def _assert_page(page: Page, url: str) -> None:
     response = page.goto(url)
     assert response and response.status < 400
     assert page.locator("main").is_visible()
-    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+    _assert_no_horizontal_overflow(page)
+
+
+def _assert_no_horizontal_overflow(page: Page) -> None:
+    fits_viewport = page.evaluate(
+        "document.documentElement.scrollWidth <= window.innerWidth + 1"
+    )
+    if fits_viewport:
+        return
+
+    details = page.evaluate(
+        """
+        () => {
+          const viewportWidth = window.innerWidth;
+          const describe = (element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const classes = Array.from(element.classList)
+              .map((name) => `.${CSS.escape(name)}`)
+              .join("");
+            const selector = `${element.tagName.toLowerCase()}${
+              element.id ? `#${CSS.escape(element.id)}` : ""
+            }${classes}`;
+            return {
+              selector,
+              left: Math.round(rect.left * 100) / 100,
+              right: Math.round(rect.right * 100) / 100,
+              width: Math.round(rect.width * 100) / 100,
+              scrollWidth: element.scrollWidth,
+              clientWidth: element.clientWidth,
+              display: style.display,
+              minWidth: style.minWidth,
+              computedWidth: style.width,
+              flex: style.flex,
+              gridTemplateColumns: style.gridTemplateColumns,
+              whiteSpace: style.whiteSpace,
+              overflowX: style.overflowX,
+            };
+          };
+          const offenders = Array.from(document.body.querySelectorAll("*"))
+            .filter((element) => {
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              const outsideViewport =
+                rect.right > viewportWidth + 1 || rect.left < -1;
+              const internallyOverflowing =
+                element.scrollWidth > element.clientWidth + 1 &&
+                !["auto", "scroll"].includes(style.overflowX);
+              return outsideViewport || internallyOverflowing;
+            })
+            .map(describe);
+          return {
+            url: location.href,
+            viewportWidth,
+            documentScrollWidth: document.documentElement.scrollWidth,
+            bodyScrollWidth: document.body.scrollWidth,
+            offenders,
+          };
+        }
+        """
+    )
+    raise AssertionError(f"horizontal overflow details: {details!r}")
 
 
 def _watch_browser_errors(page: Page) -> list[str]:
@@ -269,6 +330,15 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     ):
         _assert_page(page, base_url + path)
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+    if width == 320:
+        assert page.locator("main .panel").first.is_visible()
+        preview = page.locator('a.button[href$="/preview"]')
+        assert preview.is_visible()
+        editor = page.locator("details.assignment-editor").first
+        editor.locator("summary").click()
+        assert editor.locator('select[name="person_id"]').is_visible()
+        assert editor.get_by_role("button", name="Update slot").is_visible()
+        _assert_no_horizontal_overflow(page)
     page.locator("[data-crew-search]").fill("Browser Crew")
     assert page.locator("[data-crew-picker] option", has_text="Browser Crew Member").count() >= 1
     assert not errors
