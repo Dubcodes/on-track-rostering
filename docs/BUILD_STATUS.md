@@ -2,7 +2,7 @@
 
 ## Current result
 
-The focused Foundation repair is complete at qualified baseline `a43bd486ed78e067a3930bff9b2f43a51dab825b`: shared-draft concurrency, personal Day/offline privacy, home-region cross-region display, and server-authoritative today-plus-three selection passed GitHub release-gate run `34449238408`. The final Foundation branding pass is implemented locally on top of that baseline, adding a global Admin-configurable user-facing product name without renaming internal project infrastructure. Exact-head GitHub qualification evidence for branding will be recorded after the implementation commit is pushed. Local PostgreSQL execution remains pending because no disposable `ONTRACK_TEST_DATABASE_URL` is configured. Docker was not invoked locally. No production deployment is claimed.
+The focused Foundation repair and final branding pass are complete. Branding implementation commit `a2f3ded1fad0f5fa30bc48a06a28f7e75ce2618b` adds a global Admin-configurable user-facing product name without renaming internal project infrastructure. Its exact-head GitHub release-gate run `34530604319` passed PostgreSQL 17 migrations and 61 PostgreSQL-backed tests with no skips, four Playwright widths, dependency audit, Compose validation, and production image build. Local PostgreSQL execution remains pending because no disposable `ONTRACK_TEST_DATABASE_URL` is configured. Docker was not invoked locally. No production deployment is claimed.
 
 ## Implemented
 
@@ -26,7 +26,7 @@ The focused Foundation repair is complete at qualified baseline `a43bd486ed78e06
 - Full Alembic PostgreSQL-dialect SQL generation through branding revision `f14b3928a6cd`: passed. This checks SQL generation, not execution.
 - Dependency consistency: local `pip check` and `pip-audit --local` passed with no known vulnerabilities.
 - Responsive Playwright: **4 local tests passed** at 1280, 430, 375, and 320 pixels against an isolated visual-test SQLite database, covering Employee, Manager, Viewer, and Admin routes, configurable long-name branding, overflow, theme, track colour, picker, responsive list behavior, write denial, and browser console/page errors. This is browser qualification, not PostgreSQL qualification.
-- Exact-head GitHub Actions PostgreSQL/browser/Compose/image qualification is pending the branding commit and normal push. Baseline run `34449238408` remains valid only for `a43bd486ed78e067a3930bff9b2f43a51dab825b`.
+- Exact-head GitHub Actions for branding implementation `a2f3ded1fad0f5fa30bc48a06a28f7e75ce2618b`: release-gate run `34530604319` passed. PostgreSQL 17 applied the full migration chain through `f14b3928a6cd`, and a second `alembic upgrade head` completed cleanly. The full suite reported **61 passed, 0 skipped**; Playwright reported **4 passed** at 1280, 430, 375, and 320 pixels; `pip check`, `pip-audit --local`, Compose validation, and production image build all passed. The built image ID was `sha256:f260b75ae6f4d5b9dd5c091c6feb4e00bf4d8c20a4440fe49550d89b7b855f3a`.
 
 ## Explicitly pending or deferred
 
