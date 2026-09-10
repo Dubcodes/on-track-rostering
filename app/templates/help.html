@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Help · On Track{% endblock %}
-{% block content %}<section class="page-head"><p class="eyebrow">Help · {{ context_key }}</p><h1>Using On Track</h1></section>
+{% block title %}Help · {{ branding.product_name }}{% endblock %}
+{% block content %}<section class="page-head"><p class="eyebrow">Help · {{ context_key }}</p><h1>Using {{ branding.product_name }}</h1></section>
 <section class="panel prose">
 {% if context_key == 'month' %}<h2>Your month</h2><p>The calendar shows only published roster information you are authorized to see. Select a coloured workday to open its operational detail.</p>
 {% elif context_key == 'day' %}<h2>Workday detail</h2><p>Primary timing and notes appear first. Supporting calculations and change history stay collapsed until needed.</p>
 {% elif context_key == 'builder' %}<h2>Building a roster</h2><p>Save an incomplete draft freely. Crew cannot see it until you review Preview and publish the revision.</p>
-{% else %}<h2>Authoritative and simple</h2><p>On Track stores the published roster directly. Contact your Manager if an assignment or time looks wrong.</p>{% endif %}
+{% else %}<h2>Authoritative and simple</h2><p>{{ branding.product_name }} stores the published roster directly. Contact your Manager if an assignment or time looks wrong.</p>{% endif %}
 </section>{% endblock %}
 

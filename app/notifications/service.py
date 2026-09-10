@@ -13,6 +13,7 @@ from pywebpush import WebPushException, webpush
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.branding.service import branding_for
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import local_today, utcnow
@@ -199,7 +200,8 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
     return set()
 
 
-def _notification_payload(event: NotificationEvent) -> dict[str, str]:
+def _notification_payload(db: Session, event: NotificationEvent) -> dict[str, str]:
+    product_name = branding_for(db).product_name
     titles = {
         "ROSTER_PUBLISHED": "Roster updated",
         "OPEN_POSITION_AVAILABLE": "Open position",
@@ -209,8 +211,8 @@ def _notification_payload(event: NotificationEvent) -> dict[str, str]:
         "ONE_HOUR_BEFORE": "Roster starts in one hour",
     }
     return {
-        "title": titles.get(event.event_type, "On Track update"),
-        "body": "Open On Track to view the authoritative roster details.",
+        "title": titles.get(event.event_type, f"{product_name} update"),
+        "body": f"Open {product_name} to view the authoritative roster details.",
         "url": f"/day/{event.workday_id}" if event.workday_id else "/month",
         "event_key": event.event_key,
     }
@@ -265,7 +267,7 @@ def process_event(
     db.commit()
 
     now = utcnow()
-    payload = json.dumps(_notification_payload(event), separators=(",", ":"))
+    payload = json.dumps(_notification_payload(db, event), separators=(",", ":"))
     terminal = {"DELIVERED", "PERMANENT_FAILURE", "FAILED"}
     for delivery in existing.values():
         next_attempt = delivery.next_attempt_at

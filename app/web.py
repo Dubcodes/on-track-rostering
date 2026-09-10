@@ -7,6 +7,7 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
 from app.auth.security import CSRF_COOKIE
+from app.branding.service import DEFAULT_BRANDING
 from app.core.config import get_settings
 from app.core.holidays import holiday_for_date
 from app.core.time import display_datetime, display_time, local_today
@@ -80,6 +81,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
         "request": request,
         "user": getattr(request.state, "user", None),
         "actor": actor,
+        "branding": getattr(request.state, "branding", DEFAULT_BRANDING),
         "show_manage": show_manage,
         "show_crew": show_crew,
         "show_open_positions": show_open_positions,

@@ -9,6 +9,7 @@ from pywebpush import WebPushException
 from sqlalchemy import select
 
 from app.auth.security import hash_credential
+from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, Region
 from app.identity.models import Person, User, UserPersonLink
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
@@ -63,6 +64,30 @@ def test_delivery_is_encrypted_and_idempotent(db) -> None:  # type: ignore[no-un
     assert len(sent) == 1
     assert delivery.status == "DELIVERED" and delivery.attempt_count == 1
     assert event.status == "PROCESSED"
+
+
+def test_delivery_uses_configured_product_name(db) -> None:  # type: ignore[no-untyped-def]
+    user = _user(db)
+    _subscription(db, user)
+    db.add(SystemBranding(id=1, product_name="Track Crew"))
+    event = NotificationEvent(
+        event_key="branding:1",
+        event_type="UNKNOWN_EVENT",
+        audience_user_id=user.id,
+        payload={},
+    )
+    db.add(event)
+    db.commit()
+    sent: list[str] = []
+
+    process_event(db, event, sender=lambda _subscription, payload: sent.append(payload))
+
+    assert json.loads(sent[0]) == {
+        "title": "Track Crew update",
+        "body": "Open Track Crew to view the authoritative roster details.",
+        "url": "/month",
+        "event_key": "branding:1",
+    }
 
 
 def test_permanent_endpoint_failure_deactivates_subscription(db) -> None:  # type: ignore[no-untyped-def]

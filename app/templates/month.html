@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set help_context = 'month' %}
-{% block title %}{{ month_label }} · On Track{% endblock %}
+{% block title %}{{ month_label }} · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <style nonce="{{ csp_nonce }}">{% for day_items in items_by_date.values() %}{% for item in day_items %}[data-track-colour="{{ item.colour }}"]{--track:{{ item.colour }}}{% endfor %}{% endfor %}</style>
 <section class="month-head">

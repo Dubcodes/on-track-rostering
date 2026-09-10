@@ -22,5 +22,7 @@ def test_offline_html_is_built_only_from_the_small_roster_feed() -> None:
     assert "^\\/day\\/[a-f0-9-]+$" in source
     assert 'cache.match("/api/upcoming-work")' in source
     assert "offlineRosterPage" in source
+    assert "payload.product_name" in source
+    assert "${productName} offline" in source
     assert "Reconnect to view or edit the authoritative roster." in source
     assert 'name="csrf_token"' not in source

@@ -18,6 +18,7 @@ from app.auth.security import (
     verify_csrf,
 )
 from app.auth.service import create_invitation, validated_email
+from app.branding.service import update_branding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.catalog.service import close_colour_warnings
 from app.core.database import get_db
@@ -87,6 +88,34 @@ def admin_page(request: Request, db: Session = Depends(get_db)):
             invite_url=request.query_params.get("invite_url", ""),
         ),
     )
+
+
+@router.post("/branding")
+def update_system_branding(
+    request: Request,
+    product_name: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _admin(request)
+    verify_csrf(request, csrf_token)
+    previous_name = request.state.branding.product_name
+    try:
+        row = update_branding(
+            db, product_name=product_name, actor_user_id=request.state.user.id
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    record_audit(
+        db,
+        "system_branding.updated",
+        "system_branding",
+        row.id,
+        request.state.user.id,
+        detail={"previous_product_name": previous_name, "product_name": row.product_name},
+    )
+    db.commit()
+    return RedirectResponse("/admin#branding", status_code=303)
 
 
 @router.post("/regions")

@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set help_context = 'accounts' %}
-{% block title %}Accounts · On Track{% endblock %}
+{% block title %}Accounts · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <section class="page-head"><p class="eyebrow">Privilege-safe administration</p><h1>Accounts & access</h1><p class="lede">Approve signup requests and stage role changes. Pending roles become active only after the account owner signs in again.</p></section>
 {% if invite_url %}<div class="alert success"><strong>Approval complete.</strong> Copy this invitation once: <code>{{ invite_url }}</code></div>{% endif %}

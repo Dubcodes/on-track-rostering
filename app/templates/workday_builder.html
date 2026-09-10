@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set help_context = 'builder' %}
-{% block title %}Edit {{ draft.title }} · On Track{% endblock %}
+{% block title %}Edit {{ draft.title }} · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <a class="back-link" href="/month">← Back to roster</a>
 <section class="builder-head"><div><p class="eyebrow">Private draft · revision {{ draft.revision_number }}</p><h1>{{ draft.title }}</h1></div><a class="button" href="/manage/workdays/{{ workday.id }}/preview">Preview</a></section>

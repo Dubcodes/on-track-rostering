@@ -16,6 +16,7 @@ with warnings.catch_warnings():
 
 from app.auth.factors import begin_totp
 from app.auth.security import hash_credential
+from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base
 from app.core.enums import Role
@@ -25,7 +26,7 @@ from app.main import app
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 
 
-def test_public_login_and_liveness_routes_render() -> None:
+def test_public_login_and_liveness_routes_render(routed_db) -> None:  # type: ignore[no-untyped-def]
     client = TestClient(app)
     login = client.get("/login")
     assert login.status_code == 200
@@ -600,3 +601,71 @@ def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore
     )
     assert completed.status_code == 303
     assert manager_client.cookies.get("ontrack_session")
+
+
+def test_global_product_branding_is_persistent_admin_only_and_escaped(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    default_page = TestClient(app).get("/login")
+    assert '<strong>On Track</strong>' in default_page.text
+    assert "<title>Sign in · On Track</title>" in default_page.text
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    changed = admin.post(
+        "/admin/branding",
+        data={"product_name": 'Track & "Crew"', "csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert changed.status_code == 303
+
+    admin_page = admin.get("/admin")
+    assert '<strong>Track &amp; &#34;Crew&#34;</strong>' in admin_page.text
+    assert "<title>Administration · Track &amp; &#34;Crew&#34;</title>" in admin_page.text
+    assert '<strong>On Track</strong>' not in admin_page.text
+
+    reloaded_login = TestClient(app).get("/login")
+    assert '<strong>Track &amp; &#34;Crew&#34;</strong>' in reloaded_login.text
+    assert "<title>Sign in · Track &amp; &#34;Crew&#34;</title>" in reloaded_login.text
+    assert '<strong>On Track</strong>' not in reloaded_login.text
+
+    manifest = TestClient(app).get("/manifest.webmanifest")
+    assert manifest.status_code == 200
+    assert manifest.headers["content-type"].startswith("application/manifest+json")
+    assert manifest.headers["cache-control"] == "no-store"
+    assert manifest.json()["name"] == 'Track & "Crew"'
+    assert manifest.json()["short_name"] == 'Track & "Crew"'
+
+    employee = TestClient(app)
+    employee_csrf = _login(employee, "amy@example.test", "654321")
+    assert employee.get("/api/upcoming-work").json()["product_name"] == 'Track & "Crew"'
+    options = employee.post(
+        "/settings/passkeys/options", data={"csrf_token": employee_csrf}
+    ).json()
+    assert options["rp"]["name"] == 'Track & "Crew"'
+
+    with factory() as db:
+        stored = db.get(SystemBranding, 1)
+        assert stored and stored.product_name == 'Track & "Crew"'
+        assert stored.updated_by_user_id is not None
+
+    rejected = admin.post(
+        "/admin/branding",
+        data={"product_name": "<script>alert(1)</script>", "csrf_token": admin_csrf},
+    )
+    assert rejected.status_code == 400
+
+    for email, credential in (
+        ("manager@example.test", "123456"),
+        ("submanager@example.test", "445566"),
+        ("viewer@example.test", "112233"),
+        ("amy@example.test", "654321"),
+        ("private-south@example.test", "778899"),
+    ):
+        client = TestClient(app)
+        csrf = _login(client, email, credential)
+        response = client.post(
+            "/admin/branding",
+            data={"product_name": "Forbidden rename", "csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert response.status_code == 403

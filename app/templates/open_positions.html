@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set help_context = 'open_positions' %}
-{% block title %}Open positions · On Track{% endblock %}
+{% block title %}Open positions · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <section class="page-head"><p class="eyebrow">Eligible opportunities</p><h1>Open positions</h1><p class="lede">Only roles supported by your base-position history or an explicit allowance appear here.</p></section>
 {% if request.query_params.get('applied') %}<div class="alert success">Application recorded. A Manager will choose an applicant, preview the roster, and publish the change.</div>{% endif %}

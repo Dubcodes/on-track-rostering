@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set help_context = 'builder' %}
-{% block title %}New workday · On Track{% endblock %}
+{% block title %}New workday · {{ branding.product_name }}{% endblock %}
 {% block content %}<a class="back-link" href="/month">← Back to roster</a><section class="page-head"><p class="eyebrow">Manual entry always available</p><h1>Create a workday</h1></section>
 <section class="panel"><form method="post" action="/manage/workdays" class="form-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Date<input type="date" name="work_date" required></label><label>Category<select name="category">{% for category in categories %}<option value="{{ category }}">{{ category.replace('_',' ').title() }}</option>{% endfor %}</select></label><label>Region<select name="region_id" required>{% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}</select></label><label>Track<select name="track_id"><option value="">To be confirmed</option>{% for track in tracks %}<option value="{{ track.id }}">{{ track.name }}</option>{% endfor %}</select></label><label class="wide-field">Title<input name="title" placeholder="Race Day"></label><button>Create draft</button></form></section>{% endblock %}
 

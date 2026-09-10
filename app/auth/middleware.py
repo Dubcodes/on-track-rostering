@@ -9,6 +9,7 @@ from starlette.responses import RedirectResponse, Response
 from app.auth.network import resolve_request, same_origin
 from app.auth.policy import actor_for
 from app.auth.security import CSRF_COOKIE, SESSION_COOKIE, resolve_device
+from app.branding.service import DEFAULT_BRANDING, branding_for
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 
@@ -33,17 +34,21 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         request.state.device = None
         request.state.network = resolve_request(request)
         request.state.csp_nonce = secrets.token_urlsafe(18)
+        request.state.branding = DEFAULT_BRANDING
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not same_origin(request):
             return Response("Cross-site request rejected", status_code=403)
         resolved = None
-        with SessionLocal() as db:
-            resolved = resolve_device(db, request.cookies.get(SESSION_COOKIE, ""))
-            if resolved:
-                user, device = resolved
-                request.state.user = user
-                request.state.device = device
-                request.state.actor = actor_for(db, user)
         path = request.url.path
+        database_free = path == "/health/live" or path == "/service-worker.js" or path.startswith("/static/")
+        if not database_free:
+            with SessionLocal() as db:
+                request.state.branding = branding_for(db)
+                resolved = resolve_device(db, request.cookies.get(SESSION_COOKIE, ""))
+                if resolved:
+                    user, device = resolved
+                    request.state.user = user
+                    request.state.device = device
+                    request.state.actor = actor_for(db, user)
         public = path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES)
         if not public and request.state.user is None:
             return RedirectResponse(f"/login?next={path}", status_code=303)

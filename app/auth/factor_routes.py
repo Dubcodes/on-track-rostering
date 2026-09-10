@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from html import escape
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -85,7 +86,7 @@ def registration_options(
     )
     options = generate_registration_options(
         rp_id=get_settings().webauthn_rp_id,
-        rp_name=get_settings().webauthn_rp_name,
+        rp_name=request.state.branding.product_name,
         user_id=request.state.user.id.bytes,
         user_name=request.state.user.email,
         user_display_name=request.state.user.display_name,
@@ -249,13 +250,15 @@ def begin_totp_setup(
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
     try:
-        _, secret, qr_svg = begin_totp(db, request.state.user)
+        _, secret, qr_svg = begin_totp(
+            db, request.state.user, product_name=request.state.branding.product_name
+        )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return HTMLResponse(
         content=(
             "<!doctype html><meta name=viewport content='width=device-width'>"
-            "<title>Set up authenticator · On Track</title>"
+            f"<title>Set up authenticator · {escape(request.state.branding.product_name)}</title>"
             "<link rel=stylesheet href='/static/style.css'><main class='auth-setup'>"
             "<h1>Set up authenticator</h1><p>Scan this once, then enter the current code.</p>"
             f"<img alt='Authenticator QR code' src='data:image/svg+xml;base64,{qr_svg}' "

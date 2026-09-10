@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from webauthn import base64url_to_bytes
 
+from app.branding.service import branding_for
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import utcnow
@@ -37,7 +38,9 @@ def decrypt_totp_secret(value: bytes) -> str:
         raise ValueError("The stored authenticator factor cannot be decrypted.") from exc
 
 
-def begin_totp(db: Session, user: User) -> tuple[TotpFactor, str, str]:
+def begin_totp(
+    db: Session, user: User, *, product_name: str | None = None
+) -> tuple[TotpFactor, str, str]:
     secret = pyotp.random_base32()
     factor = db.get(TotpFactor, user.id)
     if factor and factor.confirmed_at and not factor.disabled_at:
@@ -51,7 +54,7 @@ def begin_totp(db: Session, user: User) -> tuple[TotpFactor, str, str]:
         factor.disabled_at = None
         factor.last_counter = None
     uri = pyotp.TOTP(secret).provisioning_uri(
-        name=user.email, issuer_name=get_settings().webauthn_rp_name
+        name=user.email, issuer_name=product_name or branding_for(db).product_name
     )
     qr = qrcode.make(uri, image_factory=SvgPathImage)
     from io import BytesIO

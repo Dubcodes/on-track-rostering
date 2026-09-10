@@ -7,14 +7,15 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/branding.css">
   <script src="/static/passkeys.js" defer></script>
   <script src="/static/notifications.js" defer></script>
-  <title>{% block title %}On Track{% endblock %}</title>
+  <title>{% block title %}{{ branding.product_name }}{% endblock %}</title>
 </head>
 <body data-user-namespace="{{ user.id if user else '' }}">
   <header class="app-header">
-    <a class="brand" href="/month" aria-label="On Track home">
-      <span class="brand-mark">OT</span><span><strong>On Track</strong><small>Rostering</small></span>
+    <a class="brand" href="/month" aria-label="{{ branding.product_name }} home">
+      <span class="brand-mark">{{ branding.mark }}</span><span class="brand-name"><strong>{{ branding.product_name }}</strong></span>
     </a>
     {% if user %}
     <nav aria-label="Main navigation">
@@ -39,7 +40,7 @@
   </header>
   <div id="offline-banner" class="offline-banner" hidden>Offline — showing the last roster saved on this device</div>
   <main class="page-shell">{% block content %}{% endblock %}</main>
-  <footer class="app-footer">On Track {{ app_version }}{% if build_id %} · {{ build_id }}{% endif %}</footer>
+  <footer class="app-footer">{{ branding.product_name }} {{ app_version }}{% if build_id %} · {{ build_id }}{% endif %}</footer>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

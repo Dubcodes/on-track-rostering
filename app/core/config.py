@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     trusted_device_limit: int = Field(default=10, ge=1, le=100)
     fresh_auth_minutes: int = Field(default=15, ge=1, le=120)
     webauthn_rp_id: str = "localhost"
-    webauthn_rp_name: str = "On Track Rostering"
     webauthn_origin: str = "http://localhost:8000"
     webauthn_challenge_minutes: int = Field(default=5, ge=1, le=15)
     mfa_required_admin: bool = False

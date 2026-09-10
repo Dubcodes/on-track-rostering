@@ -1,0 +1,30 @@
+.brand {
+  white-space: normal;
+  min-width: 0;
+  max-width: min(34vw, 360px);
+}
+
+.brand-mark {
+  flex: 0 0 39px;
+}
+
+.brand-name {
+  min-width: 0;
+}
+
+.brand strong {
+  overflow-wrap: anywhere;
+  line-height: 1.08;
+}
+
+@media (max-width: 760px) {
+  .brand {
+    max-width: calc(100% - 100px);
+  }
+}
+
+@media (max-width: 360px) {
+  .brand strong {
+    font-size: .88rem;
+  }
+}

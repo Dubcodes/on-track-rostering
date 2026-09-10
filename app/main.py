@@ -3,8 +3,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import Response
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -66,10 +66,19 @@ def ready() -> dict[str, str]:
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
-def manifest() -> Response:
-    return Response(
-        (Path(__file__).parent / "static" / "manifest.webmanifest").read_text(),
+def manifest(request: Request) -> JSONResponse:
+    name = request.state.branding.product_name
+    return JSONResponse(
+        {
+            "name": name,
+            "short_name": name,
+            "start_url": "/month",
+            "display": "standalone",
+            "background_color": "#f4f7f4",
+            "theme_color": "#123b35",
+        },
         media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store"},
     )
 
 

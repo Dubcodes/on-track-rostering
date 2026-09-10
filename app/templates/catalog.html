@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set help_context = 'catalog' %}
-{% block title %}Master data · On Track{% endblock %}
+{% block title %}Master data · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <style nonce="{{ csp_nonce }}">{% for track in tracks %}[data-track-colour="{{ track.display_colour }}"]{--track:{{ track.display_colour }}}{% endfor %}</style>
 <section class="page-head"><p class="eyebrow">Regional administration</p><h1>Master data</h1><p class="lede">Lifecycle changes never rewrite published roster snapshots.</p></section>

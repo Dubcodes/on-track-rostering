@@ -1,6 +1,7 @@
 # Domain rules
 
 - On Track stores authoritative workdays directly. External calendar/programme records are planning assistance.
+- `On Track Rostering` is the internal project name. User-facing product identity comes only from global Admin-configurable branding; changing it does not change authorization, roster data, or internal/database identity.
 - Workday categories have stable codes: Race Day, Trials, Travel Day, Rig Day, Office Day, Training Day, Other.
 - Publication follows Draft → Preview → Publish. Drafts are invisible to crew; old publications remain readable history.
 - A Workday has one shared Manager draft. Draft mutations and Publish carry an optimistic Workday version, lock the Workday row, and reject stale submissions instead of overwriting newer work.

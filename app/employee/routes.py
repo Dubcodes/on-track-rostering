@@ -284,6 +284,7 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
         can_view_private_notes=False,
     )
     return {
+        "product_name": request.state.branding.product_name,
         "user_namespace": str(request.state.user.id),
         "saved_at": revision.published_at,
         "offline_cacheable": bool(personal_assignments),
@@ -307,7 +308,12 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
 def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
     """Return own work across month boundaries for sequential offline prefetch."""
     if request.state.actor.person_id is None:
-        return {"user_namespace": str(request.state.user.id), "saved_at": None, "days": []}
+        return {
+            "product_name": request.state.branding.product_name,
+            "user_namespace": str(request.state.user.id),
+            "saved_at": None,
+            "days": [],
+        }
     today = local_today()
     rows = month_items(db, request.state.actor, today, today + timedelta(days=370))
     own_rows = [row for row in rows if row["own"]]
@@ -318,6 +324,7 @@ def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
         (row["published_at"] for row in selected_rows if row["published_at"]), default=None
     )
     return {
+        "product_name": request.state.branding.product_name,
         "user_namespace": str(request.state.user.id),
         "saved_at": saved_at,
         "days": selected_rows,

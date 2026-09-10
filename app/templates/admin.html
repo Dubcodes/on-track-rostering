@@ -1,10 +1,12 @@
 {% extends "base.html" %}{% set help_context = 'admin' %}
-{% block title %}Administration · On Track{% endblock %}
+{% block title %}Administration · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <style nonce="{{ csp_nonce }}">{% for track, region_name in tracks %}[data-track-colour="{{ track.display_colour }}"]{--track:{{ track.display_colour }}}{% endfor %}</style>
 <section class="page-head"><p class="eyebrow">System administration</p><h1>Foundation setup</h1><p class="lede">Configure operational records. Archive lifecycle controls will replace deletion.</p></section>
 {% if invite_url %}<div class="alert success"><strong>Invitation created.</strong> Copy this once: <code>{{ invite_url }}</code></div>{% endif %}
 <div class="admin-grid">
+<section class="panel wide" id="branding"><h2>System branding</h2><p class="muted">This name appears throughout the application, installed app, passkeys, and notifications.</p>
+<form method="post" action="/admin/branding" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Product name<input name="product_name" value="{{ branding.product_name }}" required maxlength="80"></label><button>Save product name</button></form></section>
 <section class="panel" id="regions"><h2>Regions</h2><div class="record-list">{% for region in regions %}<span>{{ region.name }} <small>{{ region.lifecycle }}</small></span>{% endfor %}</div>
 <form method="post" action="/admin/regions" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="name" required maxlength="100"></label><button>Add region</button></form></section>
 <section class="panel" id="tracks"><h2>Tracks & colours</h2>{% for warning in colour_warnings %}<div class="alert">{{ warning }}</div>{% endfor %}<div class="record-list">{% for track, region_name in tracks %}<span><i class="track-dot" data-track-colour="{{ track.display_colour }}"></i>{{ track.name }} <small>{{ region_name }}</small></span>{% endfor %}</div>

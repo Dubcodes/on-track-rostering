@@ -1,6 +1,6 @@
-const SHELL_CACHE = "ontrack-shell-v1";
+const SHELL_CACHE = "ontrack-shell-v2";
 const ROSTER_PREFIX = "ontrack-roster-";
-const SHELL = ["/static/style.css", "/static/app.js", "/static/passkeys.js", "/static/notifications.js", "/manifest.webmanifest"];
+const SHELL = ["/static/style.css", "/static/branding.css", "/static/app.js", "/static/passkeys.js", "/static/notifications.js"];
 const ACTIVE_USER_KEY = "/__ontrack_active_user";
 
 async function setActiveUser(namespace) {
@@ -26,11 +26,12 @@ function html(value) {
 async function offlineRosterPage() {
   const cache = await activeRosterCache();
   const response = cache ? await cache.match("/api/upcoming-work") : null;
-  if (!response) return new Response("On Track is offline and no roster has been saved for this account.", {status: 503, headers: {"Content-Type": "text/plain; charset=utf-8"}});
+  if (!response) return new Response("The roster is offline and no work has been saved for this account.", {status: 503, headers: {"Content-Type": "text/plain; charset=utf-8"}});
   const payload = await response.json();
+  const productName = html(payload.product_name || "Roster");
   const rows = (payload.days || []).map((day) => `<li><strong>${html(day.date)}</strong> — ${html(day.track)} · ${html(day.role)} · ${html(day.start || "Start TBC")}</li>`).join("");
   const saved = html(payload.saved_at ? new Date(payload.saved_at).toLocaleString() : "unknown");
-  return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><title>On Track offline</title><link rel="stylesheet" href="/static/style.css"><main class="page-shell"><h1>Upcoming work</h1><div class="offline-banner">Offline — showing roster saved at ${saved}</div><section class="panel"><ul>${rows || "<li>No upcoming work was saved.</li>"}</ul></section><p>Reconnect to view or edit the authoritative roster.</p></main>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
+  return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><title>${productName} offline</title><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/branding.css"><main class="page-shell"><h1>Upcoming work</h1><div class="offline-banner">Offline — showing roster saved at ${saved}</div><section class="panel"><ul>${rows || "<li>No upcoming work was saved.</li>"}</ul></section><p>Reconnect to view or edit the authoritative roster.</p></main>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
 }
 
 self.addEventListener("install", (event) => event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL))));
@@ -75,7 +76,7 @@ self.addEventListener("fetch", (event) => {
   if (SHELL.includes(url.pathname)) event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
 });
 self.addEventListener("push", (event) => {
-  let payload = {title: "On Track update", body: "Open On Track for details.", url: "/month"};
+  let payload = {title: "Roster update", body: "Open the roster for details.", url: "/month"};
   try { payload = {...payload, ...event.data.json()}; } catch (_) { /* use safe defaults */ }
   event.waitUntil(self.registration.showNotification(payload.title, {
     body: payload.body,

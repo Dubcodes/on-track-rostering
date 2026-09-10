@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set help_context = 'decline' %}
-{% block title %}Decline {{ assignment.display_name_snapshot }} · On Track{% endblock %}
+{% block title %}Decline {{ assignment.display_name_snapshot }} · {{ branding.product_name }}{% endblock %}
 {% block content %}<a class="back-link" href="/day/{{ workday.id }}">← Keep assignment</a>
 <section class="auth-card"><p class="eyebrow">Confirm availability change</p><h1>Decline {{ assignment.display_name_snapshot }}?</h1><p>{{ revision.track_name_snapshot }} · {{ revision.work_date.strftime('%A %d %B') }}</p>
 {% if region.decline_policy == 'OPEN_IMMEDIATELY' %}<div class="alert">You will be removed immediately. The position becomes Open and eligible crew may be notified.</div>{% else %}<div class="alert">You will be removed immediately. The position will require Manager attention and will not be offered to everyone yet.</div>{% endif %}

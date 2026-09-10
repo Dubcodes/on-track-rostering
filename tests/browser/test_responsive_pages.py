@@ -377,7 +377,16 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     _login(page, base_url, values["admin"])
     for path in ("/admin", "/manage/catalog", "/manage/accounts"):
         _assert_page(page, base_url + path)
+    page.goto(base_url + "/admin#branding")
+    configured_name = "Trackside Operations Rostering Portal"
+    page.locator('input[name="product_name"]').fill(configured_name)
+    page.get_by_role("button", name="Save product name").click()
+    page.wait_for_url("**/admin#branding")
+    assert page.locator(".brand strong").inner_text() == configured_name
+    assert configured_name in page.title()
+    _assert_no_horizontal_overflow(page)
     page.goto(base_url + "/manage/catalog")
+    assert page.locator(".brand strong").inner_text() == configured_name
     assert page.get_by_text("Regions", exact=True).is_visible()
     assert not errors
     context.close()

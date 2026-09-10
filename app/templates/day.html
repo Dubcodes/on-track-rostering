@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set help_context = 'day' %}
-{% block title %}{{ revision.title }} · On Track{% endblock %}
+{% block title %}{{ revision.title }} · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <style nonce="{{ csp_nonce }}">[data-track-colour="{{ revision.track_colour_snapshot }}"]{--track:{{ revision.track_colour_snapshot }}}</style>
 <a class="back-link" href="/month">← Back to month</a>
