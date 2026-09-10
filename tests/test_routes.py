@@ -1,7 +1,7 @@
 import uuid
 import warnings
 from calendar import monthrange
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import pyotp
@@ -143,6 +143,55 @@ def _login(client: TestClient, email: str, pin: str) -> str:
     return csrf
 
 
+def _publish_rows(
+    factory,
+    *,
+    region_id: uuid.UUID,
+    position_id: uuid.UUID,
+    work_date: date,
+    rows: list[tuple[uuid.UUID | None, str, str, bool]],
+    day_note: str = "",
+) -> uuid.UUID:
+    with factory() as db:
+        manager_id = db.scalar(select(User.id).where(User.email == "manager@example.test"))
+        workday = Workday(region_id=region_id, created_by_user_id=manager_id)
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=work_date,
+            title="Published privacy day",
+            track_name_snapshot="Ellerslie",
+            track_colour_snapshot="#C33D52",
+            start_time=time(8),
+            end_time=time(17),
+            day_note=day_note,
+            published_at=utcnow(),
+            created_by_user_id=manager_id,
+        )
+        db.add(revision)
+        db.flush()
+        for index, (person_id, person_name, note, note_private) in enumerate(rows, start=1):
+            db.add(
+                Assignment(
+                    revision_id=revision.id,
+                    base_position_id=position_id,
+                    slot_index=index,
+                    display_name_snapshot=f"CCU {index}",
+                    person_id=person_id,
+                    person_name_snapshot=person_name,
+                    status="ASSIGNED" if person_id else "OPEN",
+                    note=note,
+                    note_private=note_private,
+                )
+            )
+        workday.current_published_revision_id = revision.id
+        db.commit()
+        return workday.id
+
+
 def test_manager_publish_employee_visibility_and_route_authorization(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, track_id, position_id, person_id) = routed_db
     manager_client = TestClient(app)
@@ -163,6 +212,8 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     workday_path = created.headers["location"]
     workday_id = uuid.UUID(workday_path.rsplit("/", 1)[-1])
     assert manager_client.get(workday_path).status_code == 200
+    with factory() as db:
+        expected_version = db.get(Workday, workday_id).lock_version
     assigned = manager_client.post(
         f"{workday_path}/assignments",
         data={
@@ -172,6 +223,7 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
             "status": "ASSIGNED",
             "note": "Private transport",
             "note_private": "true",
+            "expected_version": str(expected_version),
             "csrf_token": csrf,
         },
         follow_redirects=False,
@@ -181,9 +233,14 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     with factory() as db:
         workday = db.get(Workday, workday_id)
         draft_id = workday.current_draft_revision_id
+        expected_version = workday.lock_version
     published = manager_client.post(
         f"{workday_path}/publish",
-        data={"draft_id": str(draft_id), "csrf_token": csrf},
+        data={
+            "draft_id": str(draft_id),
+            "expected_version": str(expected_version),
+            "csrf_token": csrf,
+        },
         follow_redirects=False,
     )
     assert published.status_code == 303
@@ -258,6 +315,121 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     )
     assert disabled.status_code == 303
     assert viewer_client.get("/month", follow_redirects=False).status_code == 303
+
+
+def test_stale_builder_post_returns_409_and_preserves_newer_details(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    client = TestClient(app)
+    csrf = _login(client, "manager@example.test", "123456")
+    response = client.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "category": "RACE_DAY",
+            "work_date": "2026-10-01",
+            "track_id": str(track_id),
+            "title": "Initial",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    workday_id = uuid.UUID(response.headers["location"].rsplit("/", 1)[-1])
+    with factory() as db:
+        expected_version = db.get(Workday, workday_id).lock_version
+    form = {
+        "work_date": "2026-10-02",
+        "track_id": str(track_id),
+        "title": "Manager A",
+        "expected_version": str(expected_version),
+        "csrf_token": csrf,
+    }
+    assert client.post(f"/manage/workdays/{workday_id}/details", data=form).status_code == 200
+    stale = client.post(
+        f"/manage/workdays/{workday_id}/details",
+        data={**form, "title": "Manager B stale"},
+    )
+    assert stale.status_code == 409
+    assert "changed by someone else" in stale.text
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        assert draft.title == "Manager A"
+
+
+def test_contractor_online_and_offline_day_rows_are_personal(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, employee_person_id) = routed_db
+    with factory() as db:
+        contractor_id = db.scalar(select(Person.id).where(Person.email == "private-south@example.test"))
+        third = Person(display_name="Casey Other", home_region_id=region_id)
+        db.add(third)
+        db.commit()
+        third_id = third.id
+    workday_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 10, 8),
+        day_note="Normal operations note",
+        rows=[
+            (contractor_id, "South Crew", "Contractor private note", True),
+            (employee_person_id, "Amy Crew", "Amy private note", True),
+            (third_id, "Casey Other", "Public row note", False),
+        ],
+    )
+    contractor = TestClient(app)
+    _login(contractor, "private-south@example.test", "778899")
+    day = contractor.get(f"/day/{workday_id}")
+    assert day.status_code == 200
+    assert "Normal operations note" in day.text
+    assert "South Crew" in day.text and "Contractor private note" in day.text
+    assert "Amy Crew" not in day.text and "Casey Other" not in day.text
+    contractor_api = contractor.get(f"/api/day/{workday_id}").json()
+    assert contractor_api["offline_cacheable"] is True
+    assert [row["person"] for row in contractor_api["workday"]["assignments"]] == ["South Crew"]
+
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    online = employee.get(f"/day/{workday_id}")
+    assert "South Crew" in online.text and "Amy Crew" in online.text and "Casey Other" in online.text
+    employee_api = employee.get(f"/api/day/{workday_id}").json()
+    assert [row["person"] for row in employee_api["workday"]["assignments"]] == ["Amy Crew"]
+    assert employee_api["workday"]["assignments"][0]["note"] == "Amy private note"
+
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+    manager_api = manager.get(f"/api/day/{workday_id}").json()
+    assert manager_api["offline_cacheable"] is False
+    assert manager_api["workday"]["assignments"] == []
+
+
+def test_upcoming_feed_is_today_when_rostered_plus_three_across_months(
+    routed_db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    dates = [date(2026, 9, 30), date(2026, 10, 2), date(2026, 10, 5), date(2026, 10, 11), date(2026, 10, 20)]
+    for work_date in dates:
+        _publish_rows(
+            factory,
+            region_id=region_id,
+            position_id=position_id,
+            work_date=work_date,
+            rows=[(person_id, "Amy Crew", "", True)],
+        )
+    from app.employee import routes as employee_routes
+
+    monkeypatch.setattr(employee_routes, "local_today", lambda: date(2026, 9, 30))
+    client = TestClient(app)
+    _login(client, "amy@example.test", "654321")
+    today_payload = client.get("/api/upcoming-work").json()
+    assert [row["date"] for row in today_payload["days"]] == [
+        value.isoformat() for value in dates[:4]
+    ]
+
+    monkeypatch.setattr(employee_routes, "local_today", lambda: date(2026, 10, 1))
+    future_payload = client.get("/api/upcoming-work").json()
+    assert [row["date"] for row in future_payload["days"]] == [
+        value.isoformat() for value in dates[1:4]
+    ]
 
 
 def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -376,8 +548,11 @@ def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(rou
     upcoming = employee_client.get("/api/upcoming-work")
     assert upcoming.status_code == 200
     payload = upcoming.json()
-    assert len(payload["days"]) == 4
-    assert [row["date"] for row in payload["days"]] == [value.isoformat() for value in dates[:4]]
+    expected_dates = dates[:4] if dates[0] == today else dates[:3]
+    assert len(payload["days"]) == len(expected_dates)
+    assert [row["date"] for row in payload["days"]] == [
+        value.isoformat() for value in expected_dates
+    ]
     assert dates[0].month != dates[1].month
     assert payload["saved_at"]
     cross_region_month = employee_client.get(

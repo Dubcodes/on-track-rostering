@@ -3,8 +3,9 @@
 - On Track stores authoritative workdays directly. External calendar/programme records are planning assistance.
 - Workday categories have stable codes: Race Day, Trials, Travel Day, Rig Day, Office Day, Training Day, Other.
 - Publication follows Draft → Preview → Publish. Drafts are invisible to crew; old publications remain readable history.
+- A Workday has one shared Manager draft. Draft mutations and Publish carry an optimistic Workday version, lock the Workday row, and reject stale submissions instead of overwriting newer work.
 - An account is not a rosterable person. Linking must not create duplicate crew identities.
-- Home region is a default, not a prison. Event assignment can grant one-off cross-region visibility.
+- Home region is a default, not a prison. Event assignment can grant one-off cross-region visibility. A person's own cross-region marker compares the Workday region with `Person.home_region_id`, never with role scope; an unknown home region is neutral.
 - Roles combine authority and independent region scope. Viewer is broad read-only, not quasi-Manager. Sub-Manager can perform practical regional rostering but not system security administration.
 - Pending role grants authorize nothing. Existing-account grants activate only after the account owner next proves their primary credential. Managers may grant only regional Sub-Manager authority in a region they manage.
 - Crew groups are editable many-to-many browsing/suggestion data, never authorization barriers.
@@ -16,6 +17,7 @@
 - Employee decline is an exceptional direct authoritative action. It creates a new immutable published revision atomically: `OPEN_IMMEDIATELY` produces OPEN, while `MANAGER_REVIEW` produces MANAGER_ACTION_REQUIRED. It never mutates an older publication.
 - Track colours are data and may repeat across regions. Names/text always accompany colour.
 - Normal day notes are visible to rostered Contractors, scoped Crew View, operational management, scoped Viewers, and Admin.
+- Event-only Contractors see only their own assignment rows on Day. Authorized regional Crew View may show all published rows online, but cached Day JSON is always personal critical data and never a generic management roster.
 - Private assignment notes are visible to the assigned person and scoped Manager/Sub-Manager/Viewer oversight roles. Viewer remains read-only.
 - Multiple assignments on one publication form one person/day participation: earliest effective start, latest effective finish, deterministic de-duplicated role summary, and one non-duplicated span, including overnight work. No automatic half-hour or meal-break deduction occurs.
 - Allowances and public holidays are informational and never payroll calculations.
@@ -24,3 +26,4 @@
 - Notification generation is an idempotent event-outbox concern. Roster-change audience includes both removed and newly assigned users. Reminder keys bind publication, person, and reminder kind. Push delivery failure must never roll back roster publication or employee decline.
 - Employee and Manager capability preferences are independent decision families. Clearing either family never removes the other family or published `WORKED` history.
 - Fortnight totals use only the current published revision and the assigned person's authoritative start/end span. Allowance entitlements never increase that worked total.
+- The upcoming-work feed returns today only when the person is rostered today, followed by at most the next three actual published workdays across month boundaries; the client prefetches those server-selected days sequentially.

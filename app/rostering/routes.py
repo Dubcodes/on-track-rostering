@@ -18,6 +18,7 @@ from app.positions.service import eligibility
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
+    DraftConflict,
     PublishConflict,
     add_assignment,
     create_workday,
@@ -246,6 +247,7 @@ def save_details(
     race_count: str = Form(""),
     day_note: str = Form(""),
     change_reason: str = Form(""),
+    expected_version: int = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -263,7 +265,9 @@ def save_details(
     try:
         update_draft_details(
             db,
-            draft,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=expected_version,
             work_date=work_date,
             track_id=uuid.UUID(track_id) if track_id else None,
             title=title,
@@ -277,6 +281,8 @@ def save_details(
             day_note=day_note,
             change_reason=change_reason,
         )
+    except DraftConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return RedirectResponse(f"/manage/workdays/{workday_id}", status_code=303)
@@ -294,6 +300,7 @@ def create_assignment(
     note_private: bool = Form(False),
     assignment_start_time: str = Form(""),
     assignment_end_time: str = Form(""),
+    expected_version: int = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -308,8 +315,10 @@ def create_assignment(
     try:
         add_assignment(
             db,
-            draft,
-            AssignmentInput(
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=expected_version,
+            item=AssignmentInput(
                 base_position_id=uuid.UUID(base_position_id) if base_position_id else None,
                 slot_index=int(slot_index) if slot_index else None,
                 person_id=uuid.UUID(person_id) if person_id else None,
@@ -320,6 +329,8 @@ def create_assignment(
                 end_time=_parse_time(assignment_end_time),
             ),
         )
+    except DraftConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return RedirectResponse(f"/manage/workdays/{workday_id}#assignments", status_code=303)
@@ -336,6 +347,7 @@ def change_assignment(
     note_private: bool = Form(False),
     assignment_start_time: str = Form(""),
     assignment_end_time: str = Form(""),
+    expected_version: int = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -350,8 +362,10 @@ def change_assignment(
     try:
         update_assignment(
             db,
-            draft,
-            assignment_id,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=expected_version,
+            assignment_id=assignment_id,
             person_id=uuid.UUID(person_id) if person_id else None,
             status=status,
             note=note,
@@ -359,6 +373,8 @@ def change_assignment(
             start_time=_parse_time(assignment_start_time),
             end_time=_parse_time(assignment_end_time),
         )
+    except DraftConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return RedirectResponse(f"/manage/workdays/{workday_id}#assignments", status_code=303)
@@ -369,6 +385,7 @@ def delete_assignment(
     workday_id: uuid.UUID,
     assignment_id: uuid.UUID,
     request: Request,
+    expected_version: int = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -381,7 +398,15 @@ def delete_assignment(
     if not draft:
         raise HTTPException(409)
     try:
-        remove_assignment(db, draft, assignment_id)
+        remove_assignment(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=expected_version,
+            assignment_id=assignment_id,
+        )
+    except DraftConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return RedirectResponse(f"/manage/workdays/{workday_id}#assignments", status_code=303)
@@ -414,6 +439,7 @@ def publish_workday(
     workday_id: uuid.UUID,
     request: Request,
     draft_id: uuid.UUID = Form(...),
+    expected_version: int = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -424,7 +450,7 @@ def publish_workday(
     require_manage_region(request.state.actor, workday.region_id)
     db.commit()
     try:
-        publish(db, workday_id, draft_id, request.state.user.id)
+        publish(db, workday_id, draft_id, request.state.user.id, expected_version)
     except PublishConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     return RedirectResponse(f"/day/{workday_id}", status_code=303)

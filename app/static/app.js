@@ -68,7 +68,7 @@
         upcoming = await response.json();
         if (upcoming.saved_at) localStorage.setItem("ontrack-last-saved-at", upcoming.saved_at);
       } catch (_) { return; }
-      const ids = [...new Set((upcoming.days || []).map((item) => item.id))].slice(0, 4);
+      const ids = [...new Set((upcoming.days || []).map((item) => item.id))];
       for (const id of ids) {
         try {
           const response = await fetch(`/api/day/${id}`, { headers: { "X-OnTrack-Prefetch": "1" } });

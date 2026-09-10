@@ -10,6 +10,7 @@ from app.auth.policy import Actor, can_crew_view
 from app.catalog.models import Region
 from app.core.enums import Role
 from app.core.holidays import holiday_for_date
+from app.identity.models import Person
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.participation import person_day_participation
 
@@ -44,6 +45,11 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 )
             ):
             own_by_revision.setdefault(assignment.revision_id, []).append(assignment)
+    home_region_id = (
+        db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
+        if actor.person_id
+        else None
+    )
     result: list[dict[str, object]] = []
     for workday, revision, region in rows:
         own = own_by_revision.get(revision.id, [])
@@ -66,7 +72,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "role": participation.role_summary if participation else "Crew view",
                 "status": " / ".join(participation.statuses) if participation else "PUBLISHED",
                 "cross_region": bool(
-                    own and actor.person_id and workday.region_id not in actor.regional_roles
+                    own and home_region_id is not None and workday.region_id != home_region_id
                 ),
                 "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
                 "own": bool(own),
@@ -77,19 +83,23 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
 
 
 def day_assignments(
-    db: Session, actor: Actor, revision: WorkdayRevision, management: bool
+    db: Session,
+    actor: Actor,
+    revision: WorkdayRevision,
+    *,
+    can_view_all_rows: bool,
+    can_view_private_notes: bool,
 ) -> list[dict[str, object]]:
-    rows = list(
-        db.scalars(
-            select(Assignment)
-            .where(Assignment.revision_id == revision.id)
-            .order_by(Assignment.display_name_snapshot)
-        )
-    )
+    statement = select(Assignment).where(Assignment.revision_id == revision.id)
+    if not can_view_all_rows:
+        if actor.person_id is None:
+            return []
+        statement = statement.where(Assignment.person_id == actor.person_id)
+    rows = list(db.scalars(statement.order_by(Assignment.display_name_snapshot)))
     result = []
     for row in rows:
         is_own = actor.person_id == row.person_id
-        note = row.note if (not row.note_private or is_own or management) else ""
+        note = row.note if (not row.note_private or is_own or can_view_private_notes) else ""
         result.append(
             {
                 "slot_key": str(row.slot_key),

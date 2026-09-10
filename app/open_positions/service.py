@@ -13,6 +13,7 @@ from app.core.time import local_today
 from app.identity.models import Person
 from app.positions.service import eligibility
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
+from app.rostering.service import lock_current_draft
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,14 @@ def select_application(
     workday: Workday,
     draft: WorkdayRevision,
     application: OpenPositionApplication,
+    expected_version: int,
 ) -> Assignment:
+    workday, draft = lock_current_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=draft.id,
+        expected_version=expected_version,
+    )
     if workday.current_published_revision_id != application.revision_id:
         raise ValueError("The published roster changed after this application was made.")
     if application.status != OpenApplicationStatus.APPLIED.value:
@@ -130,5 +138,6 @@ def select_application(
     draft_slot.status = AssignmentStatus.ASSIGNED.value
     application.status = OpenApplicationStatus.SELECTED.value
     application.selected_draft_revision_id = draft.id
+    workday.lock_version += 1
     db.commit()
     return draft_slot

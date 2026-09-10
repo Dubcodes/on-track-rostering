@@ -368,7 +368,7 @@ def test_publication_diff_is_complete_and_redacts_note_contents(db) -> None:  # 
     draft.based_on_revision_id = previous.id
     draft.change_reason = "Sensitive management publication reason"
     db.commit()
-    publish(db, workday.id, draft.id, user.id)
+    publish(db, workday.id, draft.id, user.id, workday.lock_version)
     history_text = " ".join(
         db.scalars(select(HumanChange.summary).where(HumanChange.workday_id == workday.id))
     )

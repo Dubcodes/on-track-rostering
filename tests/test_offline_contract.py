@@ -8,11 +8,11 @@ def test_user_switch_deletes_other_roster_caches_before_marker_update() -> None:
     assert function.index("caches.delete(key)") < function.index("cache.put(ACTIVE_USER_KEY")
 
 
-def test_prefetch_is_date_sorted_limited_and_sequential() -> None:
+def test_prefetch_uses_server_selected_days_and_is_sequential() -> None:
     source = Path("app/static/app.js").read_text(encoding="utf-8")
     assert 'fetch("/api/upcoming-work"' in source
     assert "(upcoming.days || []).map((item) => item.id)" in source
-    assert ".slice(0, 4)" in source
+    assert ".slice(0, 4)" not in source
     assert "for (const id of ids)" in source
     assert "payload.saved_at" in source
 

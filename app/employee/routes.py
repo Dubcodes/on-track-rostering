@@ -113,7 +113,13 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
     management = can_view_management_detail(request.state.actor, workday.region_id)
-    assignments = day_assignments(db, request.state.actor, revision, management)
+    assignments = day_assignments(
+        db,
+        request.state.actor,
+        revision,
+        can_view_all_rows=can_crew_view(request.state.actor, workday.region_id),
+        can_view_private_notes=management,
+    )
     own_rows = list(
         db.scalars(
             select(Assignment).where(
@@ -244,7 +250,10 @@ def crew_view(
                 db,
                 request.state.actor,
                 revision,
-                can_view_management_detail(request.state.actor, workday.region_id),
+                can_view_all_rows=True,
+                can_view_private_notes=can_view_management_detail(
+                    request.state.actor, workday.region_id
+                ),
             ),
         }
         for workday, revision in rows
@@ -267,10 +276,17 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
     revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
+    personal_assignments = day_assignments(
+        db,
+        request.state.actor,
+        revision,
+        can_view_all_rows=False,
+        can_view_private_notes=False,
+    )
     return {
         "user_namespace": str(request.state.user.id),
         "saved_at": revision.published_at,
-        "offline_cacheable": request.state.actor.person_id is not None,
+        "offline_cacheable": bool(personal_assignments),
         "workday": {
             "id": str(workday.id),
             "revision_id": str(revision.id),
@@ -282,7 +298,7 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             "start": revision.start_time,
             "end": revision.end_time,
             "note": revision.day_note,
-            "assignments": day_assignments(db, request.state.actor, revision, False),
+            "assignments": personal_assignments,
         },
     }
 
@@ -294,14 +310,17 @@ def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
         return {"user_namespace": str(request.state.user.id), "saved_at": None, "days": []}
     today = local_today()
     rows = month_items(db, request.state.actor, today, today + timedelta(days=370))
-    own_rows = [row for row in rows if row["own"]][:4]
+    own_rows = [row for row in rows if row["own"]]
+    today_rows = [row for row in own_rows if row["date"] == today]
+    future_rows = [row for row in own_rows if row["date"] > today]
+    selected_rows = today_rows[:1] + future_rows[:3]
     saved_at = max(
-        (row["published_at"] for row in own_rows if row["published_at"]), default=None
+        (row["published_at"] for row in selected_rows if row["published_at"]), default=None
     )
     return {
         "user_namespace": str(request.state.user.id),
         "saved_at": saved_at,
-        "days": own_rows,
+        "days": selected_rows,
     }
 
 

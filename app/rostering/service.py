@@ -36,6 +36,10 @@ class PublishConflict(ValueError):
     pass
 
 
+class DraftConflict(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class AssignmentInput:
     base_position_id: uuid.UUID | None
@@ -96,6 +100,14 @@ def create_workday(
 
 
 def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> WorkdayRevision:
+    workday = db.scalar(
+        select(Workday)
+        .where(Workday.id == workday.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if workday is None:
+        raise ValueError("Workday not found.")
     if workday.current_draft_revision_id:
         return db.get(WorkdayRevision, workday.current_draft_revision_id)  # type: ignore[return-value]
     published = db.get(WorkdayRevision, workday.current_published_revision_id)
@@ -144,14 +156,46 @@ def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> Wor
             )
         )
     workday.current_draft_revision_id = draft.id
+    workday.lock_version += 1
     db.commit()
     return draft
 
 
+def lock_current_draft(
+    db: Session,
+    *,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    expected_version: int,
+) -> tuple[Workday, WorkdayRevision]:
+    workday = db.scalar(
+        select(Workday)
+        .where(Workday.id == workday_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not workday or workday.lock_version != expected_version:
+        raise DraftConflict(
+            "This roster was changed by someone else. Refresh the builder before making further changes."
+        )
+    draft = db.scalar(
+        select(WorkdayRevision)
+        .where(WorkdayRevision.id == draft_id)
+        .execution_options(populate_existing=True)
+    )
+    if not draft or workday.current_draft_revision_id != draft.id:
+        raise DraftConflict("This draft is no longer current. Refresh the builder before making changes.")
+    if draft.state != RevisionState.DRAFT.value:
+        raise DraftConflict("Published revisions are immutable. Refresh the builder.")
+    return workday, draft
+
+
 def update_draft_details(
     db: Session,
-    draft: WorkdayRevision,
     *,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    expected_version: int,
     work_date: date,
     track_id: uuid.UUID | None,
     title: str,
@@ -165,13 +209,11 @@ def update_draft_details(
     day_note: str,
     change_reason: str,
 ) -> None:
-    if draft.state != RevisionState.DRAFT.value:
-        raise ValueError("Published revisions are immutable.")
+    workday, draft = lock_current_draft(
+        db, workday_id=workday_id, draft_id=draft_id, expected_version=expected_version
+    )
     draft.work_date = work_date
     draft.track_id = track_id
-    workday = db.get(Workday, draft.workday_id)
-    if workday is None:
-        raise ValueError("Workday not found.")
     draft.track_name_snapshot, draft.track_colour_snapshot = _validated_track(db, track_id, workday.region_id)
     draft.title = title.strip() or "Workday"
     draft.start_time, draft.end_time, draft.on_track_time = start_time, end_time, on_track_time
@@ -182,12 +224,21 @@ def update_draft_details(
         race_count,
     )
     draft.day_note, draft.change_reason = day_note.strip(), change_reason.strip()
+    workday.lock_version += 1
     db.commit()
 
 
-def add_assignment(db: Session, draft: WorkdayRevision, item: AssignmentInput) -> Assignment:
-    if draft.state != RevisionState.DRAFT.value:
-        raise ValueError("Assignments can only be changed in a draft.")
+def add_assignment(
+    db: Session,
+    *,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    expected_version: int,
+    item: AssignmentInput,
+) -> Assignment:
+    workday, draft = lock_current_draft(
+        db, workday_id=workday_id, draft_id=draft_id, expected_version=expected_version
+    )
     position = db.get(BasePosition, item.base_position_id) if item.base_position_id else None
     person = db.get(Person, item.person_id) if item.person_id else None
     if position and position.lifecycle != "ACTIVE":
@@ -213,15 +264,18 @@ def add_assignment(db: Session, draft: WorkdayRevision, item: AssignmentInput) -
         end_time=item.end_time,
     )
     db.add(assignment)
+    workday.lock_version += 1
     db.commit()
     return assignment
 
 
 def update_assignment(
     db: Session,
-    draft: WorkdayRevision,
-    assignment_id: uuid.UUID,
     *,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    expected_version: int,
+    assignment_id: uuid.UUID,
     person_id: uuid.UUID | None,
     status: str,
     note: str,
@@ -229,8 +283,9 @@ def update_assignment(
     start_time: time | None = None,
     end_time: time | None = None,
 ) -> Assignment:
-    if draft.state != RevisionState.DRAFT.value:
-        raise ValueError("Assignments can only be changed in a draft.")
+    workday, draft = lock_current_draft(
+        db, workday_id=workday_id, draft_id=draft_id, expected_version=expected_version
+    )
     assignment = db.scalar(
         select(Assignment).where(Assignment.id == assignment_id, Assignment.revision_id == draft.id)
     )
@@ -248,19 +303,29 @@ def update_assignment(
     assignment.note_private = note_private
     assignment.start_time = start_time
     assignment.end_time = end_time
+    workday.lock_version += 1
     db.commit()
     return assignment
 
 
-def remove_assignment(db: Session, draft: WorkdayRevision, assignment_id: uuid.UUID) -> None:
-    if draft.state != RevisionState.DRAFT.value:
-        raise ValueError("Assignments can only be changed in a draft.")
+def remove_assignment(
+    db: Session,
+    *,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    expected_version: int,
+    assignment_id: uuid.UUID,
+) -> None:
+    workday, draft = lock_current_draft(
+        db, workday_id=workday_id, draft_id=draft_id, expected_version=expected_version
+    )
     assignment = db.scalar(
         select(Assignment).where(Assignment.id == assignment_id, Assignment.revision_id == draft.id)
     )
     if assignment is None:
         raise ValueError("Assignment not found in this draft.")
     db.delete(assignment)
+    workday.lock_version += 1
     db.commit()
 
 
@@ -274,11 +339,24 @@ def preview_diff(db: Session, workday: Workday, draft: WorkdayRevision) -> list[
 
 
 def publish(
-    db: Session, workday_id: uuid.UUID, draft_id: uuid.UUID, actor_user_id: uuid.UUID
+    db: Session,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    expected_version: int,
 ) -> WorkdayRevision:
     with db.begin():
-        workday = db.scalar(select(Workday).where(Workday.id == workday_id).with_for_update())
+        workday = db.scalar(
+            select(Workday)
+            .where(Workday.id == workday_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         draft = db.get(WorkdayRevision, draft_id)
+        if not workday or workday.lock_version != expected_version:
+            raise PublishConflict(
+                "This roster was changed by someone else. Refresh the builder before publishing."
+            )
         if not workday or not draft or workday.current_draft_revision_id != draft.id:
             raise PublishConflict("This draft is no longer current. Refresh before publishing.")
         if draft.state != RevisionState.DRAFT.value:

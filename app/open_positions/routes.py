@@ -12,7 +12,7 @@ from app.auth.security import verify_csrf
 from app.core.database import get_db
 from app.open_positions.service import apply_for_position, available_positions, select_application
 from app.rostering.models import OpenPositionApplication, Workday
-from app.rostering.service import ensure_draft
+from app.rostering.service import DraftConflict, ensure_draft
 from app.web import context, templates
 
 router = APIRouter()
@@ -57,6 +57,7 @@ def choose_applicant(
     workday_id: uuid.UUID,
     application_id: uuid.UUID,
     request: Request,
+    expected_version: int = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -70,7 +71,15 @@ def choose_applicant(
         raise HTTPException(409, "The application belongs to an older publication.")
     draft = ensure_draft(db, workday, request.state.user.id)
     try:
-        select_application(db, workday=workday, draft=draft, application=application)
+        select_application(
+            db,
+            workday=workday,
+            draft=draft,
+            application=application,
+            expected_version=expected_version,
+        )
+    except DraftConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return RedirectResponse(f"/manage/workdays/{workday.id}#assignments", status_code=303)

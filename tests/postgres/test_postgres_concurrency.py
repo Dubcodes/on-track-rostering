@@ -19,12 +19,16 @@ from app.notifications.service import encrypt_subscription, process_pending
 from app.rostering.models import OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
+    DraftConflict,
     PublishConflict,
     add_assignment,
     create_workday,
     decline_published_assignment,
     ensure_draft,
     publish,
+    remove_assignment,
+    update_assignment,
+    update_draft_details,
 )
 
 POSTGRES_URL = os.environ.get("ONTRACK_TEST_DATABASE_URL", "")
@@ -69,7 +73,11 @@ def test_concurrent_publish_preserves_one_authoritative_winner(pg_factory) -> No
             title="Concurrent publish",
             actor_user_id=user_id,
         )
-        workday_id, draft_id = workday.id, workday.current_draft_revision_id
+        workday_id, draft_id, expected_version = (
+            workday.id,
+            workday.current_draft_revision_id,
+            workday.lock_version,
+        )
     barrier = threading.Barrier(2)
     results: list[str] = []
 
@@ -77,7 +85,7 @@ def test_concurrent_publish_preserves_one_authoritative_winner(pg_factory) -> No
         with pg_factory() as db:
             barrier.wait()
             try:
-                publish(db, workday_id, draft_id, user_id)
+                publish(db, workday_id, draft_id, user_id, expected_version)
             except PublishConflict:
                 results.append("stale")
             else:
@@ -102,6 +110,192 @@ def test_concurrent_publish_preserves_one_authoritative_winner(pg_factory) -> No
         ) == 1
 
 
+def test_simultaneous_first_edit_resolves_to_one_shared_draft(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    with pg_factory() as db:
+        workday = create_workday(
+            db,
+            region_id=region_id,
+            category="RACE_DAY",
+            work_date=date.today(),
+            track_id=None,
+            title="Shared draft creation",
+            actor_user_id=user_id,
+        )
+        workday_id = workday.id
+        first_id = workday.current_draft_revision_id
+        expected_version = workday.lock_version
+        db.commit()
+        publish(db, workday_id, first_id, user_id, expected_version)
+    barrier = threading.Barrier(2)
+    draft_ids: list[uuid.UUID] = []
+    errors: list[Exception] = []
+
+    def open_editor() -> None:
+        try:
+            with pg_factory() as db:
+                workday = db.get(Workday, workday_id)
+                barrier.wait()
+                draft_ids.append(ensure_draft(db, workday, user_id).id)
+        except Exception as exc:  # pragma: no cover - assertion reports unexpected thread failures
+            errors.append(exc)
+
+    threads = [threading.Thread(target=open_editor) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert errors == []
+    assert len(draft_ids) == 2 and len(set(draft_ids)) == 1
+    with pg_factory() as db:
+        workday = db.get(Workday, workday_id)
+        current = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        assert current.id == draft_ids[0]
+        assert current.revision_number == 2
+        assert db.scalar(
+            select(func.count()).select_from(WorkdayRevision).where(
+                WorkdayRevision.workday_id == workday_id,
+                WorkdayRevision.state == "DRAFT",
+            )
+        ) == 1
+
+
+def test_postgres_stale_detail_edit_preserves_winner(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    with pg_factory() as db:
+        workday = create_workday(
+            db,
+            region_id=region_id,
+            category="RACE_DAY",
+            work_date=date.today(),
+            track_id=None,
+            title="Before",
+            actor_user_id=user_id,
+        )
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        stale_version = workday.lock_version
+        common = {
+            "workday_id": workday.id,
+            "draft_id": draft.id,
+            "work_date": date.today(),
+            "track_id": None,
+            "start_time": None,
+            "end_time": None,
+            "on_track_time": None,
+            "first_trial_time": None,
+            "first_race_time": None,
+            "last_race_time": None,
+            "race_count": None,
+            "change_reason": "",
+        }
+        update_draft_details(
+            db, expected_version=stale_version, title="Manager A", day_note="Winner", **common
+        )
+        with pytest.raises(DraftConflict):
+            update_draft_details(
+                db,
+                expected_version=stale_version,
+                title="Manager B stale",
+                day_note="Loser",
+                **common,
+            )
+        db.rollback()
+        db.refresh(draft)
+        assert (draft.title, draft.day_note) == ("Manager A", "Winner")
+
+
+def test_postgres_stale_assignment_mutation_is_rejected(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    suffix = uuid.uuid4().hex[:10]
+    with pg_factory() as db:
+        person = Person(display_name=f"PG Person {suffix}", home_region_id=region_id)
+        position = BasePosition(name=f"PG Position {suffix}")
+        db.add_all([person, position])
+        db.commit()
+        workday = create_workday(
+            db,
+            region_id=region_id,
+            category="RACE_DAY",
+            work_date=date.today(),
+            track_id=None,
+            title="Assignment race",
+            actor_user_id=user_id,
+        )
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        assignment = add_assignment(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=workday.lock_version,
+            item=AssignmentInput(position.id, 1, person.id, "ASSIGNED"),
+        )
+        stale_version = workday.lock_version
+        update_assignment(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=stale_version,
+            assignment_id=assignment.id,
+            person_id=person.id,
+            status="ASSIGNED",
+            note="Manager A",
+            note_private=True,
+        )
+        with pytest.raises(DraftConflict):
+            remove_assignment(
+                db,
+                workday_id=workday.id,
+                draft_id=draft.id,
+                expected_version=stale_version,
+                assignment_id=assignment.id,
+            )
+        db.rollback()
+        db.refresh(assignment)
+        assert assignment.note == "Manager A"
+
+
+def test_postgres_publish_invalidates_open_editor_version(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    with pg_factory() as db:
+        workday = create_workday(
+            db,
+            region_id=region_id,
+            category="RACE_DAY",
+            work_date=date.today(),
+            track_id=None,
+            title="Publish invalidation",
+            actor_user_id=user_id,
+        )
+        workday_id = workday.id
+        draft_id = workday.current_draft_revision_id
+        open_editor_version = workday.lock_version
+        db.commit()
+        publish(db, workday_id, draft_id, user_id, open_editor_version)
+        with pytest.raises(DraftConflict):
+            update_draft_details(
+                db,
+                workday_id=workday_id,
+                draft_id=draft_id,
+                expected_version=open_editor_version,
+                work_date=date.today(),
+                track_id=None,
+                title="Stale edit",
+                start_time=None,
+                end_time=None,
+                on_track_time=None,
+                first_trial_time=None,
+                first_race_time=None,
+                last_race_time=None,
+                race_count=None,
+                day_note="",
+                change_reason="",
+            )
+        db.rollback()
+        draft = db.get(WorkdayRevision, draft_id)
+        db.refresh(draft)
+        assert draft.state == "PUBLISHED" and draft.title == "Publish invalidation"
+
+
 def test_publish_failure_rolls_back_revision_pointer_and_outbox(pg_factory, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     user_id, region_id = _authority(pg_factory)
     with pg_factory() as db:
@@ -114,7 +308,11 @@ def test_publish_failure_rolls_back_revision_pointer_and_outbox(pg_factory, monk
             title="Atomic failure",
             actor_user_id=user_id,
         )
-        workday_id, draft_id = workday.id, workday.current_draft_revision_id
+        workday_id, draft_id, expected_version = (
+            workday.id,
+            workday.current_draft_revision_id,
+            workday.lock_version,
+        )
     from app.rostering import service as roster_service
 
     monkeypatch.setattr(
@@ -123,7 +321,7 @@ def test_publish_failure_rolls_back_revision_pointer_and_outbox(pg_factory, monk
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("forced outbox failure")),
     )
     with pg_factory() as db, pytest.raises(RuntimeError, match="forced outbox failure"):
-        publish(db, workday_id, draft_id, user_id)
+        publish(db, workday_id, draft_id, user_id, expected_version)
     with pg_factory() as db:
         workday = db.get(Workday, workday_id)
         revision = db.get(WorkdayRevision, draft_id)
@@ -193,15 +391,17 @@ def test_postgres_identity_grant_and_application_constraints(pg_factory) -> None
         draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
         slot = add_assignment(
             db,
-            draft,
-            AssignmentInput(
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=workday.lock_version,
+            item=AssignmentInput(
                 base_position_id=position.id,
                 slot_index=2,
                 person_id=None,
                 status="OPEN",
             ),
         )
-        publish(db, workday.id, draft.id, user_id)
+        publish(db, workday.id, draft.id, user_id, workday.lock_version)
         application = OpenPositionApplication(
             revision_id=draft.id,
             slot_key=slot.slot_key,
@@ -254,15 +454,17 @@ def test_decline_detaches_stale_manager_draft_without_losing_it(pg_factory) -> N
         first = db.get(WorkdayRevision, workday.current_draft_revision_id)
         assignment = add_assignment(
             db,
-            first,
-            AssignmentInput(
+            workday_id=workday.id,
+            draft_id=first.id,
+            expected_version=workday.lock_version,
+            item=AssignmentInput(
                 base_position_id=position.id,
                 slot_index=1,
                 person_id=person.id,
                 status="ASSIGNED",
             ),
         )
-        publish(db, workday.id, first.id, user_id)
+        publish(db, workday.id, first.id, user_id, workday.lock_version)
         stale_draft = ensure_draft(db, workday, user_id)
         decline_published_assignment(
             db,
@@ -272,7 +474,7 @@ def test_decline_detaches_stale_manager_draft_without_losing_it(pg_factory) -> N
             actor_user_id=user_id,
         )
         with pytest.raises(PublishConflict):
-            publish(db, workday.id, stale_draft.id, user_id)
+            publish(db, workday.id, stale_draft.id, user_id, workday.lock_version)
         db.expire_all()
         assert db.get(WorkdayRevision, stale_draft.id).state == "DRAFT"
         assert db.get(Workday, workday.id).current_published_revision_id != first.id

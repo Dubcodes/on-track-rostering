@@ -269,7 +269,12 @@ def _assert_no_horizontal_overflow(page: Page) -> None:
 
 def _watch_browser_errors(page: Page) -> list[str]:
     errors: list[str] = []
-    page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
+
+    def capture_console(message) -> None:  # type: ignore[no-untyped-def]
+        if message.type == "error":
+            errors.append(f"{message.text} @ {message.location}")
+
+    page.on("console", capture_console)
     page.on("pageerror", lambda error: errors.append(str(error)))
     return errors
 
