@@ -43,6 +43,7 @@ def main() -> int:
     else:
         run(python, "-m", "pip_audit", "--local")
     run("node", "--check", "app/static/app.js")
+    run("node", "--check", "app/static/invite.js")
     run("node", "--check", "app/static/passkeys.js")
     run("node", "--check", "app/static/notifications.js")
     run("node", "--check", "app/static/service-worker.js")

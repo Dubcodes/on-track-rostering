@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
-from datetime import date
+from datetime import date, time, timedelta
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -13,10 +13,11 @@ from sqlalchemy.orm import sessionmaker
 from app.auth.security import hash_credential
 from app.auth.service import activate_pending_grants
 from app.catalog.models import BasePosition, Region
+from app.core.time import local_today, utcnow
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
-from app.notifications.service import encrypt_subscription, process_pending
-from app.rostering.models import OpenPositionApplication, Workday, WorkdayRevision
+from app.notifications.service import encrypt_subscription, generate_reminders, process_pending
+from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
     DraftConflict,
@@ -497,13 +498,13 @@ def test_notification_claim_prevents_concurrent_delivery_and_expired_lease_recov
         )
         event = NotificationEvent(
             event_key=f"claim:{suffix}",
-            event_type="ONE_HOUR_BEFORE",
+            event_type="ROSTER_PUBLISHED",
             region_id=region_id,
             audience_user_id=user_id,
         )
         expired = NotificationEvent(
             event_key=f"expired:{suffix}",
-            event_type="ONE_HOUR_BEFORE",
+            event_type="ROSTER_PUBLISHED",
             region_id=region_id,
             audience_user_id=user_id,
             status="PROCESSING",
@@ -540,3 +541,67 @@ def test_notification_claim_prevents_concurrent_delivery_and_expired_lease_recov
                 NotificationDelivery.event_key.in_([event.event_key, expired.event_key])
             )
         ) == 2
+
+
+def test_concurrent_reminder_generation_uses_conflict_safe_insert(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    suffix = uuid.uuid4().hex[:10]
+    current = utcnow()
+    with pg_factory() as db:
+        person = Person(display_name=f"Reminder Crew {suffix}", home_region_id=region_id)
+        position = BasePosition(name=f"Reminder Position {suffix}")
+        db.add_all([person, position])
+        db.flush()
+        db.add(UserPersonLink(user_id=user_id, person_id=person.id))
+        workday = Workday(region_id=region_id, created_by_user_id=user_id)
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=local_today(current) + timedelta(days=5),
+            start_time=time(8),
+            end_time=time(17),
+            created_by_user_id=user_id,
+        )
+        db.add(revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position.id,
+                display_name_snapshot="Camera",
+                person_id=person.id,
+                status="ASSIGNED",
+            )
+        )
+        workday.current_published_revision_id = revision.id
+        db.commit()
+        revision_id, person_id = revision.id, person.id
+
+    barrier = threading.Barrier(2)
+    results: list[int] = []
+    errors: list[Exception] = []
+
+    def generate() -> None:
+        try:
+            with pg_factory() as db:
+                barrier.wait()
+                results.append(generate_reminders(db, now=current))
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=generate) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert errors == []
+    assert sorted(results) == [0, 3]
+    with pg_factory() as db:
+        assert db.scalar(
+            select(func.count()).select_from(NotificationEvent).where(
+                NotificationEvent.event_key.like(f"reminder:%:{revision_id}:{person_id}")
+            )
+        ) == 3

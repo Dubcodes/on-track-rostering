@@ -14,13 +14,15 @@ def test_prefetch_uses_server_selected_days_and_is_sequential() -> None:
     assert "(upcoming.days || []).map((item) => item.id)" in source
     assert ".slice(0, 4)" not in source
     assert "for (const id of ids)" in source
-    assert "payload.saved_at" in source
+    assert 'localStorage.setItem("ontrack-last-saved-at", new Date().toISOString())' in source
 
 
 def test_offline_html_is_built_only_from_the_small_roster_feed() -> None:
     source = Path("app/static/service-worker.js").read_text(encoding="utf-8")
-    assert "^\\/day\\/[a-f0-9-]+$" in source
+    assert "offlineDayPage(workdayId)" in source
     assert 'cache.match("/api/upcoming-work")' in source
+    assert "payload.cached_at = new Date().toISOString()" in source
+    assert "day.assignments" in source
     assert "offlineRosterPage" in source
     assert "payload.product_name" in source
     assert "${productName} offline" in source

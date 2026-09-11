@@ -4,12 +4,19 @@ import uuid
 from datetime import UTC, date, datetime, time
 
 import pytest
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import select
 from starlette.requests import Request
 
 from app.audit.models import HumanChange
 from app.auth.network import resolve_request, same_origin
-from app.auth.policy import Actor, can_administer_region, can_manage_region, can_view_management_detail
+from app.auth.policy import (
+    Actor,
+    can_administer_region,
+    can_manage_region,
+    can_self_decline_assignment,
+    can_view_management_detail,
+)
 from app.auth.security import create_device, hash_credential, resolve_device
 from app.auth.service import activate_pending_grants, approve_signup
 from app.catalog.models import BasePosition, Region
@@ -18,7 +25,7 @@ from app.core.enums import Role
 from app.core.holidays import holiday_for_date
 from app.core.time import local_today
 from app.identity.models import Person, RoleGrant, SignupRequest, User, UserPersonLink
-from app.positions.service import eligibility, set_preference_signal
+from app.positions.service import bulk_eligibility, eligibility, set_preference_signal
 from app.rostering.diff import publication_diff
 from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 from app.rostering.participation import person_day_participation
@@ -167,6 +174,50 @@ def test_role_capabilities_keep_viewer_read_only_and_submanager_out_of_administr
     assert not can_administer_region(submanager, region_id)
 
 
+def test_self_decline_policy_is_role_and_effective_start_bound() -> None:
+    region_id, person_id, user_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    workday = Workday(region_id=region_id, created_by_user_id=user_id)
+    revision = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=1,
+        work_date=date(2026, 9, 12),
+        start_time=time(10),
+        created_by_user_id=user_id,
+    )
+    row = Assignment(
+        revision_id=revision.id,
+        display_name_snapshot="Camera",
+        person_id=person_id,
+        status="ASSIGNED",
+    )
+    nz = get_settings().timezone
+    before = datetime(2026, 9, 12, 9, 59, tzinfo=nz)
+    at_start = datetime(2026, 9, 12, 10, tzinfo=nz)
+    employee = Actor(
+        user_id, person_id, frozenset(), {region_id: frozenset({Role.EMPLOYEE.value})}
+    )
+    contractor = Actor(
+        user_id, person_id, frozenset(), {region_id: frozenset({Role.CONTRACTOR.value})}
+    )
+    viewer = Actor(
+        user_id, person_id, frozenset(), {region_id: frozenset({Role.VIEWER.value})}
+    )
+    manager = Actor(
+        user_id, person_id, frozenset(), {region_id: frozenset({Role.MANAGER.value})}
+    )
+    assert can_self_decline_assignment(employee, workday, revision, [row], now=before)
+    assert can_self_decline_assignment(contractor, workday, revision, [row], now=before)
+    assert not can_self_decline_assignment(viewer, workday, revision, [row], now=before)
+    assert not can_self_decline_assignment(manager, workday, revision, [row], now=before)
+    assert not can_self_decline_assignment(employee, workday, revision, [row], now=at_start)
+    revision.start_time = None
+    assert not can_self_decline_assignment(employee, workday, revision, [row], now=before)
+    revision.work_date = date(2026, 9, 11)
+    assert not can_self_decline_assignment(employee, workday, revision, [row], now=before)
+    revision.work_date = date(2026, 9, 13)
+    assert can_self_decline_assignment(employee, workday, revision, [row], now=before)
+
+
 def test_capability_clearing_preserves_other_family_and_worked_history(db) -> None:  # type: ignore[no-untyped-def]
     person, position, actor = Person(display_name="Crew"), BasePosition(name="Camera"), _user(db, "actor@example.test")
     db.add_all([person, position])
@@ -188,6 +239,46 @@ def test_capability_clearing_preserves_other_family_and_worked_history(db) -> No
     db.commit()
     assert set(db.scalars(select(PositionCapability.signal))) == {"WORKED"}
     assert eligibility(db, person.id, position.id) == (True, "Worked before")
+
+
+def test_bulk_eligibility_matches_single_result_for_all_precedence_signals(db) -> None:  # type: ignore[no-untyped-def]
+    position = BasePosition(name="Bulk Camera")
+    people = [Person(display_name=f"Bulk {index}") for index in range(6)]
+    db.add_all([position, *people])
+    db.flush()
+    signal_sets = [
+        set(),
+        {"WORKED"},
+        {"MANAGER_ALLOW", "WORKED"},
+        {"EMPLOYEE_ALLOW"},
+        {"EMPLOYEE_OPT_OUT", "MANAGER_ALLOW"},
+        {"MANAGER_BLOCK", "EMPLOYEE_ALLOW"},
+    ]
+    for person, signals in zip(people, signal_sets, strict=True):
+        db.add_all(
+            PositionCapability(
+                person_id=person.id,
+                base_position_id=position.id,
+                signal=signal,
+            )
+            for signal in signals
+        )
+    db.commit()
+    statements: list[str] = []
+
+    def count_query(_connection, _cursor, statement, _parameters, _context, _many):  # type: ignore[no-untyped-def]
+        statements.append(statement)
+
+    sqlalchemy_event.listen(db.get_bind(), "before_cursor_execute", count_query)
+    try:
+        bulk = bulk_eligibility(db, {person.id for person in people}, {position.id})
+    finally:
+        sqlalchemy_event.remove(db.get_bind(), "before_cursor_execute", count_query)
+    assert len(statements) == 1
+    assert all(
+        bulk[(person.id, position.id)] == eligibility(db, person.id, position.id)
+        for person in people
+    )
 
 
 def test_multi_assignment_and_overnight_person_day_semantics() -> None:

@@ -7,5 +7,6 @@ from app.core.database import Base
 from app.identity import models as identity_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401
 from app.rostering import models as rostering_models  # noqa: F401
+from app.system_settings import models as system_settings_models  # noqa: F401
 
 __all__ = ["Base"]

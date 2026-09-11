@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Invitation created · {{ branding.product_name }}{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <p class="eyebrow">One-time reveal</p><h1>Invitation created</h1>
+  <div class="alert success">Copy this link now. It will not be shown again.</div>
+  <label>Invitation link<input readonly value="{{ invitation_url }}" data-invitation-link></label>
+  <p class="muted">The secret is carried in the browser fragment, not an HTTP request URL.</p>
+  <a class="button secondary" href="{{ destination }}">Done</a>
+</section>
+{% endblock %}

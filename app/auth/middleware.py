@@ -12,6 +12,7 @@ from app.auth.security import CSRF_COOKIE, SESSION_COOKIE, resolve_device
 from app.branding.service import DEFAULT_BRANDING, branding_for
 from app.core.config import get_settings
 from app.core.database import SessionLocal
+from app.system_settings.service import DEFAULT_OPERATIONAL_SETTINGS, operational_settings_for
 
 PUBLIC_PATHS = {
     "/login",
@@ -19,12 +20,14 @@ PUBLIC_PATHS = {
     "/login/passkey/options",
     "/login/passkey/verify",
     "/signup",
+    "/invite",
+    "/invite/activate",
     "/health/live",
     "/health/ready",
     "/manifest.webmanifest",
     "/service-worker.js",
 }
-PUBLIC_PREFIXES = ("/static/", "/invite/")
+PUBLIC_PREFIXES = ("/static/",)
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):
@@ -35,6 +38,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         request.state.network = resolve_request(request)
         request.state.csp_nonce = secrets.token_urlsafe(18)
         request.state.branding = DEFAULT_BRANDING
+        request.state.system_settings = DEFAULT_OPERATIONAL_SETTINGS
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not same_origin(request):
             return Response("Cross-site request rejected", status_code=403)
         resolved = None
@@ -43,6 +47,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if not database_free:
             with SessionLocal() as db:
                 request.state.branding = branding_for(db)
+                request.state.system_settings = operational_settings_for(db)
                 resolved = resolve_device(db, request.cookies.get(SESSION_COOKIE, ""))
                 if resolved:
                     user, device = resolved

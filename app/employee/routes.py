@@ -11,18 +11,30 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
 from app.audit.service import record_audit
+from app.auth.network import resolve_request
 from app.auth.policy import (
     can_crew_view,
+    can_manage_region,
+    can_self_decline_assignment,
     can_view_management_detail,
     can_view_published,
 )
-from app.auth.security import credential_error, hash_credential, verify_credential, verify_csrf
+from app.auth.security import (
+    clear_failures,
+    credential_error,
+    hash_credential,
+    is_throttled,
+    record_failure,
+    throttle_keys,
+    verify_credential,
+    verify_csrf,
+)
 from app.catalog.models import BasePosition, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
 from app.core.time import local_today, utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
-from app.identity.models import PasskeyCredential, RoleGrant, TotpFactor, TrustedDevice, User
+from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notifications.models import NotificationPreference, PushSubscription
 from app.positions.service import set_preference_signal
 from app.rostering.models import (
@@ -37,6 +49,30 @@ from app.rostering.service import decline_published_assignment
 from app.web import context, month_grid, templates
 
 router = APIRouter()
+
+
+def _fresh_auth_keys(request: Request) -> tuple[str, str]:
+    return throttle_keys(
+        f"fresh-auth:user:{request.state.user.id}",
+        f"fresh-auth:{resolve_request(request).client_address}",
+    )
+
+
+def _verify_fresh_credential(
+    db: Session, request: Request, user: User | None, credential: str
+) -> bool:
+    keys = _fresh_auth_keys(request)
+    if (
+        any(is_throttled(db, key) for key in keys)
+        or user is None
+        or not verify_credential(credential, user.credential_hash)
+    ):
+        for key in keys:
+            record_failure(db, key)
+        return False
+    for key in keys:
+        clear_failures(db, key)
+    return True
 
 
 def _month_bounds(year: int, month: int) -> tuple[date, date]:
@@ -64,12 +100,28 @@ def month_view(
     by_date: dict[date, list[dict[str, object]]] = {}
     for item in items:
         by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
-    grid = month_grid(year, month)
+    holiday_region = ""
+    if request.state.actor.person_id:
+        holiday_region = db.scalar(
+            select(Region.statutory_holiday_region)
+            .join(Person, Person.home_region_id == Region.id)
+            .where(Person.id == request.state.actor.person_id)
+        ) or ""
+    grid = month_grid(year, month, holiday_region)
+    totals_items = month_items(
+        db,
+        request.state.actor,
+        grid[0][0]["date"],
+        grid[-1][-1]["date"] + timedelta(days=1),
+    )
+    totals_by_date: dict[date, list[dict[str, object]]] = {}
+    for item in totals_items:
+        totals_by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
     week_minutes = [
         sum(
             int(item["minutes"])
             for cell in week
-            for item in by_date.get(cell["date"], [])  # type: ignore[arg-type]
+            for item in totals_by_date.get(cell["date"], [])  # type: ignore[arg-type]
             if item["own"]
         )
         for week in grid
@@ -102,8 +154,7 @@ def month_api(
 ):
     start, end = _month_bounds(year, month)
     rows = month_items(db, request.state.actor, start, end)
-    saved_at = max((row["published_at"] for row in rows if row["published_at"]), default=None)
-    return {"user_namespace": str(request.state.user.id), "saved_at": saved_at, "days": rows}
+    return {"user_namespace": str(request.state.user.id), "days": rows}
 
 
 @router.get("/day/{workday_id}", response_class=HTMLResponse)
@@ -113,13 +164,7 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
     management = can_view_management_detail(request.state.actor, workday.region_id)
-    assignments = day_assignments(
-        db,
-        request.state.actor,
-        revision,
-        can_view_all_rows=can_crew_view(request.state.actor, workday.region_id),
-        can_view_private_notes=management,
-    )
+    crew_history = can_crew_view(request.state.actor, workday.region_id)
     own_rows = list(
         db.scalars(
             select(Assignment).where(
@@ -128,6 +173,17 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             )
         )
     ) if request.state.actor.person_id else []
+    self_decline = can_self_decline_assignment(
+        request.state.actor, workday, revision, own_rows
+    )
+    assignments = day_assignments(
+        db,
+        request.state.actor,
+        revision,
+        can_view_all_rows=crew_history,
+        can_view_private_notes=management,
+        can_self_decline=self_decline,
+    )
     participation = person_day_participation(revision, own_rows) if own_rows else None
     history = list(
         db.scalars(
@@ -135,8 +191,8 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             .where(HumanChange.workday_id == workday.id)
             .order_by(HumanChange.occurred_at.desc())
         )
-    )
-    if not management:
+    ) if crew_history else []
+    if crew_history and not management:
         history = [row for row in history if not row.summary.startswith("Publication reason:")]
     return templates.TemplateResponse(
         "day.html",
@@ -146,6 +202,8 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             revision=revision,
             assignments=assignments,
             management=management,
+            can_edit=can_manage_region(request.state.actor, workday.region_id),
+            history_available=crew_history,
             minutes=(
                 participation.minutes
                 if participation
@@ -184,6 +242,18 @@ def decline_confirmation(
     region = db.get(Region, workday.region_id) if workday else None
     if not workday or not revision or not assignment or not region:
         raise HTTPException(404, "Assignment not found")
+    own_rows = list(
+        db.scalars(
+            select(Assignment).where(
+                Assignment.revision_id == revision.id,
+                Assignment.person_id == request.state.actor.person_id,
+            )
+        )
+    )
+    if not can_self_decline_assignment(
+        request.state.actor, workday, revision, own_rows
+    ):
+        raise HTTPException(403, "Self-decline is no longer available for this assignment.")
     return templates.TemplateResponse(
         "decline_confirmation.html",
         context(request, workday=workday, revision=revision, assignment=assignment, region=region),
@@ -202,6 +272,20 @@ def decline_assignment(
     verify_csrf(request, csrf_token)
     if confirm != "yes" or request.state.actor.person_id is None:
         raise HTTPException(400, "Explicit confirmation is required.")
+    workday = db.get(Workday, workday_id)
+    revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
+    own_rows = list(
+        db.scalars(
+            select(Assignment).where(
+                Assignment.revision_id == revision.id,
+                Assignment.person_id == request.state.actor.person_id,
+            )
+        )
+    ) if revision else []
+    if not workday or not revision or not can_self_decline_assignment(
+        request.state.actor, workday, revision, own_rows
+    ):
+        raise HTTPException(403, "Self-decline is no longer available for this assignment.")
     db.commit()
     try:
         decline_published_assignment(
@@ -286,7 +370,6 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
     return {
         "product_name": request.state.branding.product_name,
         "user_namespace": str(request.state.user.id),
-        "saved_at": revision.published_at,
         "offline_cacheable": bool(personal_assignments),
         "workday": {
             "id": str(workday.id),
@@ -294,9 +377,15 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             "revision_number": revision.revision_number,
             "published_at": revision.published_at,
             "date": revision.work_date,
+            "category": workday.category,
             "title": revision.title,
             "track": revision.track_name_snapshot,
             "start": revision.start_time,
+            "on_track": revision.on_track_time,
+            "first_trial": revision.first_trial_time,
+            "first_race": revision.first_race_time,
+            "last_race": revision.last_race_time,
+            "race_count": revision.race_count,
             "end": revision.end_time,
             "note": revision.day_note,
             "assignments": personal_assignments,
@@ -311,7 +400,6 @@ def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
         return {
             "product_name": request.state.branding.product_name,
             "user_namespace": str(request.state.user.id),
-            "saved_at": None,
             "days": [],
         }
     today = local_today()
@@ -320,13 +408,9 @@ def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
     today_rows = [row for row in own_rows if row["date"] == today]
     future_rows = [row for row in own_rows if row["date"] > today]
     selected_rows = today_rows[:1] + future_rows[:3]
-    saved_at = max(
-        (row["published_at"] for row in selected_rows if row["published_at"]), default=None
-    )
     return {
         "product_name": request.state.branding.product_name,
         "user_namespace": str(request.state.user.id),
-        "saved_at": saved_at,
         "days": selected_rows,
     }
 
@@ -405,7 +489,7 @@ def reauthenticate(
     verify_csrf(request, csrf_token)
     user = db.get(User, request.state.user.id)
     device = db.get(TrustedDevice, request.state.device.id)
-    if not user or not device or not verify_credential(credential, user.credential_hash):
+    if not device or not _verify_fresh_credential(db, request, user, credential):
         raise HTTPException(400, "Credential could not be verified.")
     from app.core.time import utcnow
 
@@ -425,7 +509,7 @@ def update_credential(
 ):
     verify_csrf(request, csrf_token)
     user = db.get(User, request.state.user.id)
-    if not user or not verify_credential(current_credential, user.credential_hash):
+    if not _verify_fresh_credential(db, request, user, current_credential):
         raise HTTPException(400, "Current credential could not be verified.")
     if new_credential != confirmation:
         raise HTTPException(400, "New credentials did not match.")

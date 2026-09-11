@@ -1,3 +1,4 @@
+import re
 import uuid
 import warnings
 from calendar import monthrange
@@ -14,16 +15,26 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
     from fastapi.testclient import TestClient
 
+from app.audit.models import AuditEvent, HumanChange
 from app.auth.factors import begin_totp
-from app.auth.security import hash_credential
+from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base
 from app.core.enums import Role
 from app.core.time import local_today, utcnow
-from app.identity.models import Person, RoleGrant, User, UserPersonLink
+from app.identity.models import (
+    Invitation,
+    LoginThrottle,
+    Person,
+    RoleGrant,
+    SignupRequest,
+    User,
+    UserPersonLink,
+)
 from app.main import app
 from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.system_settings.models import SystemSettings
 
 
 def test_public_login_and_liveness_routes_render(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -33,6 +44,161 @@ def test_public_login_and_liveness_routes_render(routed_db) -> None:  # type: ig
     assert "Good to see you" in login.text
     assert "default-src 'self'" in login.headers["content-security-policy"]
     assert client.get("/health/live").json() == {"status": "ok"}
+
+
+def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    created = admin.post(
+        "/admin/invitations",
+        data={
+            "email": "invitee@example.com",
+            "display_name": "Invitee",
+            "role": "EMPLOYEE",
+            "region_id": str(region_id),
+            "person_id": "",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created.status_code == 200
+    assert "location" not in created.headers
+    match = re.search(r'value="/invite#token=([A-Za-z0-9_-]+)"', created.text)
+    assert match
+    raw = match.group(1)
+    assert raw not in str(created.request.url)
+    repeated_create = admin.post(
+        "/admin/invitations",
+        data={
+            "email": "invitee@example.com",
+            "display_name": "Invitee",
+            "role": "EMPLOYEE",
+            "region_id": str(region_id),
+            "person_id": "",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert repeated_create.status_code == 400
+    with factory() as db:
+        invitation = db.scalar(select(Invitation).where(Invitation.email == "invitee@example.com"))
+        assert invitation and invitation.token_hash == token_hash(raw)
+        assert invitation.token_hash != raw
+        assert len(list(db.scalars(select(Invitation)))) == 1
+        assert all(raw not in str(event.detail) for event in db.scalars(select(AuditEvent)))
+
+    public = TestClient(app)
+    page = public.get(f"/invite#token={raw}")
+    assert page.status_code == 200
+    assert str(page.request.url).endswith("/invite")
+    activated = public.post(
+        "/invite/activate",
+        data={"token": raw, "display_name": "Invitee", "credential": "123456"},
+        follow_redirects=False,
+    )
+    assert activated.status_code == 303
+    repeated = public.post(
+        "/invite/activate",
+        data={"token": raw, "display_name": "Invitee", "credential": "123456"},
+    )
+    assert repeated.status_code == 400
+
+
+def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    public = TestClient(app)
+    closed_page = public.get("/signup")
+    assert "Public account requests are currently closed" in closed_page.text
+    assert public.post(
+        "/signup",
+        data={
+            "display_name": "Candidate",
+            "email": "candidate@example.com",
+            "requested_region_id": str(region_id),
+        },
+    ).status_code == 404
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    assert manager.post(
+        "/admin/system-settings",
+        data={"public_signup_enabled": "true", "csrf_token": manager_csrf},
+    ).status_code == 403
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    toggled = admin.post(
+        "/admin/system-settings",
+        data={"public_signup_enabled": "true", "csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert toggled.status_code == 303
+    assert "Public account requests are currently closed" not in public.get("/signup").text
+    submitted = public.post(
+        "/signup",
+        data={
+            "display_name": "Candidate",
+            "email": "candidate@example.com",
+            "requested_region_id": str(region_id),
+        },
+    )
+    assert submitted.status_code == 200
+    with factory() as db:
+        settings = db.get(SystemSettings, 1)
+        assert settings and settings.public_signup_enabled is True
+        signup_id = db.scalar(
+            select(SignupRequest.id).where(SignupRequest.email == "candidate@example.com")
+        )
+    approved = manager.post(
+        f"/manage/accounts/signup-requests/{signup_id}/approve",
+        data={
+            "role": "EMPLOYEE",
+            "region_id": str(region_id),
+            "person_action": "create",
+            "person_id": "",
+            "csrf_token": manager_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert approved.status_code == 200
+    assert "location" not in approved.headers
+    assert re.search(r'value="/invite#token=[A-Za-z0-9_-]+"', approved.text)
+
+
+def test_settings_fresh_auth_uses_distinct_account_and_address_throttles(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    employee = TestClient(app)
+    csrf = _login(employee, "amy@example.test", "654321")
+    for _ in range(5):
+        assert employee.post(
+            "/settings/reauthenticate",
+            data={"credential": "000000", "csrf_token": csrf},
+        ).status_code == 400
+    assert employee.post(
+        "/settings/reauthenticate",
+        data={"credential": "654321", "csrf_token": csrf},
+    ).status_code == 400
+    separate_login = TestClient(app).post(
+        "/login",
+        data={"email": "manager@example.test", "credential": "123456", "next": "/month"},
+        follow_redirects=False,
+    )
+    assert separate_login.status_code == 303
+    with factory() as db:
+        rows = list(db.scalars(select(LoginThrottle)))
+        assert len(rows) == 2 and all(row.blocked_until for row in rows)
+        for row in rows:
+            row.blocked_until = utcnow() - timedelta(seconds=1)
+        db.commit()
+    success = employee.post(
+        "/settings/reauthenticate",
+        data={"credential": "654321", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert success.status_code == 303
+    with factory() as db:
+        assert list(db.scalars(select(LoginThrottle))) == []
 
 
 @pytest.fixture
@@ -256,7 +422,7 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     assert "'unsafe-inline'" not in day.headers["content-security-policy"]
     assert 'style nonce="' in day.text and 'data-track-colour="#C33D52"' in day.text
     day_payload = employee_client.get(f"/api/day/{workday_id}").json()
-    assert day_payload["saved_at"]
+    assert "cached_at" not in day_payload
     assert day_payload["workday"]["revision_id"]
     assert day_payload["workday"]["revision_number"] == 1
     crew = employee_client.get(f"/crew?region_id={region_id}&year=2026&month=9")
@@ -265,7 +431,10 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     assert manager_client.get("/admin").status_code == 403
     viewer_client = TestClient(app)
     _login(viewer_client, "viewer@example.test", "112233")
-    assert "Private transport" in viewer_client.get(f"/day/{workday_id}").text
+    viewer_day = viewer_client.get(f"/day/{workday_id}")
+    assert "Private transport" in viewer_day.text
+    assert "Edit private draft" not in viewer_day.text
+    assert viewer_client.get(workday_path).status_code == 403
 
     # A later draft cannot leak into the employee read path.
     assert manager_client.get(workday_path).status_code == 200
@@ -357,6 +526,66 @@ def test_stale_builder_post_returns_409_and_preserves_newer_details(routed_db) -
         assert draft.title == "Manager A"
 
 
+def test_office_day_builder_uses_category_appropriate_fields_and_warnings(routed_db) -> None:  # type: ignore[no-untyped-def]
+    _factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "category": "OFFICE_DAY",
+            "work_date": "2026-10-20",
+            "track_id": "",
+            "title": "Office planning",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    edit_url = created.headers["location"]
+    builder = manager.get(edit_url)
+    assert "Office Day details" in builder.text
+    assert "First race" not in builder.text and "Race count" not in builder.text
+    preview = manager.get(edit_url + "/preview")
+    assert "Race Day timing is incomplete" not in preview.text
+
+
+def test_historical_self_decline_is_denied_without_changing_publication(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    workday_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=local_today() - timedelta(days=1),
+        rows=[(person_id, "Amy Crew", "Historical hours sentinel", True)],
+    )
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        original_revision_id = workday.current_published_revision_id
+        assignment = db.scalar(
+            select(Assignment).where(Assignment.revision_id == original_revision_id)
+        )
+        slot_key = assignment.slot_key
+    employee = TestClient(app)
+    csrf = _login(employee, "amy@example.test", "654321")
+    assert employee.get(
+        f"/day/{workday_id}/assignments/{slot_key}/decline"
+    ).status_code == 403
+    blocked = employee.post(
+        f"/day/{workday_id}/assignments/{slot_key}/decline",
+        data={"confirm": "yes", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert blocked.status_code == 403
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        assignment = db.scalar(
+            select(Assignment).where(Assignment.revision_id == original_revision_id)
+        )
+        assert workday.current_published_revision_id == original_revision_id
+        assert assignment.person_id == person_id and assignment.status == "ASSIGNED"
+
+
 def test_contractor_online_and_offline_day_rows_are_personal(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, position_id, employee_person_id) = routed_db
     with factory() as db:
@@ -377,6 +606,18 @@ def test_contractor_online_and_offline_day_rows_are_personal(routed_db) -> None:
             (third_id, "Casey Other", "Public row note", False),
         ],
     )
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        manager_id = db.scalar(select(User.id).where(User.email == "manager@example.test"))
+        db.add(
+            HumanChange(
+                workday_id=workday.id,
+                revision_id=workday.current_published_revision_id,
+                actor_user_id=manager_id,
+                summary="Casey Other moved to a private role",
+            )
+        )
+        db.commit()
     contractor = TestClient(app)
     _login(contractor, "private-south@example.test", "778899")
     day = contractor.get(f"/day/{workday_id}")
@@ -384,14 +625,25 @@ def test_contractor_online_and_offline_day_rows_are_personal(routed_db) -> None:
     assert "Normal operations note" in day.text
     assert "South Crew" in day.text and "Contractor private note" in day.text
     assert "Amy Crew" not in day.text and "Casey Other" not in day.text
+    assert "Casey Other moved to a private role" not in day.text
     contractor_api = contractor.get(f"/api/day/{workday_id}").json()
     assert contractor_api["offline_cacheable"] is True
+    assert contractor_api["workday"]["category"] == "RACE_DAY"
+    assert {
+        "on_track",
+        "first_trial",
+        "first_race",
+        "last_race",
+        "race_count",
+    } <= contractor_api["workday"].keys()
+    assert "cached_at" not in contractor_api
     assert [row["person"] for row in contractor_api["workday"]["assignments"]] == ["South Crew"]
 
     employee = TestClient(app)
     _login(employee, "amy@example.test", "654321")
     online = employee.get(f"/day/{workday_id}")
     assert "South Crew" in online.text and "Amy Crew" in online.text and "Casey Other" in online.text
+    assert "Casey Other moved to a private role" in online.text
     employee_api = employee.get(f"/api/day/{workday_id}").json()
     assert [row["person"] for row in employee_api["workday"]["assignments"]] == ["Amy Crew"]
     assert employee_api["workday"]["assignments"][0]["note"] == "Amy private note"
@@ -555,12 +807,15 @@ def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(rou
         value.isoformat() for value in expected_dates
     ]
     assert dates[0].month != dates[1].month
-    assert payload["saved_at"]
+    assert "cached_at" not in payload
     cross_region_month = employee_client.get(
         f"/month?year={dates[0].year}&month={dates[0].month}"
     )
     assert "cross-region" in cross_region_month.text
     assert 'data-track-colour="#00AA11"' in cross_region_month.text
+    assert "Your rostered week: 45h 0m" in cross_region_month.text
+    january = employee_client.get("/month?year=2026&month=1")
+    assert 'title="Auckland Anniversary Day"' in january.text
 
 
 def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore[no-untyped-def]

@@ -8,11 +8,20 @@ from sqlalchemy.orm import Session
 from app.core.enums import CapabilitySignal
 from app.rostering.models import PositionCapability
 
-POSITIVE_SIGNALS = {
-    CapabilitySignal.WORKED.value,
-    CapabilitySignal.EMPLOYEE_ALLOW.value,
-    CapabilitySignal.MANAGER_ALLOW.value,
-}
+
+def _eligibility_from_signals(signals: set[str]) -> tuple[bool, str]:
+    if CapabilitySignal.MANAGER_BLOCK.value in signals:
+        return False, "Manager restricted"
+    if CapabilitySignal.EMPLOYEE_OPT_OUT.value in signals:
+        return False, "Employee opted out"
+    if signals & {
+        CapabilitySignal.EMPLOYEE_ALLOW.value,
+        CapabilitySignal.MANAGER_ALLOW.value,
+    }:
+        return True, "Allowed"
+    if CapabilitySignal.WORKED.value in signals:
+        return True, "Worked before"
+    return False, "No capability signal"
 
 
 def eligibility(db: Session, person_id: uuid.UUID, base_position_id: uuid.UUID) -> tuple[bool, str]:
@@ -24,13 +33,36 @@ def eligibility(db: Session, person_id: uuid.UUID, base_position_id: uuid.UUID) 
             )
         )
     )
-    if CapabilitySignal.MANAGER_BLOCK.value in signals:
-        return False, "Manager restricted"
-    if CapabilitySignal.EMPLOYEE_OPT_OUT.value in signals:
-        return False, "Employee opted out"
-    if signals & POSITIVE_SIGNALS:
-        return True, "Worked before" if CapabilitySignal.WORKED.value in signals else "Allowed"
-    return False, "No capability signal"
+    return _eligibility_from_signals(signals)
+
+
+def bulk_eligibility(
+    db: Session,
+    person_ids: set[uuid.UUID],
+    base_position_ids: set[uuid.UUID],
+) -> dict[tuple[uuid.UUID, uuid.UUID], tuple[bool, str]]:
+    """Load capability signals once, then evaluate every requested pair in memory."""
+    if not person_ids or not base_position_ids:
+        return {}
+    signals_by_pair: dict[tuple[uuid.UUID, uuid.UUID], set[str]] = {}
+    for person_id, position_id, signal in db.execute(
+        select(
+            PositionCapability.person_id,
+            PositionCapability.base_position_id,
+            PositionCapability.signal,
+        ).where(
+            PositionCapability.person_id.in_(person_ids),
+            PositionCapability.base_position_id.in_(base_position_ids),
+        )
+    ):
+        signals_by_pair.setdefault((person_id, position_id), set()).add(signal)
+    return {
+        (person_id, position_id): _eligibility_from_signals(
+            signals_by_pair.get((person_id, position_id), set())
+        )
+        for person_id in person_ids
+        for position_id in base_position_ids
+    }
 
 
 def set_signal(

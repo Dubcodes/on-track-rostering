@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from cryptography.fernet import Fernet, InvalidToken
 from pywebpush import WebPushException, webpush
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
 from app.branding.service import branding_for
@@ -27,6 +28,9 @@ from app.notifications.models import (
 from app.positions.service import eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.participation import person_day_participation
+
+REMINDER_TYPES = {"ONE_HOUR_BEFORE", "NIGHT_BEFORE", "TWO_DAYS_BEFORE"}
+REMINDER_GRACE = timedelta(minutes=15)
 
 
 def record_event(
@@ -218,6 +222,51 @@ def _notification_payload(db: Session, event: NotificationEvent) -> dict[str, st
     }
 
 
+def _reminder_is_current(db: Session, event: NotificationEvent, now: datetime) -> bool:
+    if event.event_type not in REMINDER_TYPES:
+        return True
+    available_at = event.available_at
+    if available_at.tzinfo is None:
+        available_at = available_at.replace(tzinfo=UTC)
+    if now > available_at + REMINDER_GRACE or not event.workday_id or not event.audience_user_id:
+        return False
+    try:
+        revision_id = uuid.UUID(str(event.payload["revision_id"]))
+    except (KeyError, ValueError):
+        return False
+    workday = db.get(Workday, event.workday_id)
+    user = db.get(User, event.audience_user_id)
+    link = db.get(UserPersonLink, event.audience_user_id)
+    if (
+        not workday
+        or workday.current_published_revision_id != revision_id
+        or not user
+        or user.status != "ACTIVE"
+        or not link
+    ):
+        return False
+    return bool(
+        db.scalar(
+            select(Assignment.id)
+            .where(
+                Assignment.revision_id == revision_id,
+                Assignment.person_id == link.person_id,
+                Assignment.status == "ASSIGNED",
+            )
+            .limit(1)
+        )
+    )
+
+
+def _finish_stale_event(db: Session, event: NotificationEvent) -> NotificationEvent:
+    event.status = "PROCESSED"
+    event.processed_at = utcnow()
+    event.claim_token = None
+    event.claimed_at = None
+    db.commit()
+    return event
+
+
 def _send_webpush(subscription: dict[str, object], payload: str) -> None:
     settings = get_settings()
     if not settings.vapid_private_key:
@@ -237,11 +286,17 @@ def process_event(
     *,
     sender: Callable[[dict[str, object], str], None] = _send_webpush,
     claim_token: str | None = None,
+    now: datetime | None = None,
 ) -> NotificationEvent:
     if claim_token is not None and (
         event.status != "PROCESSING" or event.claim_token != claim_token
     ):
         raise RuntimeError("Notification event claim is no longer owned by this worker.")
+    current = now or utcnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    if not _reminder_is_current(db, event, current):
+        return _finish_stale_event(db, event)
     user_ids = audience_user_ids(db, event)
     subscriptions = list(
         db.scalars(
@@ -264,10 +319,11 @@ def process_event(
             )
             db.add(delivery)
             existing[subscription.id] = delivery
+    payload = json.dumps(_notification_payload(db, event), separators=(",", ":"))
+    subscriptions_by_id = {row.id: row for row in subscriptions}
     db.commit()
 
-    now = utcnow()
-    payload = json.dumps(_notification_payload(db, event), separators=(",", ":"))
+    now = current if now is not None else utcnow()
     terminal = {"DELIVERED", "PERMANENT_FAILURE", "FAILED"}
     for delivery in existing.values():
         next_attempt = delivery.next_attempt_at
@@ -275,34 +331,37 @@ def process_event(
             next_attempt = next_attempt.replace(tzinfo=UTC)
         if delivery.status in terminal or next_attempt > now:
             continue
-        subscription = db.get(PushSubscription, delivery.subscription_id)
+        subscription = subscriptions_by_id.get(delivery.subscription_id)
         if not subscription or not subscription.active:
             delivery.status = "PERMANENT_FAILURE"
             continue
-        delivery.attempt_count += 1
+        attempt_count = delivery.attempt_count + 1
         try:
             sender(decrypt_subscription(subscription.encrypted_subscription), payload)
         except WebPushException as exc:
+            delivery.attempt_count = attempt_count
             http_status = exc.response.status_code if exc.response is not None else None
             delivery.last_http_status = http_status
             delivery.last_error = "WebPush rejected delivery" if http_status else "WebPush transport failure"
             if http_status in {404, 410}:
                 subscription.active = False
                 delivery.status = "PERMANENT_FAILURE"
-            elif delivery.attempt_count >= get_settings().notification_max_attempts:
+            elif attempt_count >= get_settings().notification_max_attempts:
                 delivery.status = "FAILED"
             else:
                 delivery.status = "RETRY"
-                delivery.next_attempt_at = now + timedelta(minutes=2 ** delivery.attempt_count)
+                delivery.next_attempt_at = now + timedelta(minutes=2 ** attempt_count)
         except (RuntimeError, ValueError):
+            delivery.attempt_count = attempt_count
             delivery.last_error = "Push delivery configuration failure"
             delivery.status = (
                 "FAILED"
-                if delivery.attempt_count >= get_settings().notification_max_attempts
+                if attempt_count >= get_settings().notification_max_attempts
                 else "RETRY"
             )
-            delivery.next_attempt_at = now + timedelta(minutes=2 ** delivery.attempt_count)
+            delivery.next_attempt_at = now + timedelta(minutes=2 ** attempt_count)
         else:
+            delivery.attempt_count = attempt_count
             delivery.status = "DELIVERED"
             delivery.delivered_at = now
             delivery.last_error = ""
@@ -330,10 +389,11 @@ def process_pending(
     *,
     sender: Callable[[dict[str, object], str], None] = _send_webpush,
 ) -> int:
-    now = utcnow()
-    stale_at = now - timedelta(minutes=5)
-    events = list(
-        db.scalars(
+    claimed = 0
+    for _ in range(limit):
+        now = utcnow()
+        stale_at = now - timedelta(minutes=5)
+        event = db.scalar(
             select(NotificationEvent)
             .where(
                 or_(
@@ -349,18 +409,17 @@ def process_pending(
             )
             .order_by(NotificationEvent.created_at)
             .with_for_update(skip_locked=True)
-            .limit(limit)
+            .limit(1)
         )
-    )
-    claims: list[tuple[NotificationEvent, str]] = []
-    for event in events:
+        if event is None:
+            db.rollback()
+            break
         token = str(uuid.uuid4())
         event.status = "PROCESSING"
         event.claim_token = token
         event.claimed_at = now
-        claims.append((event, token))
-    db.commit()
-    for event, token in claims:
+        db.commit()
+        claimed += 1
         try:
             process_event(db, event, claim_token=token, sender=sender)
         except Exception:
@@ -372,7 +431,41 @@ def process_pending(
                 current.claimed_at = None
                 current.available_at = utcnow() + timedelta(minutes=2)
                 db.commit()
-    return len(events)
+    return claimed
+
+
+def _insert_reminder_event(
+    db: Session,
+    *,
+    event_key: str,
+    event_type: str,
+    region_id: uuid.UUID,
+    workday_id: uuid.UUID,
+    user_id: uuid.UUID,
+    revision_id: uuid.UUID,
+    available_at: datetime,
+) -> bool:
+    values = {
+        "event_key": event_key,
+        "event_type": event_type,
+        "region_id": region_id,
+        "workday_id": workday_id,
+        "audience_user_id": user_id,
+        "payload": {"revision_id": str(revision_id)},
+        "available_at": available_at,
+    }
+    if db.get_bind().dialect.name == "postgresql":
+        inserted = db.scalar(
+            postgresql_insert(NotificationEvent)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=[NotificationEvent.event_key])
+            .returning(NotificationEvent.event_key)
+        )
+        return inserted is not None
+    if db.get(NotificationEvent, event_key) is not None:
+        return False
+    db.add(NotificationEvent(**values))
+    return True
 
 
 def generate_reminders(
@@ -441,18 +534,19 @@ def generate_reminders(
                 - timedelta(hours=1)
             ).astimezone(UTC)
         for event_type, available_at in schedules.items():
+            if current > available_at + REMINDER_GRACE:
+                continue
             event_key = f"reminder:{event_type}:{revision.id}:{key[2]}"
-            if db.get(NotificationEvent, event_key) is None:
-                record_event(
+            if _insert_reminder_event(
                     db,
                     event_key=event_key,
                     event_type=event_type,
                     region_id=workday.region_id,
                     workday_id=workday.id,
-                    audience_user_id=user_id,
-                    payload={"revision_id": str(revision.id)},
+                    user_id=user_id,
+                    revision_id=revision.id,
                     available_at=available_at,
-                )
+                ):
                 created += 1
     db.commit()
     return created

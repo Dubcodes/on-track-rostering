@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:operations@example.invalid"
     notification_max_attempts: int = Field(default=5, ge=1, le=20)
-    public_signup_enabled: bool = False
     timezone_name: str = "Pacific/Auckland"
     fortnight_anchor: str = "2026-08-31"
     lunch_allowance_hours: float = Field(default=12.0, ge=0)

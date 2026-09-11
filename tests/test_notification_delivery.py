@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -80,7 +80,11 @@ def test_delivery_uses_configured_product_name(db) -> None:  # type: ignore[no-u
     db.commit()
     sent: list[str] = []
 
-    process_event(db, event, sender=lambda _subscription, payload: sent.append(payload))
+    def sender(_subscription, payload):  # type: ignore[no-untyped-def]
+        assert not db.in_transaction()
+        sent.append(payload)
+
+    process_event(db, event, sender=sender)
 
     assert json.loads(sent[0]) == {
         "title": "Track Crew update",
@@ -258,3 +262,105 @@ def test_reminders_use_person_day_start_and_are_idempotent(db) -> None:  # type:
         available_at = available_at.replace(tzinfo=UTC)
     local_available = available_at.astimezone(ZoneInfo("Pacific/Auckland"))
     assert (local_available.date(), local_available.time()) == (date(2026, 10, 2), time(0))
+
+
+def _reminder_roster(db, suffix: str, work_date: date):  # type: ignore[no-untyped-def]
+    region = Region(name=f"Reminder {suffix}")
+    user = User(
+        email=f"reminder-{suffix}@example.test",
+        display_name="Reminder",
+        credential_hash=hash_credential("123456"),
+    )
+    person = Person(display_name=f"Crew {suffix}")
+    position = BasePosition(name=f"Camera {suffix}")
+    db.add_all([region, user, person, position])
+    db.flush()
+    db.add(UserPersonLink(user_id=user.id, person_id=person.id))
+    workday = Workday(region_id=region.id, created_by_user_id=user.id)
+    db.add(workday)
+    db.flush()
+    revision = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=1,
+        state="PUBLISHED",
+        work_date=work_date,
+        start_time=time(8),
+        end_time=time(17),
+        created_by_user_id=user.id,
+    )
+    db.add(revision)
+    db.flush()
+    assignment = Assignment(
+        revision_id=revision.id,
+        base_position_id=position.id,
+        display_name_snapshot="Camera",
+        person_id=person.id,
+        status="ASSIGNED",
+    )
+    db.add(assignment)
+    workday.current_published_revision_id = revision.id
+    db.commit()
+    _subscription(db, user)
+    return user, person, workday, revision, assignment
+
+
+def test_superseded_removed_and_late_reminders_are_terminal_without_delivery(db) -> None:  # type: ignore[no-untyped-def]
+    user, _person, workday, revision, _assignment = _reminder_roster(
+        db, "stale", date(2026, 10, 1)
+    )
+    generated_at = datetime(2026, 9, 20, tzinfo=UTC)
+    assert generate_reminders(db, now=generated_at) == 3
+    night = db.get(
+        NotificationEvent,
+        f"reminder:NIGHT_BEFORE:{revision.id}:{_person.id}",
+    )
+    replacement = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=2,
+        state="PUBLISHED",
+        work_date=revision.work_date,
+        created_by_user_id=user.id,
+    )
+    db.add(replacement)
+    db.flush()
+    workday.current_published_revision_id = replacement.id
+    db.commit()
+    sent: list[str] = []
+    process_event(db, night, sender=lambda *_: sent.append("sent"), now=night.available_at)
+    assert night.status == "PROCESSED" and sent == []
+    assert db.scalar(
+        select(NotificationDelivery).where(NotificationDelivery.event_key == night.event_key)
+    ) is None
+
+    _user2, person2, _workday2, revision2, assignment2 = _reminder_roster(
+        db, "removed", date(2026, 11, 1)
+    )
+    assert generate_reminders(db, now=generated_at, horizon_days=60) == 3
+    removed = db.get(
+        NotificationEvent,
+        f"reminder:TWO_DAYS_BEFORE:{revision2.id}:{person2.id}",
+    )
+    assignment2.person_id = None
+    db.commit()
+    process_event(db, removed, sender=lambda *_: sent.append("sent"), now=removed.available_at)
+    assert removed.status == "PROCESSED" and sent == []
+
+    _user3, person3, _workday3, revision3, _assignment3 = _reminder_roster(
+        db, "late", date(2026, 12, 1)
+    )
+    assert generate_reminders(db, now=generated_at, horizon_days=90) == 3
+    late = db.get(
+        NotificationEvent,
+        f"reminder:ONE_HOUR_BEFORE:{revision3.id}:{person3.id}",
+    )
+    process_event(
+        db,
+        late,
+        sender=lambda *_: sent.append("sent"),
+        now=late.available_at + timedelta(minutes=16),
+    )
+    assert late.status == "PROCESSED" and sent == []
+
+    _reminder_roster(db, "ancient", date(2026, 10, 1))
+    after_start = datetime(2026, 9, 30, 23, tzinfo=UTC)  # noon NZ on the Workday
+    assert generate_reminders(db, now=after_start) == 0

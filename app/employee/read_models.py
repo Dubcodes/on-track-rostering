@@ -89,6 +89,7 @@ def day_assignments(
     *,
     can_view_all_rows: bool,
     can_view_private_notes: bool,
+    can_self_decline: bool = False,
 ) -> list[dict[str, object]]:
     statement = select(Assignment).where(Assignment.revision_id == revision.id)
     if not can_view_all_rows:
@@ -111,7 +112,7 @@ def day_assignments(
                 "end": row.end_time,
                 "note": note,
                 "is_own": is_own,
-                "can_decline": bool(is_own and row.status == "ASSIGNED"),
+                "can_decline": bool(is_own and row.status == "ASSIGNED" and can_self_decline),
             }
         )
     return result

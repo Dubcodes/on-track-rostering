@@ -59,7 +59,10 @@ def browser_site():  # type: ignore[no-untyped-def]
             credential_kind="pin",
         )
         person = Person(display_name="Browser Crew Member")
-        db.add_all([region, cross_region, group, manager, employee, admin, viewer, person])
+        other_person = Person(display_name="Unrelated Browser Crew")
+        db.add_all(
+            [region, cross_region, group, manager, employee, admin, viewer, person, other_person]
+        )
         db.flush()
         track = Track(
             name=f"Browser Track {suffix}", region_id=region.id, display_colour="#2E7D6A"
@@ -95,14 +98,20 @@ def browser_site():  # type: ignore[no-untyped-def]
             track_colour_snapshot=track.display_colour,
             title="Browser qualification day",
             start_time=clock_time(7, 30),
+            on_track_time=clock_time(9),
+            first_trial_time=clock_time(10),
+            first_race_time=clock_time(11),
+            last_race_time=clock_time(18),
+            race_count=10,
             end_time=clock_time(19, 30),
+            day_note="Browser normal Day note",
             created_by_user_id=manager.id,
             published_by_user_id=manager.id,
         )
         db.add(revision)
         db.flush()
-        db.add(
-            Assignment(
+        db.add_all(
+            [Assignment(
                 revision_id=revision.id,
                 base_position_id=position.id,
                 display_name_snapshot=position.name,
@@ -111,7 +120,17 @@ def browser_site():  # type: ignore[no-untyped-def]
                 status="ASSIGNED",
                 note="Browser private roster detail",
                 note_private=True,
-            )
+            ),
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position.id,
+                display_name_snapshot="Unrelated position",
+                person_id=other_person.id,
+                person_name_snapshot=other_person.display_name,
+                status="ASSIGNED",
+                note="Unrelated private browser detail",
+                note_private=True,
+            )]
         )
         workday.current_published_revision_id = revision.id
         cross_workday = Workday(region_id=cross_region.id, created_by_user_id=manager.id)
@@ -348,7 +367,6 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.locator("[data-crew-picker] option", has_text="Browser Crew Member").count() >= 1
     assert not errors
     context.close()
-
     context = browser.new_context(viewport={"width": width, "height": 900})
     page = context.new_page()
     errors = _watch_browser_errors(page)
@@ -389,4 +407,38 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.locator(".brand strong").inner_text() == configured_name
     assert page.get_by_text("Regions", exact=True).is_visible()
     assert not errors
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430])
+def test_specific_personal_day_renders_from_cache_while_physically_offline(
+    browser_site, width: int
+) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["employee"])
+    page.goto(base_url + "/month")
+    page.evaluate("async () => { await navigator.serviceWorker.ready; return true; }")
+    page.reload()
+    assert page.evaluate("navigator.serviceWorker.controller !== null")
+    page.wait_for_timeout(1200)
+    page.goto(base_url + f"/day/{values['workday_id']}")
+    page.wait_for_timeout(500)
+    context.set_offline(True)
+    page.goto(base_url + f"/day/{values['workday_id']}", wait_until="domcontentloaded")
+    assert page.get_by_text("Offline — showing this Day as cached at").is_visible()
+    assert page.get_by_text("Browser normal Day note").is_visible()
+    assert page.get_by_text("Browser private roster detail").is_visible()
+    assert page.get_by_text("07:30").is_visible()
+    assert page.get_by_text("10", exact=True).is_visible()
+    assert page.get_by_text("Unrelated Browser Crew").count() == 0
+    assert page.get_by_text("Unrelated private browser detail").count() == 0
+    assert page.locator("form").count() == 0
+    assert page.get_by_text("Edit private draft").count() == 0
+    assert page.get_by_text("I’m not available").count() == 0
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    context.set_offline(False)
     context.close()

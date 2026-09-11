@@ -2,15 +2,18 @@
 {% block title %}Activate account · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <section class="auth-card">
-  <p class="eyebrow">Account invitation</p><h1>Join {{ branding.product_name }}</h1>
+  <p class="eyebrow">One-time invitation</p><h1>Join {{ branding.product_name }}</h1>
   {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+  <div class="alert" data-invite-missing hidden>This invitation link is incomplete. Ask the sender for a new link.</div>
   {% if available %}
-  <form method="post" class="stack">
-    <label>Your name<input name="display_name" value="{{ invite.display_name if invite else '' }}" required></label>
+  <form method="post" action="/invite/activate" class="stack" data-invite-form>
+    <input type="hidden" name="token" value="{{ token }}" data-invite-token>
+    <label>Your name<input name="display_name" required autocomplete="name"></label>
     <label>Create a PIN<input name="credential" inputmode="numeric" pattern="[0-9]{6,32}" minlength="6" autocomplete="new-password" required><small>At least six digits.</small></label>
-    <button>Activate account</button>
+    <button data-invite-submit>Activate account</button>
   </form>
   {% else %}<div class="alert">This invitation is unavailable or has already been used.</div>{% endif %}
 </section>
+<script src="/static/invite.js" defer></script>
 {% endblock %}
 

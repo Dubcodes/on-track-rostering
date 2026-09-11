@@ -85,7 +85,6 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 if request.state.actor.is_admin
                 else [Role.SUB_MANAGER.value]
             ),
-            invite_url=request.query_params.get("invite_url", ""),
         ),
     )
 
@@ -121,7 +120,15 @@ def approve_signup_request(
         raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    return RedirectResponse(f"/manage/accounts?invite_url=/invite/{raw}", status_code=303)
+    return templates.TemplateResponse(
+        "invitation_created.html",
+        context(
+            request,
+            invitation_url=f"/invite#token={raw}",
+            destination="/manage/accounts",
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/signup-requests/{signup_id}/reject")

@@ -85,6 +85,6 @@ def manifest(request: Request) -> JSONResponse:
 @app.get("/service-worker.js", include_in_schema=False)
 def service_worker() -> Response:
     return Response(
-        (Path(__file__).parent / "static" / "service-worker.js").read_text(),
+        (Path(__file__).parent / "static" / "service-worker.js").read_text(encoding="utf-8"),
         media_type="application/javascript",
     )

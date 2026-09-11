@@ -11,6 +11,7 @@ from app.branding.service import DEFAULT_BRANDING
 from app.core.config import get_settings
 from app.core.holidays import holiday_for_date
 from app.core.time import display_datetime, display_time, local_today
+from app.system_settings.service import DEFAULT_OPERATIONAL_SETTINGS
 
 
 class OnTrackTemplates(Jinja2Templates):
@@ -82,6 +83,9 @@ def context(request: Request, **values: object) -> dict[str, object]:
         "user": getattr(request.state, "user", None),
         "actor": actor,
         "branding": getattr(request.state, "branding", DEFAULT_BRANDING),
+        "system_settings": getattr(
+            request.state, "system_settings", DEFAULT_OPERATIONAL_SETTINGS
+        ),
         "show_manage": show_manage,
         "show_crew": show_crew,
         "show_open_positions": show_open_positions,
@@ -96,7 +100,9 @@ def context(request: Request, **values: object) -> dict[str, object]:
     }
 
 
-def month_grid(year: int, month: int) -> list[list[dict[str, object]]]:
+def month_grid(
+    year: int, month: int, holiday_region: str = ""
+) -> list[list[dict[str, object]]]:
     rows = []
     for week in Calendar(firstweekday=0).monthdatescalendar(year, month):
         rows.append(
@@ -104,7 +110,7 @@ def month_grid(year: int, month: int) -> list[list[dict[str, object]]]:
                 {
                     "date": day,
                     "in_month": day.month == month,
-                    "holiday": holiday_for_date(day),
+                    "holiday": holiday_for_date(day, holiday_region),
                     "today": day == local_today(),
                 }
                 for day in week

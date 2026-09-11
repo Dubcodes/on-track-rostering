@@ -2,7 +2,6 @@
 {% block title %}Accounts · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <section class="page-head"><p class="eyebrow">Privilege-safe administration</p><h1>Accounts & access</h1><p class="lede">Approve signup requests and stage role changes. Pending roles become active only after the account owner signs in again.</p></section>
-{% if invite_url %}<div class="alert success"><strong>Approval complete.</strong> Copy this invitation once: <code>{{ invite_url }}</code></div>{% endif %}
 <div class="admin-grid">
 <section class="panel wide"><h2>Pending signup requests</h2><div class="account-list">
 {% for signup in signup_requests %}<article><div><strong>{{ signup.display_name }}</strong><small>{{ signup.email }} · requested {{ signup.requested_region_id or 'no region' }}</small></div>

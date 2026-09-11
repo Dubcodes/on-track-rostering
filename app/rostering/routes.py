@@ -14,7 +14,7 @@ from app.catalog.models import BasePosition, Region, Track
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, WorkdayCategory
 from app.identity.models import Person, UserPersonLink
-from app.positions.service import eligibility
+from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
@@ -112,11 +112,20 @@ def _builder_context(
         )
     )
     person_hints: dict[tuple[uuid.UUID, uuid.UUID], str] = {}
+    eligibility_by_pair = bulk_eligibility(
+        db,
+        {person.id for person in people},
+        {
+            assignment.base_position_id
+            for assignment in assignments
+            if assignment.base_position_id is not None
+        },
+    )
     for assignment in assignments:
         if assignment.base_position_id is None:
             continue
         for person in people:
-            _, reason = eligibility(db, person.id, assignment.base_position_id)
+            _, reason = eligibility_by_pair[(person.id, assignment.base_position_id)]
             hint = reason
             if person.id in same_date_people:
                 hint += "; also rostered this date"
@@ -183,10 +192,19 @@ def _publication_warnings(
     ) if person_ids else set()
     if person_ids - linked:
         warnings.append("One or more assigned people do not have a linked app account.")
+    eligibility_by_pair = bulk_eligibility(
+        db,
+        {row.person_id for row in assignments if row.person_id is not None},
+        {
+            row.base_position_id
+            for row in assignments
+            if row.base_position_id is not None
+        },
+    )
     if any(
         row.person_id
         and row.base_position_id
-        and not eligibility(db, row.person_id, row.base_position_id)[0]
+        and not eligibility_by_pair[(row.person_id, row.base_position_id)][0]
         for row in assignments
     ):
         warnings.append("One or more assignments have a capability conflict.")
@@ -206,7 +224,7 @@ def _publication_warnings(
     )
     if elsewhere:
         warnings.append("A person is also rostered on another workday on this date.")
-    if any(
+    if workday.category == WorkdayCategory.RACE_DAY.value and any(
         value is None
         for value in (
             draft.on_track_time,

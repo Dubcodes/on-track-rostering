@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -61,11 +61,15 @@ def create_invitation(
         if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person_id)):
             raise ValueError("The selected crew identity is already linked to an account.")
     now = utcnow()
-    db.execute(
-        update(Invitation)
-        .where(Invitation.email == email, Invitation.consumed_at.is_(None), Invitation.revoked_at.is_(None))
-        .values(revoked_at=now)
-    )
+    if db.scalar(
+        select(Invitation.id).where(
+            Invitation.email == email,
+            Invitation.consumed_at.is_(None),
+            Invitation.revoked_at.is_(None),
+            Invitation.expires_at > now,
+        )
+    ):
+        raise ValueError("An invitation is already pending for that email; revoke it first.")
     raw = secrets.token_urlsafe(40)
     invite = Invitation(
         token_hash=token_hash(raw),
@@ -293,7 +297,10 @@ def activate_invitation(db: Session, raw_token: str, display_name: str, secret: 
         select(Invitation).where(Invitation.token_hash == token_hash(raw_token)).with_for_update()
     )
     now = utcnow()
-    if not invite or invite.consumed_at or invite.revoked_at or invite.expires_at <= now:
+    expires_at = invite.expires_at if invite else None
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if not invite or invite.consumed_at or invite.revoked_at or expires_at <= now:
         raise ValueError("This invitation is invalid, expired, or already used.")
     if error := credential_error(secret, invite.role):
         raise ValueError(error)

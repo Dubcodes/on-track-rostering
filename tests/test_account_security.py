@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import select
 
 from app.auth.policy import actor_for
 from app.auth.security import create_device, hash_credential
 from app.auth.service import (
+    activate_invitation,
     activate_pending_grants,
     approve_signup,
+    create_invitation,
     grant_role,
     revoke_role_grant,
 )
 from app.catalog.models import Region
 from app.core.enums import Role
+from app.core.time import utcnow
 from app.identity.models import Person, RoleGrant, SignupRequest, User, UserPersonLink
 
 
@@ -151,6 +156,42 @@ def test_signup_approval_requires_explicit_available_person_link(db) -> None:  #
     )
     assert raw and signup.status == "APPROVED"
     assert signup.approved_person_id == person.id and signup.invitation_id is not None
+
+
+def test_expired_and_revoked_invitation_body_tokens_are_rejected(db) -> None:  # type: ignore[no-untyped-def]
+    admin = _user(db, "invite-admin@example.test", "12345678")
+    region = Region(name="Invitations")
+    db.add(region)
+    db.flush()
+    db.add(RoleGrant(user_id=admin.id, role=Role.ADMIN.value))
+    db.commit()
+    expired, expired_raw = create_invitation(
+        db,
+        email="expired@example.com",
+        display_name="Expired",
+        person_id=None,
+        role=Role.EMPLOYEE.value,
+        region_id=region.id,
+        actor_user_id=admin.id,
+    )
+    expired.expires_at = utcnow() - timedelta(seconds=1)
+    db.commit()
+    with pytest.raises(ValueError, match="invalid, expired, or already used"):
+        activate_invitation(db, expired_raw, "Expired", "123456")
+
+    revoked, revoked_raw = create_invitation(
+        db,
+        email="revoked@example.com",
+        display_name="Revoked",
+        person_id=None,
+        role=Role.EMPLOYEE.value,
+        region_id=region.id,
+        actor_user_id=admin.id,
+    )
+    revoked.revoked_at = utcnow()
+    db.commit()
+    with pytest.raises(ValueError, match="invalid, expired, or already used"):
+        activate_invitation(db, revoked_raw, "Revoked", "123456")
 
 
 def test_signup_link_collision_and_unrelated_manager_scope_are_rejected(db) -> None:  # type: ignore[no-untyped-def]

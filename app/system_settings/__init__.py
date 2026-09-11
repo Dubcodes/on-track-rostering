@@ -1,0 +1,1 @@
+"""Persisted global operational settings."""

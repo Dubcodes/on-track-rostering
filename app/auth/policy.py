@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.enums import Role
+from app.core.time import utcnow
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.rostering.participation import person_day_participation
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,51 @@ def can_view_management_detail(actor: Actor, region_id: uuid.UUID) -> bool:
 def can_apply_for_open_position(actor: Actor, region_id: uuid.UUID) -> bool:
     """Only linked Employees may self-apply; broad Viewer access is never write authority."""
     return bool(actor.person_id and Role.EMPLOYEE.value in actor.roles_for(region_id))
+
+
+def can_self_decline_assignment(
+    actor: Actor,
+    workday: Workday,
+    revision: WorkdayRevision,
+    assignments: list[Assignment],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Allow linked Employee/Contractor self-service only before their shift begins."""
+    roles = actor.roles_for(workday.region_id)
+    if actor.person_id is None or not roles & {
+        Role.EMPLOYEE.value,
+        Role.CONTRACTOR.value,
+    }:
+        return False
+    own_assigned = [
+        row
+        for row in assignments
+        if row.person_id == actor.person_id and row.status == "ASSIGNED"
+    ]
+    if not own_assigned:
+        return False
+    current = now or utcnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=get_settings().timezone)
+    local_now = current.astimezone(get_settings().timezone)
+    if revision.work_date < local_now.date():
+        return False
+    if revision.work_date > local_now.date():
+        return True
+    start = person_day_participation(revision, own_assigned).start
+    if start is None:
+        return False
+    start_date = revision.work_date
+    if (
+        revision.start_time is not None
+        and revision.end_time is not None
+        and revision.end_time < revision.start_time
+        and start < revision.start_time
+    ):
+        start_date += timedelta(days=1)
+    start_at = datetime.combine(start_date, start, tzinfo=get_settings().timezone)
+    return local_now < start_at
 
 
 def assigned_to_revision(db: Session, actor: Actor, revision_id: uuid.UUID) -> bool:

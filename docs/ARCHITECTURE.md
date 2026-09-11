@@ -46,6 +46,8 @@ The service worker caches only the purpose-built authenticated upcoming-work fee
 
 `On Track Rostering` remains the internal project and repository name. The deployed application's user-facing product name is the global Admin-configurable `system_branding.product_name`, initially `On Track`. It is loaded from PostgreSQL for each request, safely escaped as text, and used by page chrome/titles, account surfaces, generated manifest metadata, passkey and TOTP relying-party labels, offline payloads, and notification copy. Saving it takes effect on subsequent requests without a restart. A branding change does not alter repository or database identity, authorization, roster data, or API semantics; the personal offline APIs expose only the product-name metadata needed to render the cached shell.
 
+Global operational policy is kept separate from branding in the persisted singleton `system_settings`. Its initial `public_signup_enabled` value is false and is editable only by an Admin; signup GET and POST read this value on each request, so there is no competing environment-controlled runtime switch.
+
 ## Delivery worker
 
 Authoritative transactions add deterministic `NotificationEvent` keys but never call a push provider. `python -m app.cli deliver-notifications` generates deterministic two-day, night-before, and one-hour events from current published person/day starts, then claims due rows with PostgreSQL `FOR UPDATE SKIP LOCKED`. Five-minute leases recover abandoned claims. Publication audience is the union of prior and new assignees. A unique event/subscription delivery row makes completed delivery idempotent. HTTP 404/410 deactivates an endpoint; transient failures back off and stop at the configured attempt limit.

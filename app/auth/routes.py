@@ -38,7 +38,7 @@ from app.auth.service import (
 from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.identity.models import Invitation, SignupRequest, TrustedDevice, User, WebAuthnChallenge
+from app.identity.models import SignupRequest, TrustedDevice, User, WebAuthnChallenge
 from app.web import context, templates
 
 router = APIRouter()
@@ -187,21 +187,18 @@ def logout(request: Request, csrf_token: str = Form(...), db: Session = Depends(
     return response
 
 
-@router.get("/invite/{token}", response_class=HTMLResponse)
-def invitation_page(token: str, request: Request, db: Session = Depends(get_db)):
-    from app.auth.security import token_hash
-
-    invite = db.scalar(select(Invitation).where(Invitation.token_hash == token_hash(token)))
-    available = bool(invite and not invite.consumed_at and not invite.revoked_at)
+@router.get("/invite", response_class=HTMLResponse)
+def invitation_page(request: Request):
     return templates.TemplateResponse(
-        "invite.html", context(request, token=token, invite=invite, available=available, error="")
+        "invite.html", context(request, token="", available=True, error=""),
+        headers={"Cache-Control": "no-store"},
     )
 
 
-@router.post("/invite/{token}", response_class=HTMLResponse)
+@router.post("/invite/activate", response_class=HTMLResponse)
 def invitation_activate(
-    token: str,
     request: Request,
+    token: str = Form(...),
     display_name: str = Form(...),
     credential: str = Form(...),
     db: Session = Depends(get_db),
@@ -211,8 +208,9 @@ def invitation_activate(
     except ValueError as exc:
         return templates.TemplateResponse(
             "invite.html",
-            context(request, token=token, invite=None, available=True, error=str(exc)),
+            context(request, token=token, available=True, error=str(exc)),
             status_code=400,
+            headers={"Cache-Control": "no-store"},
         )
     return RedirectResponse("/login?activated=1", status_code=303)
 
@@ -222,7 +220,12 @@ def signup_page(request: Request, db: Session = Depends(get_db)):
     regions = list(db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)))
     return templates.TemplateResponse(
         "signup.html",
-        context(request, regions=regions, enabled=get_settings().public_signup_enabled, sent=False),
+        context(
+            request,
+            regions=regions,
+            enabled=request.state.system_settings.public_signup_enabled,
+            sent=False,
+        ),
     )
 
 
@@ -235,7 +238,7 @@ def signup(
     db: Session = Depends(get_db),
 ):
     regions = list(db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)))
-    if not get_settings().public_signup_enabled:
+    if not request.state.system_settings.public_signup_enabled:
         return templates.TemplateResponse(
             "signup.html", context(request, regions=regions, enabled=False, sent=False), status_code=404
         )

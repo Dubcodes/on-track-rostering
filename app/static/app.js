@@ -66,15 +66,15 @@
         const response = await fetch("/api/upcoming-work", {headers: {"X-OnTrack-Prefetch": "1"}});
         if (!response.ok) return;
         upcoming = await response.json();
-        if (upcoming.saved_at) localStorage.setItem("ontrack-last-saved-at", upcoming.saved_at);
+        localStorage.setItem("ontrack-last-saved-at", new Date().toISOString());
       } catch (_) { return; }
       const ids = [...new Set((upcoming.days || []).map((item) => item.id))];
       for (const id of ids) {
         try {
           const response = await fetch(`/api/day/${id}`, { headers: { "X-OnTrack-Prefetch": "1" } });
           if (!response.ok) break;
-          const payload = await response.json();
-          if (payload.saved_at) localStorage.setItem("ontrack-last-saved-at", payload.saved_at);
+          await response.json();
+          localStorage.setItem("ontrack-last-saved-at", new Date().toISOString());
         }
         catch (_) { break; }
       }

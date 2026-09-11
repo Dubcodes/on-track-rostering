@@ -33,6 +33,7 @@ from app.identity.models import (
     User,
     UserPersonLink,
 )
+from app.system_settings.service import update_operational_settings
 from app.web import context, templates
 
 router = APIRouter(prefix="/admin")
@@ -85,7 +86,6 @@ def admin_page(request: Request, db: Session = Depends(get_db)):
                 )
             ),
             roles=[role.value for role in Role],
-            invite_url=request.query_params.get("invite_url", ""),
         ),
     )
 
@@ -116,6 +116,36 @@ def update_system_branding(
     )
     db.commit()
     return RedirectResponse("/admin#branding", status_code=303)
+
+
+@router.post("/system-settings")
+def update_system_settings(
+    request: Request,
+    public_signup_enabled: bool = Form(False),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _admin(request)
+    verify_csrf(request, csrf_token)
+    previous = request.state.system_settings.public_signup_enabled
+    row = update_operational_settings(
+        db,
+        public_signup_enabled=public_signup_enabled,
+        actor_user_id=request.state.user.id,
+    )
+    record_audit(
+        db,
+        "system_settings.updated",
+        "system_settings",
+        row.id,
+        request.state.user.id,
+        detail={
+            "public_signup_enabled": row.public_signup_enabled,
+            "previous_public_signup_enabled": previous,
+        },
+    )
+    db.commit()
+    return RedirectResponse("/admin#system-settings", status_code=303)
 
 
 @router.post("/regions")
@@ -298,7 +328,15 @@ def invite_user(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return RedirectResponse(f"/admin?invite_url=/invite/{raw}#users", status_code=303)
+    return templates.TemplateResponse(
+        "invitation_created.html",
+        context(
+            request,
+            invitation_url=f"/invite#token={raw}",
+            destination="/admin#invitations",
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/users/{user_id}/status")
