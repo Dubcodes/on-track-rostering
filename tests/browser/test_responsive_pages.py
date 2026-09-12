@@ -423,7 +423,18 @@ def test_specific_personal_day_renders_from_cache_while_physically_offline(
     page.evaluate("async () => { await navigator.serviceWorker.ready; return true; }")
     page.reload()
     assert page.evaluate("navigator.serviceWorker.controller !== null")
-    page.wait_for_timeout(1200)
+    page.wait_for_function(
+        """async (workdayId) => {
+          const shell = await caches.open("ontrack-shell-v2");
+          const marker = await shell.match("/__ontrack_active_user");
+          if (!marker) return false;
+          const namespace = await marker.text();
+          const roster = await caches.open("ontrack-roster-" + namespace);
+          return Boolean(await roster.match("/api/day/" + workdayId));
+        }""",
+        arg=values["workday_id"],
+        timeout=10_000,
+    )
     page.goto(base_url + f"/day/{values['workday_id']}")
     page.wait_for_timeout(500)
     context.set_offline(True)
