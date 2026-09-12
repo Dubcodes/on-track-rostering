@@ -423,6 +423,17 @@ def test_specific_personal_day_renders_from_cache_while_physically_offline(
     page.evaluate("async () => { await navigator.serviceWorker.ready; return true; }")
     page.reload()
     assert page.evaluate("navigator.serviceWorker.controller !== null")
+    page.goto(base_url + f"/day/{values['workday_id']}")
+    page.evaluate(
+        """async (workdayId) => {
+          const response = await fetch("/api/day/" + workdayId, {
+            headers: {"X-OnTrack-Prefetch": "1"},
+          });
+          if (!response.ok) throw new Error("personal Day cache warm failed");
+          await response.json();
+        }""",
+        values["workday_id"],
+    )
     page.wait_for_function(
         """async (workdayId) => {
           const shell = await caches.open("ontrack-shell-v2");
@@ -435,10 +446,11 @@ def test_specific_personal_day_renders_from_cache_while_physically_offline(
         arg=values["workday_id"],
         timeout=10_000,
     )
-    page.goto(base_url + f"/day/{values['workday_id']}")
-    page.wait_for_timeout(500)
     context.set_offline(True)
-    page.goto(base_url + f"/day/{values['workday_id']}", wait_until="domcontentloaded")
+    page.goto(
+        base_url + f"/day/{values['workday_id']}?offline-test=1",
+        wait_until="domcontentloaded",
+    )
     assert page.get_by_text("Offline — showing this Day as cached at").is_visible()
     assert page.get_by_text("Browser normal Day note").is_visible()
     assert page.get_by_text("Browser private roster detail").is_visible()
