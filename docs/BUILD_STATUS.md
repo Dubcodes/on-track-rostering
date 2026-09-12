@@ -2,7 +2,7 @@
 
 ## Current result
 
-The Foundation production-readiness hardening pass is complete. Implementation commit `8f988dc00c9c10299476b526ecfc597d843030c3` and browser-gate fixes `eae21f1e0b375e38421342cd960e791d754ae939` and `510266c090e3bb392c03a6b47c6a882be0eb451b` preserve the settled roster architecture while closing the reviewed security, data-integrity, notification, offline, settings, privacy, calendar, and builder-performance issues. Exact-head GitHub release-gate run `34663081002` passed PostgreSQL 17 migrations, 71 PostgreSQL-backed tests with no skips, six Playwright cases, dependency audit, Compose validation, and production image build. Local PostgreSQL execution remains pending because no disposable `ONTRACK_TEST_DATABASE_URL` or `DATABASE_URL` is configured. Docker was not invoked locally. No production or staging deployment is claimed by this build evidence.
+The Foundation production-readiness hardening pass is complete. Implementation commit `8f988dc00c9c10299476b526ecfc597d843030c3`, browser-gate fixes `eae21f1e0b375e38421342cd960e791d754ae939` and `510266c090e3bb392c03a6b47c6a882be0eb451b`, and isolated staging-configuration commit `aefa1a86a3b1395aaa43fc5dc6d68741a1fc85cf` preserve the settled roster architecture while closing the reviewed security, data-integrity, notification, offline, settings, privacy, calendar, and builder-performance issues. Exact-head GitHub release-gate run `34663670073` passed PostgreSQL 17 migrations, 71 PostgreSQL-backed tests with no skips, six Playwright cases, dependency audit, production and staging Compose validation, and production image build. Local PostgreSQL execution remains pending because no disposable `ONTRACK_TEST_DATABASE_URL` or `DATABASE_URL` is configured. Docker was not invoked locally. No production or staging deployment is claimed by this build evidence.
 
 ## Implemented
 
@@ -19,6 +19,7 @@ The Foundation production-readiness hardening pass is complete. Implementation c
 - `system_branding` remains exclusively product identity; no competing operational-settings source was introduced. WebAuthn RP ID/origin remain deployment security identities, while the stale RP display-name environment option was removed.
 - Month weekly totals cover every displayed grid day, empty regional holiday cells use the linked Person's home-region geography, and non-Race-Day builder/Day wording no longer displays race-only fields or warnings.
 - Conservative retention work is documented in `docs/RETENTION_PLAN.md`; no automatic or broad data deletion was introduced.
+- `compose.staging.yaml` and `.env.staging.example` define a separately named private stack, PostgreSQL database/volume/network, host port, secrets namespace, HTTPS origin, and WebAuthn RP identity. CI validates this configuration, but no staging target or credentials are assumed.
 
 ## Qualification evidence
 
@@ -27,12 +28,12 @@ The Foundation production-readiness hardening pass is complete. Implementation c
 - Local Playwright: **6 passed**—responsive coverage at 1280, 430, 375, and 320 pixels plus physically offline personal-Day rendering at 1280 and 430 against a disposable narrow browser fixture.
 - JavaScript syntax: passed for application, invitation, passkey, notification, and service-worker scripts.
 - Alembic PostgreSQL-dialect SQL generation through `e72a19c5f40b`: passed. Local `pip check`, `pip-audit --local`, `git diff --check`, and secret/stale-config scans passed.
-- Exact-head GitHub Actions for `510266c090e3bb392c03a6b47c6a882be0eb451b`: release-gate run `34663081002` passed. PostgreSQL 17 applied the full migration chain through `e72a19c5f40b`, and the second `alembic upgrade head` completed cleanly. The full PostgreSQL-backed suite reported **71 passed, 0 skipped**, including simultaneous first-draft creation, stale detail/assignment mutation, stale editor after Publish, exact `lock_version` conflict behavior, concurrent reminder generation, and concurrent notification claiming.
-- The same exact-head run reported **6 Playwright tests passed**, including responsive widths 1280/430/375/320 and real offline Day cases at 1280/430. `pip check`, `pip-audit --local`, JavaScript syntax, Compose validation, and production image build all passed.
+- Exact-head GitHub Actions for `aefa1a86a3b1395aaa43fc5dc6d68741a1fc85cf`: release-gate run `34663670073` passed. PostgreSQL 17 applied the full migration chain through `e72a19c5f40b`, and the second `alembic upgrade head` completed cleanly. The full PostgreSQL-backed suite reported **71 passed, 0 skipped**, including simultaneous first-draft creation, stale detail/assignment mutation, stale editor after Publish, exact `lock_version` conflict behavior, concurrent reminder generation, and concurrent notification claiming.
+- The same exact-head run reported **6 Playwright tests passed**, including responsive widths 1280/430/375/320 and real offline Day cases at 1280/430. `pip check`, `pip-audit --local`, JavaScript syntax, production Compose validation, isolated staging Compose validation, and production image build all passed.
 
 ## Explicitly pending or deferred
 
-- Private staging deployment and smoke/log qualification are pending a verified genuinely separate staging target. Production deployment is not authorized.
+- Private staging deployment and smoke/log qualification are pending because no separate Portainer stack, host/domain, or staging credentials were discoverable. The minimum isolated Compose/environment configuration is prepared; production deployment is not authorized.
 - Local real-PostgreSQL execution is pending; no native/local or explicitly configured remote instance was available. The application was not switched to SQLite.
 - Real passkey hardware/browser ceremony, real Web Push provider delivery, and recovery codes remain pending. Production reminder delivery depends on staging/production VAPID and a durable scheduler.
 - Operations/Travel, Vehicles, Accommodation, racing-provider ingest, explicit reschedule/abandonment workflow, management-only crew notes, authorized credential reset, data export/retention administration UI, and configurable logo remain deferred.
