@@ -35,3 +35,17 @@ pg_restore --list "ontrack-YYYYMMDD-HHMM.dump"
 Record size, SHA-256, PostgreSQL version, creation time, and application revision. Periodically restore into a disposable PostgreSQL database, run migrations, query seed/master/history counts, and open a known published day. A backup is not considered verified merely because `pg_dump` exited zero.
 
 Restore is an offline operator action: stop app writes, create a fresh target database, run `pg_restore --clean --if-exists` only against that explicitly verified disposable/new target, migrate, validate, then switch connection configuration. Never test restore against production.
+
+## Private staging
+
+No staging target is implied by the production stack. Create a separate Portainer Git stack named `on-track-rostering-staging` from `compose.staging.yaml`, and select a new immutable `staging-YYYY-MM-DD-<short-sha>` tag that has passed the exact-head release gate. Never point this stack at `main` or the production stack's repository checkout.
+
+Copy the variable names from `.env.staging.example` into Portainer and replace every example value. Staging requires its own PostgreSQL credentials, application secret, credential pepper, HTTPS hostname/origin, WebAuthn RP ID, trusted-proxy allowlist, and host port. The staging Compose project uses distinct `staging_app`/`staging_db` services, `ontrack_staging_postgres_data` volume, and `ontrack_staging_internal` network; the database has no host port. Do not copy production data, secrets, VAPID keys, volumes, or credentials. Leave Web Push disabled unless deliberately qualifying staging-specific VAPID credentials.
+
+Set `STAGING_ONTRACK_BUILD_ID` to the tag's exact Git SHA. Terminate TLS at the private staging reverse proxy and retain `ONTRACK_COOKIE_SECURE=true`. The proxy hostname must equal `STAGING_ONTRACK_ALLOWED_HOSTS`; passkey testing additionally requires the exact HTTPS origin and matching staging RP ID.
+
+On first deployment, confirm the app startup migration reaches Alembic head, restart/redeploy once to prove the second upgrade is clean, then check `/health/live` and `/health/ready`. Create demo-only accounts with `python -m app.cli create-admin`; do not import staff data. Complete the documented role, invitation, branding, roster publish/republish, stale-write, decline, offline, authentication-throttle, and log-review smoke matrix before any production promotion request.
+
+## Promotion recommendation
+
+Production should consume a CI-qualified immutable release tag or, preferably, an immutable image tagged by Git SHA. The long-term model is build once, test that artifact, then deploy the same artifact. Do not promote staging merely because `main` moved, and never reuse or move a release/staging tag.

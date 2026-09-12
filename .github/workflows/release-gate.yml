@@ -42,4 +42,5 @@ jobs:
       - run: echo "ONTRACK_RUN_BROWSER_TESTS=1" >> "$GITHUB_ENV"
       - run: python scripts/release_gate.py
       - run: docker compose config --quiet
+      - run: docker compose --env-file .env.staging.example -f compose.staging.yaml config --quiet
       - run: docker build --build-arg BUILD_ID="$GITHUB_SHA" -t ontrack-rostering:ci .
