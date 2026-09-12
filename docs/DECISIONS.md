@@ -12,7 +12,7 @@ GitHub `main` may already be a Portainer deployment source, so committed migrati
 
 ## Windows local development excludes Docker
 
-FastAPI, Alembic, tests, and tooling run directly under Windows/Python. The required database engine is a native/local PostgreSQL installation or an explicitly configured remote development PostgreSQL instance supplied through `DATABASE_URL`. Docker and Docker Desktop are not run, started, repaired, installed, or configured on the development machine. Compose files remain production deployment artifacts for the separate Docker/Portainer server. Narrow SQLite unit tests never count as PostgreSQL integration qualification; unavailable PostgreSQL checks are reported as pending.
+FastAPI, Alembic, tests, and tooling run directly under Windows/Python. The required database engine is a native/local PostgreSQL installation or an explicitly configured remote development PostgreSQL instance supplied through `DATABASE_URL`. Docker and Docker Desktop are not run, started, repaired, installed, or configured on the development machine. Production and isolated-staging Compose files remain deployment artifacts for the separate Docker/Portainer server. Narrow SQLite unit tests never count as PostgreSQL integration qualification; unavailable PostgreSQL checks are reported as pending.
 
 ## Revision snapshots over mutable published rows
 

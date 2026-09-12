@@ -14,6 +14,7 @@ from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import get_db
 from app.core.enums import DeclinePolicy, Lifecycle
+from app.core.forms import controlled_integrity, optional_uuid
 from app.web import context, templates
 
 router = APIRouter(prefix="/manage/catalog")
@@ -61,16 +62,30 @@ def _colour(value: str) -> str:
     return value.upper()
 
 
+def _active_group(db: Session, raw_id: str) -> CrewGroup | None:
+    group_id = optional_uuid(raw_id, "crew group")
+    if group_id is None:
+        return None
+    group = db.get(CrewGroup, group_id)
+    if not group or group.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active crew group.")
+    return group
+
+
 @router.post("/tracks")
 def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str = Form(...), display_colour: str = Form(...), map_reference: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     verify_csrf(request, csrf_token)
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active region.")
     if not can_administer_region(request.state.actor, region_id):
         raise HTTPException(403, "Regional administration authority required.")
     row = Track(region_id=region_id, name=_name(name, 120), display_colour=_colour(display_colour), map_reference=map_reference.strip()[:500] or None)
-    db.add(row)
-    db.flush()
-    record_audit(db, "track.created", "track", row.id, request.state.user.id, region_id=region_id)
-    db.commit()
+    with controlled_integrity(db, "A track in that region already uses that name."):
+        db.add(row)
+        db.flush()
+        record_audit(db, "track.created", "track", row.id, request.state.user.id, region_id=region_id)
+        db.commit()
     return RedirectResponse("/manage/catalog#tracks", status_code=303)
 
 
@@ -85,7 +100,8 @@ def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), d
     row.name, row.display_colour = _name(name, 120), _colour(display_colour)
     row.map_reference, row.lifecycle = map_reference.strip()[:500] or None, _lifecycle(lifecycle)
     record_audit(db, "track.updated", "track", row.id, request.state.user.id, region_id=row.region_id)
-    db.commit()
+    with controlled_integrity(db, "A track in that region already uses that name."):
+        db.commit()
     return RedirectResponse("/manage/catalog#tracks", status_code=303)
 
 
@@ -102,7 +118,8 @@ def update_region(region_id: uuid.UUID, request: Request, name: str = Form(...),
     row.decline_policy, row.lead_minutes_race_day = decline_policy, lead_minutes_race_day
     row.statutory_holiday_region = statutory_holiday_region.strip()[:80] or None
     record_audit(db, "region.updated", "region", row.id, request.state.user.id, region_id=row.id)
-    db.commit()
+    with controlled_integrity(db, "A region already uses that name."):
+        db.commit()
     return RedirectResponse("/manage/catalog#regions", status_code=303)
 
 
@@ -111,10 +128,11 @@ def create_group(request: Request, name: str = Form(...), csrf_token: str = Form
     require_admin(request.state.actor)
     verify_csrf(request, csrf_token)
     row = CrewGroup(name=_name(name, 100))
-    db.add(row)
-    db.flush()
-    record_audit(db, "crew_group.created", "crew_group", row.id, request.state.user.id)
-    db.commit()
+    with controlled_integrity(db, "A crew group already uses that name."):
+        db.add(row)
+        db.flush()
+        record_audit(db, "crew_group.created", "crew_group", row.id, request.state.user.id)
+        db.commit()
     return RedirectResponse("/manage/catalog#groups", status_code=303)
 
 
@@ -127,7 +145,8 @@ def update_group(group_id: uuid.UUID, request: Request, name: str = Form(...), l
         raise HTTPException(404)
     row.name, row.lifecycle = _name(name, 100), _lifecycle(lifecycle)
     record_audit(db, "crew_group.updated", "crew_group", row.id, request.state.user.id)
-    db.commit()
+    with controlled_integrity(db, "A crew group already uses that name."):
+        db.commit()
     return RedirectResponse("/manage/catalog#groups", status_code=303)
 
 
@@ -138,8 +157,21 @@ def update_position(position_id: uuid.UUID, request: Request, name: str = Form(.
     row = db.get(BasePosition, position_id)
     if not row:
         raise HTTPException(404)
-    row.name, row.lifecycle = _name(name, 100), _lifecycle(lifecycle)
-    row.crew_group_id = uuid.UUID(crew_group_id) if crew_group_id else None
+    group = _active_group(db, crew_group_id)
+    clean_name = _name(name, 100)
+    clean_lifecycle = _lifecycle(lifecycle)
+    group_id = group.id if group else None
+    duplicate = db.scalar(
+        select(BasePosition.id).where(
+            BasePosition.id != row.id,
+            BasePosition.name == clean_name,
+            BasePosition.crew_group_id == group_id,
+        )
+    )
+    if duplicate:
+        raise HTTPException(409, "A base position in that crew group already uses that name.")
+    row.name, row.lifecycle, row.crew_group_id = clean_name, clean_lifecycle, group_id
     record_audit(db, "position.updated", "base_position", row.id, request.state.user.id)
-    db.commit()
+    with controlled_integrity(db, "A base position in that crew group already uses that name."):
+        db.commit()
     return RedirectResponse("/manage/catalog#positions", status_code=303)

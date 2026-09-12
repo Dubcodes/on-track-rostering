@@ -28,8 +28,8 @@ WebAuthn defaults to `localhost` and `http://localhost:8000`; use that exact ori
 .\.venv\Scripts\python.exe -m app.cli deliver-notifications --limit 50
 ```
 
-## Production deployment
+## Deployment
 
-The retained Compose stack is for the separate Docker/Portainer production server only. PostgreSQL is not published to that server's host, and the project, network, and volume are independent of Re-Deputy. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The retained production and isolated-staging Compose files are for the separate Docker/Portainer server only. PostgreSQL is not published to that server's host, and every project, network, and volume is independent of Re-Deputy. During active development staging may follow a CI-qualified `main`; production promotion freezes one exact qualified revision. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 See [docs/TESTING.md](docs/TESTING.md), [docs/SECURITY.md](docs/SECURITY.md), and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

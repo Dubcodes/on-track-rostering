@@ -68,6 +68,164 @@ def test_login_post_accepts_trusted_proxy_without_forwarded_host(routed_db, monk
     assert response.headers["location"] == "/month"
 
 
+def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, person_id) = routed_db
+    client = TestClient(app, raise_server_exceptions=False)
+    csrf = _login(client, "admin@example.test", "99887766")
+    with factory() as db:
+        group_id = db.scalar(select(CrewGroup.id).where(CrewGroup.name == "OB Crew"))
+        db.add(
+            User(
+                email="duplicate@example.com",
+                display_name="Existing Duplicate",
+                credential_hash=hash_credential("123456"),
+                credential_kind="pin",
+            )
+        )
+        db.commit()
+    assert client.get("/api/month?year=2026&month=13").status_code == 400
+
+    cases = [
+        (
+            "/admin/regions",
+            {"name": "Northern", "csrf_token": csrf},
+            409,
+        ),
+        (
+            "/admin/tracks",
+            {
+                "name": "Ellerslie",
+                "region_id": str(region_id),
+                "display_colour": "#123456",
+                "csrf_token": csrf,
+            },
+            409,
+        ),
+        (
+            "/manage/catalog/groups",
+            {"name": "OB Crew", "csrf_token": csrf},
+            409,
+        ),
+        (
+            "/admin/positions",
+            {"name": "CCU", "crew_group_id": str(group_id), "csrf_token": csrf},
+            409,
+        ),
+        (
+            "/admin/users",
+            {
+                "display_name": "Duplicate",
+                "email": "duplicate@example.com",
+                "credential": "123456",
+                "role": "EMPLOYEE",
+                "region_id": str(region_id),
+                "person_id": "",
+                "csrf_token": csrf,
+            },
+            409,
+        ),
+        (
+            "/admin/users",
+            {
+                "display_name": "Already Linked",
+                "email": "new-linked@example.com",
+                "credential": "123456",
+                "role": "EMPLOYEE",
+                "region_id": str(region_id),
+                "person_id": str(person_id),
+                "csrf_token": csrf,
+            },
+            409,
+        ),
+        (
+            "/admin/positions",
+            {"name": "Director", "crew_group_id": "not-a-uuid", "csrf_token": csrf},
+            400,
+        ),
+        (
+            "/admin/people",
+            {
+                "display_name": "Invalid Region",
+                "email": "",
+                "home_region_id": "not-a-uuid",
+                "csrf_token": csrf,
+            },
+            400,
+        ),
+        (
+            "/admin/tracks",
+            {
+                "name": "Missing Region Track",
+                "region_id": str(uuid.uuid4()),
+                "display_colour": "#123456",
+                "csrf_token": csrf,
+            },
+            400,
+        ),
+        (
+            "/admin/invitations",
+            {
+                "email": "invalid-reference@example.com",
+                "display_name": "Invalid Reference",
+                "role": "EMPLOYEE",
+                "region_id": "not-a-uuid",
+                "person_id": "",
+                "csrf_token": csrf,
+            },
+            400,
+        ),
+    ]
+    for path, data, expected in cases:
+        assert client.post(path, data=data, follow_redirects=False).status_code == expected
+
+    created = client.post(
+        "/admin/regions",
+        data={"name": "Central", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+
+
+def test_archived_catalog_targets_are_rejected(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        group = db.scalar(select(CrewGroup).where(CrewGroup.name == "OB Crew"))
+        assert group
+        group.lifecycle = "ARCHIVED"
+        group_id = group.id
+        db.commit()
+    client = TestClient(app, raise_server_exceptions=False)
+    csrf = _login(client, "admin@example.test", "99887766")
+    assert client.post(
+        "/admin/positions",
+        data={"name": "Archived Target", "crew_group_id": str(group_id), "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 400
+    assert client.post(
+        "/admin/users",
+        data={
+            "display_name": "Bad Region",
+            "email": "bad-region@example.com",
+            "credential": "123456",
+            "role": "EMPLOYEE",
+            "region_id": str(uuid.uuid4()),
+            "person_id": "",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    ).status_code == 400
+    assert client.post(
+        "/manage/crew",
+        data={
+            "display_name": "Bad Region",
+            "email": "",
+            "region_id": str(uuid.uuid4()),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    ).status_code == 400
+
+
 def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, _position_id, _person_id) = routed_db
     admin = TestClient(app)
@@ -157,6 +315,14 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
     )
     assert toggled.status_code == 303
     assert "Public account requests are currently closed" not in public.get("/signup").text
+    assert public.post(
+        "/signup",
+        data={
+            "display_name": "Invalid Region",
+            "email": "invalid-region@example.com",
+            "requested_region_id": "not-a-uuid",
+        },
+    ).status_code == 400
     submitted = public.post(
         "/signup",
         data={

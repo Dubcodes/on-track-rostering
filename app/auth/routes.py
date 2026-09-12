@@ -38,6 +38,7 @@ from app.auth.service import (
 from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.forms import optional_uuid
 from app.identity.models import SignupRequest, TrustedDevice, User, WebAuthnChallenge
 from app.web import context, templates
 
@@ -245,9 +246,7 @@ def signup(
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
         raise HTTPException(400, "Enter your name")
-    import uuid
-
-    region_id = uuid.UUID(requested_region_id) if requested_region_id else None
+    region_id = optional_uuid(requested_region_id, "region")
     if region_id:
         requested_region = db.get(Region, region_id)
         if not requested_region or requested_region.lifecycle != "ACTIVE":

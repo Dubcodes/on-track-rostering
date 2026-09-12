@@ -17,9 +17,9 @@ This inventory maps the delivered foundation to code, migrations, automated evid
 | Offline | Per-user upcoming/own-Day cache, CSRF-free generated HTML, cache-backed timestamp, cross-user deletion, cross-month today-plus-three prefetch | service worker and employee JSON routes | Offline contract and route tests; physical offline revocation remains impossible |
 | Notifications | Transactional outbox, encrypted subscriptions, prior/new audience union, deterministic reminders, skip-locked claims/leases, retry/deactivate | `app/notifications`, `python -m app.cli deliver-notifications` | Fixed-time/delivery tests; claim concurrency is PostgreSQL-only; real provider pending |
 | Regional administration | Manager tracks/colours and scoped accounts; Admin region policy/lifecycle and global groups/positions | `app/catalog/routes.py`, `app/accounts` | Regional authority and directory privacy route tests |
-| Schema | Append-only migrations through credential eligibility and notification claims; theme, holiday geography, and reminder columns originate in the foundation schema | `migrations/versions` | PostgreSQL-dialect SQL generation passed; current execution pending locally |
-| Responsive UI | Server-rendered Employee/Manager/Viewer/Admin paths at four target widths, with theme/colour/console/picker assertions | templates/static CSS, `tests/browser` | 4 local Chromium tests passed using disposable SQLite; this is not PostgreSQL qualification |
-| Deployment | Separate PostgreSQL 17 Compose/Portainer artifacts and migration-before-app startup | `compose.yaml`, deployment scripts/docs | Static/image checks in CI only; no local Docker execution |
+| Schema | Append-only migrations through operational settings; theme, holiday geography, reminder, branding, and operational-policy columns originate in the migration chain | `migrations/versions` | PostgreSQL 17.6 chain and repeated upgrade passed in CI; staging initialized successfully; local execution remains pending |
+| Responsive UI | Server-rendered Employee/Manager/Viewer/Admin paths at four target widths, with theme/colour/console/picker assertions | templates/static CSS, `tests/browser` | 6 exact-head CI Playwright cases passed; real-device matrix remains pending |
+| Deployment | Separate PostgreSQL 17 production/staging Compose artifacts, migration-before-app startup, and internal-only staging app/database networking | Compose files, deployment scripts/docs | Real isolated HTTPS staging is running; initial login/navigation smoke passed; full staging qualification remains pending |
 
 ## Migration chain additions in this completion pass
 
@@ -30,7 +30,7 @@ This inventory maps the delivered foundation to code, migrations, automated evid
 
 ## PostgreSQL-only assertions
 
-The PostgreSQL suite deliberately covers simultaneous publication, transactional outbox rollback, simultaneous pending-grant activation, partial/unique identity and application constraints, stale-draft behavior during decline, and concurrent notification claims/expired-lease recovery. These are not reported as passed from the local SQLite suite.
+The PostgreSQL suite deliberately covers simultaneous first-draft creation, stale detail/assignment mutations, stale editor state after Publish, exact lock-version conflicts, simultaneous publication, transactional outbox rollback, simultaneous pending-grant activation, partial/unique identity and application constraints, stale-draft behavior during decline, and concurrent notification claims/expired-lease recovery. These are not reported as passed from the local SQLite suite.
 
 ## Independent review items
 

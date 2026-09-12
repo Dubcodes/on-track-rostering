@@ -33,8 +33,6 @@ services:
       ONTRACK_WEBAUTHN_RP_ID: ${STAGING_ONTRACK_WEBAUTHN_RP_ID:?Set the staging RP ID}
       ONTRACK_WEBAUTHN_ORIGIN: ${STAGING_ONTRACK_WEBAUTHN_ORIGIN:?Set the exact staging HTTPS origin}
       TZ: ${TZ:-Pacific/Auckland}
-    ports:
-      - "${STAGING_ONTRACK_HOST_PORT:-18080}:8000"
     depends_on:
       staging_db:
         condition: service_healthy

@@ -76,6 +76,9 @@ def create_workday(
     title: str,
     actor_user_id: uuid.UUID,
 ) -> Workday:
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != "ACTIVE":
+        raise ValueError("Select an active region.")
     track_name, track_colour = _validated_track(db, track_id, region_id)
     workday = Workday(region_id=region_id, category=category, created_by_user_id=actor_user_id)
     db.add(workday)

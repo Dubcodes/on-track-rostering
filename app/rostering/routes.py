@@ -277,10 +277,10 @@ def save_details(
     draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
     if not draft:
         raise HTTPException(409, "Open the editor again to create a draft")
-    count = int(race_count) if race_count else None
-    if count is not None and not 0 <= count <= 99:
-        raise HTTPException(400, "Race count must be between 0 and 99")
     try:
+        count = int(race_count) if race_count else None
+        if count is not None and not 0 <= count <= 99:
+            raise ValueError("Race count must be between 0 and 99")
         update_draft_details(
             db,
             workday_id=workday.id,

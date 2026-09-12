@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.audit.service import record_audit
 from app.auth.policy import Actor, can_administer_person, can_administer_user, can_grant_role
 from app.auth.security import credential_error, hash_credential, token_hash
+from app.catalog.models import Region
 from app.core.enums import Role
 from app.core.time import utcnow
 from app.identity.models import (
@@ -48,16 +49,24 @@ def create_invitation(
     commit: bool = True,
 ) -> tuple[Invitation, str]:
     email = validated_email(email)
+    clean_name = display_name.strip()
+    if not 2 <= len(clean_name) <= 120:
+        raise ValueError("Display name must be between 2 and 120 characters.")
     if role not in {Role.CONTRACTOR.value, Role.EMPLOYEE.value, Role.SUB_MANAGER.value}:
         raise ValueError("Invitations may only grant Contractor, Employee, or Sub-Manager access.")
     if db.scalar(select(User.id).where(User.email == email)):
         raise ValueError("An account already uses that email.")
     if role != Role.ADMIN.value and region_id is None:
         raise ValueError("A region is required for this invitation.")
+    region = db.get(Region, region_id) if region_id else None
+    if region_id and (not region or region.lifecycle != "ACTIVE"):
+        raise ValueError("Select an active region for this invitation.")
     if person_id:
         person = db.get(Person, person_id)
         if not person:
             raise ValueError("The selected crew identity does not exist.")
+        if person.lifecycle != "ACTIVE":
+            raise ValueError("The selected crew identity is archived.")
         if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person_id)):
             raise ValueError("The selected crew identity is already linked to an account.")
     now = utcnow()
@@ -74,7 +83,7 @@ def create_invitation(
     invite = Invitation(
         token_hash=token_hash(raw),
         email=email,
-        display_name=display_name.strip(),
+        display_name=clean_name,
         person_id=person_id,
         role=role,
         region_id=region_id,
@@ -144,6 +153,9 @@ def grant_role(
     role: str,
     region_id: uuid.UUID | None,
 ) -> RoleGrant:
+    region = db.get(Region, region_id) if region_id else None
+    if region_id and (not region or region.lifecycle != "ACTIVE"):
+        raise ValueError("Select an active region for this role grant.")
     if not can_grant_role(actor, role, region_id):
         raise PermissionError("You cannot grant that role and scope.")
     if not actor.is_admin and region_id is not None and not can_administer_user(
@@ -234,6 +246,9 @@ def approve_signup(
 ) -> str:
     if signup.status != "PENDING":
         raise ValueError("Signup request is no longer pending.")
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != "ACTIVE":
+        raise ValueError("Select an active region for this signup approval.")
     if role not in {Role.EMPLOYEE.value, Role.CONTRACTOR.value}:
         raise ValueError("Signup approval may only grant Employee or Contractor access.")
     if not (actor.is_admin or Role.MANAGER.value in actor.roles_for(region_id)):

@@ -117,7 +117,13 @@ def resolve_request(request: Request) -> ResolvedRequest:
 
 
 def same_origin(request: Request) -> bool:
-    if request.headers.get("sec-fetch-site", "same-origin").lower() == "cross-site":
+    fetch_site_values = request.headers.getlist("sec-fetch-site")
+    if len(fetch_site_values) > 1 or any("," in value for value in fetch_site_values):
         return False
-    origin = request.headers.get("origin", "").strip()
-    return not origin or normalize_origin(origin) == resolve_request(request).origin
+    if fetch_site_values and fetch_site_values[0].strip().lower() == "cross-site":
+        return False
+    origin_values = request.headers.getlist("origin")
+    if not origin_values:
+        return True
+    origin = _single_header(request, "origin")
+    return bool(origin and normalize_origin(origin) == resolve_request(request).origin)

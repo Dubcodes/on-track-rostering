@@ -1,48 +1,48 @@
-# Build status — 2026-09-12
+# Build status — 2026-09-13
 
 ## Current result
 
-The Foundation production-readiness hardening pass is complete. Implementation commit `8f988dc00c9c10299476b526ecfc597d843030c3`, browser-gate fixes `eae21f1e0b375e38421342cd960e791d754ae939` and `510266c090e3bb392c03a6b47c6a882be0eb451b`, and isolated staging-configuration commit `aefa1a86a3b1395aaa43fc5dc6d68741a1fc85cf` preserve the settled roster architecture while closing the reviewed security, data-integrity, notification, offline, settings, privacy, calendar, and builder-performance issues. Exact-head GitHub release-gate run `34663670073` passed PostgreSQL 17 migrations, 71 PostgreSQL-backed tests with no skips, six Playwright cases, dependency audit, production and staging Compose validation, and production image build. Local PostgreSQL execution remains pending because no disposable `ONTRACK_TEST_DATABASE_URL` or `DATABASE_URL` is configured. Docker was not invoked locally. No production or staging deployment is claimed by this build evidence.
+The Foundation is running in a real, private, isolated staging deployment at `https://ontrackrostering.dubcodesmedia.com`. The visibly deployed build is `ee8af0d5dcd215c6df02f113ef8c8bf43ee936f2`. PostgreSQL initialized successfully, the bootstrap Admin was created through the CLI, HTTPS access through the standard Cloudflare Tunnel works, password/PIN login succeeds, the secure authenticated session persists across navigation, and `/month` and `/settings` render against PostgreSQL-backed data.
 
-## Implemented
+This is verified deployment smoke evidence, not a completed functional staging qualification and not production-readiness approval. The operator matrix in `docs/STAGING_QUALIFICATION.md` records the remaining real-browser, role, workflow, restart, privacy, offline, notification, log, and recovery checks. Any source revision newer than the visibly deployed SHA still requires its own exact-head CI pass and a manual staging redeploy before its behavior is live.
 
-- Standalone FastAPI/Jinja/SQLAlchemy application, append-only Alembic chain, PostgreSQL 17 production target, retained production Compose stack, and no Re-Deputy runtime dependency.
-- Users and separately rosterable People, scoped capability roles, immutable published Workday snapshots, one optimistic-versioned shared Manager draft, PostgreSQL row locks, stale-mutation conflicts, structured Preview, and atomic publication.
-- Invitation secrets now use `/invite#token=...`, are removed from browser history, reach a fixed activation endpoint only in the POST body, remain hash-only in storage, and are revealed once without redirect/query leakage.
-- Central self-decline policy permits linked Employee/Contractor self-service only before the effective Pacific/Auckland assignment start; Viewer/Manager-only, started, unknown-start-today, historical, and stale-publication mutations are denied.
-- Viewer write actions are separated from management-detail reads, while directly assigned event-only/Contractor users receive no global Human Change history.
-- Reminder delivery revalidates the current publication, active user link, and current assignment; superseded, removed, or more-than-15-minutes-late reminders terminate without delivery. PostgreSQL conflict-safe reminder insertion and one-at-a-time skip-locked notification claims preserve multi-worker safety without holding transactions during Web Push.
-- Per-user offline storage renders a specific cached personal Day with category, race timings, Day note, own assignments/times/notes, and actual device `cached_at`; it exposes no forms, unrelated crew, management data, or global history.
-- Settings reauthentication and current-credential verification reuse isolated account/IP throttling with success reset.
-- Builder eligibility hints bulk-load capability signals once and preserve Manager-block, Employee-opt-out, explicit allow, worked-history, then unknown precedence; manual Manager assignment remains available.
-- Persisted singleton `system_settings.public_signup_enabled` is Admin-only, CSRF-protected, audited, defaults false, and takes effect on the next request. The environment toggle was removed.
-- `system_branding` remains exclusively product identity; no competing operational-settings source was introduced. WebAuthn RP ID/origin remain deployment security identities, while the stale RP display-name environment option was removed.
-- Month weekly totals cover every displayed grid day, empty regional holiday cells use the linked Person's home-region geography, and non-Race-Day builder/Day wording no longer displays race-only fields or warnings.
-- Conservative retention work is documented in `docs/RETENTION_PLAN.md`; no automatic or broad data deletion was introduced.
-- `compose.staging.yaml` and `.env.staging.example` define a separately named private stack, PostgreSQL database/volume/network, host port, secrets namespace, HTTPS origin, and WebAuthn RP identity. CI validates this configuration, but no staging target or credentials are assumed.
+## Staging findings closed in `ee8af0d`
 
-## Qualification evidence
+Real staging exposed two integration defects. Standard Cloudflare Tunnel requests preserved the public `Host` and supplied `X-Forwarded-For`/`X-Forwarded-Proto` without requiring `X-Forwarded-Host`; the application had incorrectly required all four headers. Pydantic Settings also attempted JSON decoding of tuple-valued environment fields before the intended comma-separated validator ran.
 
-- Ruff and Python compile: passed for application, migrations, scripts, and tests.
-- Local deterministic pytest: **60 passed**. Local PostgreSQL suite: **11 skipped/pending** solely because neither PostgreSQL test URL is configured; SQLite was not presented as PostgreSQL qualification.
-- Local Playwright: **6 passed**—responsive coverage at 1280, 430, 375, and 320 pixels plus physically offline personal-Day rendering at 1280 and 430 against a disposable narrow browser fixture.
-- JavaScript syntax: passed for application, invitation, passkey, notification, and service-worker scripts.
-- Alembic PostgreSQL-dialect SQL generation through `e72a19c5f40b`: passed. Local `pip check`, `pip-audit --local`, `git diff --check`, and secret/stale-config scans passed.
-- Exact-head GitHub Actions for `aefa1a86a3b1395aaa43fc5dc6d68741a1fc85cf`: release-gate run `34663670073` passed. PostgreSQL 17 applied the full migration chain through `e72a19c5f40b`, and the second `alembic upgrade head` completed cleanly. The full PostgreSQL-backed suite reported **71 passed, 0 skipped**, including simultaneous first-draft creation, stale detail/assignment mutation, stale editor after Publish, exact `lock_version` conflict behavior, concurrent reminder generation, and concurrent notification claiming.
-- The same exact-head run reported **6 Playwright tests passed**, including responsive widths 1280/430/375/320 and real offline Day cases at 1280/430. `pip check`, `pip-audit --local`, JavaScript syntax, production Compose validation, isolated staging Compose validation, and production image build all passed.
+`ee8af0d` permits a single valid `X-Forwarded-Host` when supplied and otherwise uses the single ordinary `Host`, only after the direct peer matches an explicit trusted-proxy CIDR and the forwarded client/protocol values validate. Ambiguous, comma-joined, malformed, and port-conflicting forwarding still fails safely. `NoDecode` now preserves raw comma-separated allowed-host and proxy-CIDR environment values for typed tuple validation.
+
+Exact-head GitHub release-gate run `34715787713` passed for `ee8af0d`: PostgreSQL 17.6 applied the full Alembic chain through `e72a19c5f40b`, a second `alembic upgrade head` was clean, the PostgreSQL-backed suite reported **82 passed with no skips**, and all **6 Playwright tests** passed. Python compile, Ruff, PostgreSQL-dialect SQL generation, `pip check`, `pip-audit --local`, JavaScript syntax, production/staging Compose validation, and the production image build also passed.
+
+## Foundation delivered
+
+- Standalone FastAPI/Jinja/SQLAlchemy application with PostgreSQL 17, append-only Alembic migrations, and no Re-Deputy runtime dependency.
+- Separate Users and rosterable People; scoped capability roles; final-Admin protection; pending-grant activation; trusted-device, fresh-auth, passkey, and optional TOTP controls.
+- Stable Workday identity, immutable published snapshots, private optimistic-versioned shared Manager drafts, structured Preview/diff/history, and atomic Publish.
+- Purpose-built employee Month/Day reads, event-only Contractor and private-note filtering, regional Crew View, Open-position applications, policy-driven immutable decline, and current-publication hours.
+- User-namespaced read-only offline data and an idempotent notification outbox/delivery worker separated from roster transactions.
+- Persisted Admin-only global branding and public-signup policy.
+- Separate production and staging deployment artifacts. The live staging app and database use their own service names, volume, network, credentials, and data.
+
+## Current automated evidence boundaries
+
+- CI PostgreSQL coverage includes simultaneous first-draft creation, stale detail and assignment mutations, stale editor state after Publish, exact `lock_version` conflict behavior, concurrent Publish/outbox behavior, constraints, decline immutability, and notification claiming.
+- CI Playwright covers 1280/430/375/320 layouts and offline personal-Day cases, but automated browser evidence is not a substitute for the real-device/operator matrix.
+- Local PostgreSQL remains pending when no disposable `ONTRACK_TEST_DATABASE_URL` is configured. SQLite deterministic tests are not presented as PostgreSQL qualification.
+- Docker is not run on the Windows development machine. Compose and image evidence comes from GitHub CI.
 
 ## Explicitly pending or deferred
 
-- Private staging deployment and smoke/log qualification are pending because no separate Portainer stack, host/domain, or staging credentials were discoverable. The minimum isolated Compose/environment configuration is prepared; production deployment is not authorized.
-- Local real-PostgreSQL execution is pending; no native/local or explicitly configured remote instance was available. The application was not switched to SQLite.
-- Real passkey hardware/browser ceremony, real Web Push provider delivery, and recovery codes remain pending. Production reminder delivery depends on staging/production VAPID and a durable scheduler.
-- Operations/Travel, Vehicles, Accommodation, racing-provider ingest, explicit reschedule/abandonment workflow, management-only crew notes, authorized credential reset, data export/retention administration UI, and configurable logo remain deferred.
-- Production backup/restore rehearsal and production monitoring remain deployment-operator work.
+- Full real functional staging qualification is pending. In particular: real passkey and TOTP ceremonies; the complete role/direct-request matrix; roster lifecycle, stale-write, Open-position, decline, privacy, hours, physical offline, responsive-device, restart/persistence, and log review.
+- Real Web Push delivery remains pending unless staging-specific VAPID credentials are deliberately configured. Reminder delivery requires `python -m app.cli deliver-notifications` under a durable server-side scheduler.
+- Recovery codes are not implemented.
+- Production backup/restore rehearsal, production secrets/hostname/RP identity/VAPID, monitoring, scheduler, release controls, and immutable release artifact remain production-promotion work.
+- Operations/Travel, Accommodation, provider ingest, full vehicle operations, abandoned/rescheduled workflow, management-only crew-note expansion, logo upload, and major recovery redesign remain outside the current Foundation pass.
 
 ## Known architecture constraint
 
-Each Workday owns one shared `current_draft_revision_id`; independent per-Manager draft branches are not represented. Simultaneous first-edit creation resolves through the locked Workday row, and every shared-draft mutation rejects a stale `lock_version`, so this deliberate constraint does not permit silent last-writer overwrites. Stale drafts detached by an authoritative decline remain preserved for recovery.
+Each Workday owns one shared `current_draft_revision_id`; independent per-Manager branches are not represented. Row locking plus exact optimistic versions prevent silent last-writer overwrites. Stale drafts detached by authoritative decline remain preserved for recovery.
 
 ## Release rule
 
-A releasable revision requires a clean local gate (with unavailable PostgreSQL checks explicitly pending), a successful exact-head GitHub PostgreSQL/browser/Compose/image workflow, no committed credentials or private keys, and no force push. A green CI run does not itself prove a successful Portainer deployment or private-staging qualification.
+During active development the isolated staging stack may intentionally follow `main`, but each redeploy follows local checks and a successful exact-head GitHub gate. Production promotion is a separate freeze: complete the real staging matrix, select one known-green exact SHA, and use an immutable tag and/or immutable image. A green CI run alone does not prove a live redeploy or production readiness.

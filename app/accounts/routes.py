@@ -13,6 +13,7 @@ from app.auth.service import approve_signup, grant_role, revoke_role_grant
 from app.catalog.models import Region
 from app.core.database import get_db
 from app.core.enums import Role
+from app.core.forms import optional_uuid
 from app.core.time import utcnow
 from app.identity.models import Person, RoleGrant, SignupRequest, User, UserPersonLink
 from app.web import context, templates
@@ -113,7 +114,7 @@ def approve_signup_request(
             actor=request.state.actor,
             role=role,
             region_id=region_id,
-            person_id=uuid.UUID(person_id) if person_id else None,
+            person_id=optional_uuid(person_id, "crew identity"),
             create_person=person_action == "create",
         )
     except PermissionError as exc:
@@ -171,7 +172,7 @@ def create_role_grant(
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404)
-    scoped_region = uuid.UUID(region_id) if region_id else None
+    scoped_region = optional_uuid(region_id, "region")
     try:
         grant_role(
             db,

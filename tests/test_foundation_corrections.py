@@ -191,6 +191,16 @@ def test_proxy_origin_rejects_mismatches_and_host_ambiguity(monkeypatch) -> None
     assert not resolve_request(comma_host).forwarded
     assert not same_origin(comma_host)
 
+    duplicate_origin = _request(
+        peer="10.0.0.8",
+        headers=[
+            *forwarded,
+            (b"origin", b"https://public.example:8443"),
+            (b"origin", b"https://attacker.example"),
+        ],
+    )
+    assert not same_origin(duplicate_origin)
+
 
 def test_untrusted_peer_ignores_forged_forwarding(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from app.auth import network

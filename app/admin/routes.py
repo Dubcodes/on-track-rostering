@@ -22,7 +22,8 @@ from app.branding.service import update_branding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.catalog.service import close_colour_warnings
 from app.core.database import get_db
-from app.core.enums import Role
+from app.core.enums import Lifecycle, Role
+from app.core.forms import controlled_integrity, optional_uuid
 from app.core.time import utcnow
 from app.identity.models import (
     Invitation,
@@ -48,6 +49,21 @@ def _email_or_400(value: str) -> str:
         return validated_email(value)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+def _name_or_400(value: str, label: str, maximum: int) -> str:
+    clean = value.strip()
+    if not 2 <= len(clean) <= maximum:
+        raise HTTPException(400, f"{label} must be between 2 and {maximum} characters.")
+    return clean
+
+
+def _active_reference(db: Session, model, raw_id: str, label: str):  # type: ignore[no-untyped-def]
+    reference_id = optional_uuid(raw_id, label)
+    row = db.get(model, reference_id) if reference_id else None
+    if not row or row.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, f"Select an active {label}.")
+    return row
 
 
 @router.get("", response_class=HTMLResponse)
@@ -154,11 +170,12 @@ def create_region(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    region = Region(name=name.strip()[:100])
-    db.add(region)
-    db.flush()
-    record_audit(db, "region.created", "region", region.id, request.state.user.id, region_id=region.id)
-    db.commit()
+    region = Region(name=_name_or_400(name, "Region name", 100))
+    with controlled_integrity(db, "A region already uses that name."):
+        db.add(region)
+        db.flush()
+        record_audit(db, "region.created", "region", region.id, request.state.user.id, region_id=region.id)
+        db.commit()
     return RedirectResponse("/admin#regions", status_code=303)
 
 
@@ -175,19 +192,27 @@ def create_track(
     verify_csrf(request, csrf_token)
     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", display_colour):
         raise HTTPException(400, "Track colour must be a six-digit hex colour")
-    track = Track(name=name.strip()[:120], region_id=region_id, display_colour=display_colour.upper())
-    db.add(track)
-    db.flush()
-    record_audit(
-        db,
-        "track.created",
-        "track",
-        track.id,
-        request.state.user.id,
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active region.")
+    track = Track(
+        name=_name_or_400(name, "Track name", 120),
         region_id=region_id,
-        detail={"name": track.name, "colour": track.display_colour},
+        display_colour=display_colour.upper(),
     )
-    db.commit()
+    with controlled_integrity(db, "A track in that region already uses that name."):
+        db.add(track)
+        db.flush()
+        record_audit(
+            db,
+            "track.created",
+            "track",
+            track.id,
+            request.state.user.id,
+            region_id=region_id,
+            detail={"name": track.name, "colour": track.display_colour},
+        )
+        db.commit()
     return RedirectResponse("/admin#tracks", status_code=303)
 
 
@@ -201,20 +226,31 @@ def create_position(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    group = _active_reference(db, CrewGroup, crew_group_id, "crew group") if crew_group_id else None
     position = BasePosition(
-        name=name.strip()[:100], crew_group_id=uuid.UUID(crew_group_id) if crew_group_id else None
+        name=_name_or_400(name, "Position name", 100),
+        crew_group_id=group.id if group else None,
     )
-    db.add(position)
-    db.flush()
-    record_audit(
-        db,
-        "position.created",
-        "base_position",
-        position.id,
-        request.state.user.id,
-        detail={"name": position.name},
+    duplicate = db.scalar(
+        select(BasePosition.id).where(
+            BasePosition.name == position.name,
+            BasePosition.crew_group_id == position.crew_group_id,
+        )
     )
-    db.commit()
+    if duplicate:
+        raise HTTPException(409, "A base position in that crew group already uses that name.")
+    with controlled_integrity(db, "A base position in that crew group already uses that name."):
+        db.add(position)
+        db.flush()
+        record_audit(
+            db,
+            "position.created",
+            "base_position",
+            position.id,
+            request.state.user.id,
+            detail={"name": position.name},
+        )
+        db.commit()
     return RedirectResponse("/admin#positions", status_code=303)
 
 
@@ -229,10 +265,11 @@ def create_person(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    region = _active_reference(db, Region, home_region_id, "home region") if home_region_id else None
     person = Person(
-        display_name=display_name.strip()[:120],
+        display_name=_name_or_400(display_name, "Person name", 120),
         email=_email_or_400(email) if email else None,
-        home_region_id=uuid.UUID(home_region_id) if home_region_id else None,
+        home_region_id=region.id if region else None,
     )
     db.add(person)
     db.flush()
@@ -268,37 +305,48 @@ def create_user(
         raise HTTPException(400, "Invalid role")
     if error := credential_error(credential, role):
         raise HTTPException(400, error)
-    scoped_region = uuid.UUID(region_id) if region_id else None
+    scoped_region = optional_uuid(region_id, "region")
     if role != Role.ADMIN.value and scoped_region is None:
         raise HTTPException(400, "A region is required for this role")
     if role == Role.ADMIN.value and scoped_region is not None:
         raise HTTPException(400, "Admin is global and cannot carry a region scope")
+    if scoped_region:
+        region = db.get(Region, scoped_region)
+        if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+            raise HTTPException(400, "Select an active region.")
+    user_email = _email_or_400(email)
+    if db.scalar(select(User.id).where(User.email == user_email)):
+        raise HTTPException(409, "An account already uses that email.")
+    person = _active_reference(db, Person, person_id, "crew identity") if person_id else None
+    if person and db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
+        raise HTTPException(409, "That crew identity is already linked to an account.")
     user = User(
-        email=_email_or_400(email),
-        display_name=display_name.strip()[:120],
+        email=user_email,
+        display_name=_name_or_400(display_name, "Account name", 120),
         credential_hash=hash_credential(credential),
         credential_kind="pin" if credential.isdigit() else "password",
         credential_admin_eligible=not bool(credential_error(credential, Role.ADMIN.value)),
     )
-    db.add(user)
-    db.flush()
-    if person_id:
-        db.add(UserPersonLink(user_id=user.id, person_id=uuid.UUID(person_id)))
-    db.add(
-        RoleGrant(
-            user_id=user.id, role=role, region_id=scoped_region, granted_by_user_id=request.state.user.id
+    with controlled_integrity(db, "That email or crew identity is already assigned to an account."):
+        db.add(user)
+        db.flush()
+        if person:
+            db.add(UserPersonLink(user_id=user.id, person_id=person.id))
+        db.add(
+            RoleGrant(
+                user_id=user.id, role=role, region_id=scoped_region, granted_by_user_id=request.state.user.id
+            )
         )
-    )
-    record_audit(
-        db,
-        "user.created",
-        "user",
-        user.id,
-        request.state.user.id,
-        region_id=scoped_region,
-        detail={"role": role},
-    )
-    db.commit()
+        record_audit(
+            db,
+            "user.created",
+            "user",
+            user.id,
+            request.state.user.id,
+            region_id=scoped_region,
+            detail={"role": role},
+        )
+        db.commit()
     return RedirectResponse("/admin#users", status_code=303)
 
 
@@ -321,9 +369,9 @@ def invite_user(
             db,
             email=email,
             display_name=display_name,
-            person_id=uuid.UUID(person_id) if person_id else None,
+            person_id=optional_uuid(person_id, "crew identity"),
             role=role,
-            region_id=uuid.UUID(region_id) if region_id else None,
+            region_id=optional_uuid(region_id, "region"),
             actor_user_id=request.state.user.id,
         )
     except ValueError as exc:

@@ -76,6 +76,8 @@ def _verify_fresh_credential(
 
 
 def _month_bounds(year: int, month: int) -> tuple[date, date]:
+    if not 1 <= month <= 12 or not 2020 <= year <= 2100:
+        raise HTTPException(400, "Invalid month")
     start = date(year, month, 1)
     return start, date(year + (month == 12), 1 if month == 12 else month + 1, 1)
 
@@ -93,8 +95,6 @@ def month_view(
 ):
     today = local_today()
     year, month = year or today.year, month or today.month
-    if not 1 <= month <= 12 or not 2020 <= year <= 2100:
-        raise HTTPException(400, "Invalid month")
     start, end = _month_bounds(year, month)
     items = month_items(db, request.state.actor, start, end)
     by_date: dict[date, list[dict[str, object]]] = {}

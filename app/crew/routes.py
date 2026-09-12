@@ -110,6 +110,9 @@ def create_crew_member(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active region.")
     if not can_administer_region(request.state.actor, region_id):
         raise HTTPException(403, "Regional administration authority required.")
     clean_name = display_name.strip()
