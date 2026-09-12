@@ -20,7 +20,7 @@ from app.auth.policy import (
 from app.auth.security import create_device, hash_credential, resolve_device
 from app.auth.service import activate_pending_grants, approve_signup
 from app.catalog.models import BasePosition, Region
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.enums import Role
 from app.core.holidays import holiday_for_date
 from app.core.time import local_today
@@ -103,6 +103,148 @@ def test_trusted_proxy_resolution_and_same_origin(monkeypatch) -> None:  # type:
         ],
     )
     assert not resolve_request(duplicate_port).forwarded
+
+
+def test_trusted_proxy_uses_public_host_when_forwarded_host_is_absent(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app.auth import network
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ("192.168.64.0/20",)})
+    monkeypatch.setattr(network, "get_settings", lambda: settings)
+    headers = [
+        (b"host", b"ontrackrostering.dubcodesmedia.com"),
+        (b"x-forwarded-for", b"203.0.113.7"),
+        (b"x-forwarded-proto", b"https"),
+        (b"origin", b"https://ontrackrostering.dubcodesmedia.com"),
+    ]
+    request = _request(peer="192.168.64.5", headers=headers)
+    assert resolve_request(request).origin == ("https", "ontrackrostering.dubcodesmedia.com", 443)
+    assert resolve_request(request).forwarded
+    assert same_origin(request)
+
+
+@pytest.mark.parametrize(
+    ("changed_headers", "origin"),
+    [
+        ([(b"x-forwarded-proto", b"https,http")], b"https://ontrackrostering.dubcodesmedia.com"),
+        ([(b"x-forwarded-proto", b"https"), (b"x-forwarded-proto", b"http")], b"https://ontrackrostering.dubcodesmedia.com"),
+        ([(b"x-forwarded-host", b"good.example,bad.example")], b"https://good.example"),
+        ([(b"x-forwarded-host", b"good.example"), (b"x-forwarded-host", b"bad.example")], b"https://good.example"),
+        ([(b"x-forwarded-host", b"public.example:444"), (b"x-forwarded-port", b"443")], b"https://public.example:444"),
+    ],
+)
+def test_trusted_proxy_rejects_ambiguous_or_conflicting_forwarding(
+    monkeypatch, changed_headers: list[tuple[bytes, bytes]], origin: bytes
+) -> None:  # type: ignore[no-untyped-def]
+    from app.auth import network
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ("10.0.0.0/24",)})
+    monkeypatch.setattr(network, "get_settings", lambda: settings)
+    request = _request(
+        peer="10.0.0.8",
+        headers=[
+            (b"host", b"ontrackrostering.dubcodesmedia.com"),
+            (b"x-forwarded-for", b"203.0.113.7"),
+            *changed_headers,
+            (b"origin", origin),
+        ],
+    )
+    assert not resolve_request(request).forwarded
+    assert not same_origin(request)
+
+
+def test_proxy_origin_rejects_mismatches_and_host_ambiguity(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app.auth import network
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ("10.0.0.0/24",)})
+    monkeypatch.setattr(network, "get_settings", lambda: settings)
+    forwarded = [
+        (b"host", b"public.example:8443"),
+        (b"x-forwarded-for", b"203.0.113.7"),
+        (b"x-forwarded-proto", b"https"),
+    ]
+    assert same_origin(_request(peer="10.0.0.8", headers=[*forwarded, (b"origin", b"https://public.example:8443")]))
+    assert not same_origin(_request(peer="10.0.0.8", headers=[*forwarded, (b"origin", b"https://other.example:8443")]))
+    assert not same_origin(_request(peer="10.0.0.8", headers=[*forwarded, (b"origin", b"http://public.example:8443")]))
+
+    duplicate_host = _request(
+        peer="10.0.0.8",
+        headers=[
+            (b"host", b"public.example"),
+            (b"host", b"attacker.example"),
+            (b"x-forwarded-for", b"203.0.113.7"),
+            (b"x-forwarded-proto", b"https"),
+            (b"origin", b"https://public.example"),
+        ],
+    )
+    assert not resolve_request(duplicate_host).forwarded
+    assert not same_origin(duplicate_host)
+
+    comma_host = _request(
+        peer="10.0.0.8",
+        headers=[
+            (b"host", b"public.example,attacker.example"),
+            (b"x-forwarded-for", b"203.0.113.7"),
+            (b"x-forwarded-proto", b"https"),
+            (b"origin", b"https://public.example"),
+        ],
+    )
+    assert not resolve_request(comma_host).forwarded
+    assert not same_origin(comma_host)
+
+
+def test_untrusted_peer_ignores_forged_forwarding(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app.auth import network
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ("10.0.0.0/24",)})
+    monkeypatch.setattr(network, "get_settings", lambda: settings)
+    request = _request(
+        peer="198.51.100.9",
+        headers=[
+            (b"host", b"direct.example:8000"),
+            (b"x-forwarded-for", b"203.0.113.7"),
+            (b"x-forwarded-proto", b"https"),
+            (b"x-forwarded-host", b"forged.example"),
+            (b"origin", b"http://direct.example:8000"),
+        ],
+    )
+    resolved = resolve_request(request)
+    assert not resolved.forwarded
+    assert resolved.client_address == "198.51.100.9"
+    assert resolved.origin == ("http", "direct.example", 8000)
+    assert same_origin(request)
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected_hosts", "expected_cidrs"),
+    [
+        (
+            {
+                "ONTRACK_ALLOWED_HOSTS": "roster.example",
+                "ONTRACK_TRUSTED_PROXY_CIDRS": "192.168.64.0/20",
+            },
+            ("roster.example",),
+            ("192.168.64.0/20",),
+        ),
+        (
+            {
+                "ONTRACK_ALLOWED_HOSTS": "roster.example, admin.roster.example",
+                "ONTRACK_TRUSTED_PROXY_CIDRS": "127.0.0.1/32, 192.168.64.0/20",
+            },
+            ("roster.example", "admin.roster.example"),
+            ("127.0.0.1/32", "192.168.64.0/20"),
+        ),
+    ],
+)
+def test_settings_accept_csv_tuple_environment_values(
+    monkeypatch, environment: dict[str, str], expected_hosts: tuple[str, ...], expected_cidrs: tuple[str, ...]
+) -> None:  # type: ignore[no-untyped-def]
+    for name in ("ONTRACK_ALLOWED_HOSTS", "ONTRACK_TRUSTED_PROXY_CIDRS"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    settings = Settings(_env_file=None)
+    assert settings.allowed_hosts == expected_hosts
+    assert settings.trusted_proxy_cidrs == expected_cidrs
 
 
 def test_admin_activation_requires_admin_grade_primary_credential_and_invalidates_old_session(db) -> None:  # type: ignore[no-untyped-def]

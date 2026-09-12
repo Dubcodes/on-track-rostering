@@ -72,36 +72,44 @@ def _single_header(request: Request, name: str) -> str | None:
     return value if value and "," not in value else None
 
 
+def _request_origin(request: Request) -> tuple[str, str, int]:
+    scheme = request.url.scheme.lower()
+    default_port = 443 if scheme == "https" else 80
+    host = _single_header(request, "host")
+    direct = normalize_origin(f"{scheme}://{host}") if host else None
+    return direct or (scheme, "invalid", default_port)
+
+
 def resolve_request(request: Request) -> ResolvedRequest:
     peer = _ip(request.client.host if request.client else "") or "unknown"
-    direct = normalize_origin(str(request.base_url))
-    if direct is None:
-        direct = ("https" if request.url.scheme == "https" else "http", request.url.hostname or "invalid", request.url.port or (443 if request.url.scheme == "https" else 80))
+    direct = _request_origin(request)
     if not _trusted_peer(peer):
         return ResolvedRequest(peer, *direct, False)
 
     forwarded_for = _single_header(request, "x-forwarded-for")
     forwarded_proto = _single_header(request, "x-forwarded-proto")
-    forwarded_host = _single_header(request, "x-forwarded-host")
+    forwarded_host_values = request.headers.getlist("x-forwarded-host")
+    forwarded_host = _single_header(request, "x-forwarded-host") if forwarded_host_values else None
     forwarded_port_values = request.headers.getlist("x-forwarded-port")
-    if len(forwarded_port_values) > 1:
+    if (forwarded_host_values and forwarded_host is None) or len(forwarded_port_values) > 1:
         return ResolvedRequest(peer, *direct, False)
     forwarded_port = forwarded_port_values[0].strip() if forwarded_port_values else ""
     client = _ip(forwarded_for or "")
-    if not client or forwarded_proto not in {"http", "https"} or not forwarded_host:
+    external_host = forwarded_host or _single_header(request, "host")
+    if not client or forwarded_proto not in {"http", "https"} or not external_host:
         return ResolvedRequest(peer, *direct, False)
     if "," in forwarded_port or (forwarded_port and not forwarded_port.isdigit()):
         return ResolvedRequest(peer, *direct, False)
-    host_value = forwarded_host
+    host_value = external_host
     if forwarded_port:
         try:
-            existing_port = urlsplit(f"{forwarded_proto}://{forwarded_host}").port
+            existing_port = urlsplit(f"{forwarded_proto}://{external_host}").port
         except ValueError:
             return ResolvedRequest(peer, *direct, False)
         if existing_port is not None and existing_port != int(forwarded_port):
             return ResolvedRequest(peer, *direct, False)
         if existing_port is None:
-            host_value = f"{forwarded_host}:{forwarded_port}"
+            host_value = f"{external_host}:{forwarded_port}"
     external = normalize_origin(f"{forwarded_proto}://{host_value}")
     if external is None:
         return ResolvedRequest(peer, *direct, False)

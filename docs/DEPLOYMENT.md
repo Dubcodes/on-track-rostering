@@ -44,6 +44,8 @@ Copy the variable names from `.env.staging.example` into Portainer and replace e
 
 Set `STAGING_ONTRACK_BUILD_ID` to the tag's exact Git SHA. Terminate TLS at the private staging reverse proxy and retain `ONTRACK_COOKIE_SECURE=true`. The proxy hostname must equal `STAGING_ONTRACK_ALLOWED_HOSTS`; passkey testing additionally requires the exact HTTPS origin and matching staging RP ID.
 
+`STAGING_ONTRACK_ALLOWED_HOSTS` and `STAGING_ONTRACK_TRUSTED_PROXY_CIDRS` use comma-separated values, including when only one value is configured. Trust only the narrow proxy network that can connect directly to the app. A trusted proxy must send one valid `X-Forwarded-For` and `X-Forwarded-Proto`; it may send one `X-Forwarded-Host`, otherwise the app uses the single public `Host` header preserved by the proxy. Duplicate, comma-joined, malformed, or port-conflicting forwarding values are rejected. Never expose the app directly through a network included in the proxy allowlist.
+
 On first deployment, confirm the app startup migration reaches Alembic head, restart/redeploy once to prove the second upgrade is clean, then check `/health/live` and `/health/ready`. Create demo-only accounts with `python -m app.cli create-admin`; do not import staff data. Complete the documented role, invitation, branding, roster publish/republish, stale-write, decline, offline, authentication-throttle, and log-review smoke matrix before any production promotion request.
 
 ## Promotion recommendation

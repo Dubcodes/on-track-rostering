@@ -46,6 +46,28 @@ def test_public_login_and_liveness_routes_render(routed_db) -> None:  # type: ig
     assert client.get("/health/live").json() == {"status": "ok"}
 
 
+def test_login_post_accepts_trusted_proxy_without_forwarded_host(routed_db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app.auth import network
+    from app.core.config import get_settings
+
+    settings = get_settings().model_copy(update={"trusted_proxy_cidrs": ("192.168.64.0/20",)})
+    monkeypatch.setattr(network, "get_settings", lambda: settings)
+    client = TestClient(app, base_url="http://testserver", client=("192.168.64.5", 50000))
+    response = client.post(
+        "/login",
+        data={"email": "admin@example.test", "credential": "99887766", "next": "/month"},
+        headers={
+            "host": "testserver",
+            "origin": "https://testserver",
+            "x-forwarded-for": "203.0.113.7",
+            "x-forwarded-proto": "https",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/month"
+
+
 def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, _position_id, _person_id) = routed_db
     admin = TestClient(app)

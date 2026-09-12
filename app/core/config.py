@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from pydantic import AliasChoices, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -17,8 +18,8 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="development-only-change-this-secret-key", min_length=32)
     credential_pepper: str = ""
     cookie_secure: bool = False
-    allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "testserver")
-    trusted_proxy_cidrs: tuple[str, ...] = ("127.0.0.1/32",)
+    allowed_hosts: Annotated[tuple[str, ...], NoDecode] = ("localhost", "127.0.0.1", "testserver")
+    trusted_proxy_cidrs: Annotated[tuple[str, ...], NoDecode] = ("127.0.0.1/32",)
     trusted_device_days_standard: int = Field(default=90, ge=1, le=365)
     trusted_device_days_elevated: int = Field(default=14, ge=1, le=90)
     trusted_device_limit: int = Field(default=10, ge=1, le=100)
