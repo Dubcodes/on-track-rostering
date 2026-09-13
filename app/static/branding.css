@@ -21,6 +21,19 @@
   .brand {
     max-width: calc(100% - 100px);
   }
+
+  .site-header.authenticated .brand {
+    max-width: none;
+    white-space: nowrap;
+  }
+
+  .site-header.authenticated .brand > strong:first-child {
+    display: none;
+  }
+
+  .site-header.authenticated .brand .brand-compact {
+    display: block;
+  }
 }
 
 @media (max-width: 360px) {

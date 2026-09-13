@@ -59,9 +59,21 @@ def browser_site():  # type: ignore[no-untyped-def]
             credential_kind="pin",
         )
         person = Person(display_name="Browser Crew Member")
+        manager_person = Person(display_name="Browser Roster Manager")
         other_person = Person(display_name="Unrelated Browser Crew")
         db.add_all(
-            [region, cross_region, group, manager, employee, admin, viewer, person, other_person]
+            [
+                region,
+                cross_region,
+                group,
+                manager,
+                employee,
+                admin,
+                viewer,
+                person,
+                manager_person,
+                other_person,
+            ]
         )
         db.flush()
         track = Track(
@@ -74,11 +86,13 @@ def browser_site():  # type: ignore[no-untyped-def]
         )
         position = BasePosition(name=f"Browser Position {suffix}", crew_group_id=group.id)
         person.home_region_id = region.id
+        manager_person.home_region_id = region.id
         db.add_all([track, cross_track, position])
         db.flush()
         db.add_all(
             [
                 UserPersonLink(user_id=employee.id, person_id=person.id),
+                UserPersonLink(user_id=manager.id, person_id=manager_person.id),
                 RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
                 RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
@@ -130,6 +144,14 @@ def browser_site():  # type: ignore[no-untyped-def]
                 status="ASSIGNED",
                 note="Unrelated private browser detail",
                 note_private=True,
+            ),
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position.id,
+                display_name_snapshot="Roster manager",
+                person_id=manager_person.id,
+                person_name_snapshot=manager_person.display_name,
+                status="ASSIGNED",
             )]
         )
         workday.current_published_revision_id = revision.id
@@ -163,6 +185,76 @@ def browser_site():  # type: ignore[no-untyped-def]
             )
         )
         cross_workday.current_published_revision_id = cross_revision.id
+        travel_workday = Workday(
+            region_id=region.id,
+            category="TRAVEL_DAY",
+            created_by_user_id=manager.id,
+        )
+        db.add(travel_workday)
+        db.flush()
+        travel_revision = WorkdayRevision(
+            workday_id=travel_workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date.today().replace(day=8),
+            track_name_snapshot="Operations Transit",
+            track_colour_snapshot="#1D638E",
+            title="Travel to race meeting",
+            start_time=clock_time(9),
+            end_time=clock_time(16, 30),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add(travel_revision)
+        db.flush()
+        db.add_all(
+            [
+                Assignment(
+                    revision_id=travel_revision.id,
+                    base_position_id=position.id,
+                    display_name_snapshot="Travel",
+                    person_id=person.id,
+                    person_name_snapshot=person.display_name,
+                    status="ASSIGNED",
+                ),
+                Assignment(
+                    revision_id=travel_revision.id,
+                    base_position_id=position.id,
+                    display_name_snapshot="Travel lead",
+                    person_id=manager_person.id,
+                    person_name_snapshot=manager_person.display_name,
+                    status="ASSIGNED",
+                ),
+            ]
+        )
+        travel_workday.current_published_revision_id = travel_revision.id
+        open_workday = Workday(region_id=region.id, created_by_user_id=manager.id)
+        db.add(open_workday)
+        db.flush()
+        open_revision = WorkdayRevision(
+            workday_id=open_workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date.today().replace(day=22),
+            track_name_snapshot="Browser Track Open Day",
+            track_colour_snapshot="#B5791E",
+            title="Open race day",
+            start_time=clock_time(8),
+            end_time=clock_time(17),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add(open_revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=open_revision.id,
+                base_position_id=position.id,
+                display_name_snapshot="Open CCU",
+                status="OPEN",
+            )
+        )
+        open_workday.current_published_revision_id = open_revision.id
         db.commit()
         values = {
             "manager": (manager.email, "123456"),
@@ -298,13 +390,37 @@ def _watch_browser_errors(page: Page) -> list[str]:
     return errors
 
 
+def _capture_page(page: Page, name: str) -> None:
+    if os.environ.get("ONTRACK_CAPTURE_BROWSER_SCREENSHOTS") != "1":
+        return
+    output = Path("test-results/ui-fidelity")
+    output.mkdir(parents=True, exist_ok=True)
+    page.evaluate(
+        "async () => { await document.fonts.ready; await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); }"
+    )
+    page.screenshot(path=str(output / name), full_page=True)
+
+
+def _select_theme(page: Page, base_url: str, theme: str) -> None:
+    page.goto(base_url + "/settings")
+    page.locator(".theme-picker-details summary").click()
+    page.locator(f'input[name="theme"][value="{theme}"]').check()
+    page.locator('form[action="/settings/theme"] button').click()
+    page.wait_for_url("**/settings?theme=saved")
+    assert page.locator("html").get_attribute("data-theme") == theme
+
+
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])
 def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
-    context = browser.new_context(viewport={"width": width, "height": 900})
+    context = browser.new_context(
+        viewport={"width": width, "height": 900}, has_touch=width <= 760
+    )
     page = context.new_page()
     errors = _watch_browser_errors(page)
     _assert_page(page, base_url + "/login")
+    if width in {1280, 320}:
+        _capture_page(page, f"login-{width}.png")
     _login(page, base_url, values["employee"])
     for path in (
         "/month",
@@ -315,25 +431,130 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         "/hours",
     ):
         _assert_page(page, base_url + path)
+        if width <= 760:
+            assert page.locator(".brand-compact").is_visible()
+            assert page.locator(".brand > strong:first-child").is_hidden()
     page.goto(base_url + f"/day/{values['workday_id']}")
     assert page.locator(".hero-card").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim().toUpperCase()"
     ) == "#2E7D6A"
     page.goto(base_url + "/month")
-    assert page.locator(".shift-chip.cross-region").count() == 1
-    assert page.locator(".shift-chip.cross-region").evaluate(
+    assert page.locator(".shift-card.cross-region").count() == 1
+    assert page.locator(".shift-card.cross-region").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim().toUpperCase()"
     ) == "#8A2BE2"
+    assert page.locator(".site-header.has-month-nav").is_visible()
+    assert page.locator(".month-nav").is_visible()
+    assert page.locator(".calendar-grid").is_visible()
+    assert page.locator(".weekday:not(.weekday-total)").count() == 7
+    assert page.locator(".weekday-total").count() == 1
+    assert page.locator(".month-head").count() == 0
+    assert page.get_by_text("Your authoritative roster").count() == 0
+    assert page.get_by_role("link", name="Previous month").is_visible()
+    assert page.get_by_role("link", name="Next month").is_visible()
+    assert page.locator("[data-roster-nav]").count() == 1
     if width <= 760:
-        page.locator('[data-view="list"]').click()
-        assert page.locator("#list-view").is_visible()
+        assert page.locator(".brand-compact").is_visible()
+        assert page.locator(".brand-compact").inner_text().strip()
+        compact_brand_box = page.locator(".brand-compact").bounding_box()
+        assert compact_brand_box and compact_brand_box["width"] >= 12
+        assert page.locator(".brand > strong:first-child").is_hidden()
     else:
-        assert page.locator("#calendar-view").is_visible()
+        assert page.locator(".brand-compact").is_hidden()
+        assert page.locator(".brand > strong:first-child").is_visible()
+    calendar_box = page.locator(".calendar-grid").bounding_box()
+    upcoming_box = page.locator(".upcoming-strip").bounding_box()
+    assert calendar_box and upcoming_box and upcoming_box["y"] > calendar_box["y"]
+    if width <= 760:
+        assert page.locator(".week-total").first.is_hidden()
+        column_count = page.locator(".calendar-grid").evaluate(
+            "element => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+        )
+        assert column_count == 7
+        assert page.locator(".day-cell").first.evaluate(
+            "element => getComputedStyle(element).minHeight"
+        ) == "72px"
+        assert page.locator(".upcoming-list").evaluate(
+            "element => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+        ) == 1
+        page.get_by_role("link", name="List view").click()
+        page.wait_for_url("**view=list")
+        assert page.locator(".roster-list").is_visible()
+        page.get_by_role("link", name="Month view").click()
+        page.wait_for_url("**view=month")
+        next_url = page.locator("[data-roster-nav]").get_attribute("data-next-url")
+        page.evaluate(
+            """() => {
+              const start = new Event("touchstart");
+              Object.defineProperty(start, "touches", {value: [{clientX: 280, clientY: 120}]});
+              document.dispatchEvent(start);
+              const end = new Event("touchend");
+              Object.defineProperty(end, "changedTouches", {value: [{clientX: 120, clientY: 125}]});
+              document.dispatchEvent(end);
+            }"""
+        )
+        page.wait_for_url(f"**{next_url}")
+    else:
+        assert page.locator(".week-total").first.is_visible()
+        column_count = page.locator(".calendar-grid").evaluate(
+            "element => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+        )
+        assert column_count == 8
+        page.keyboard.press("l")
+        page.wait_for_url("**view=list")
+        assert page.locator(".roster-list").is_visible()
+        page.keyboard.press("m")
+        page.wait_for_url("**view=month")
+        assert page.locator(".calendar-grid").is_visible()
+        original_label = page.locator(".month-nav > strong").inner_text()
+        page.evaluate(
+            """() => {
+              const editor = document.createElement("div");
+              editor.contentEditable = "true";
+              editor.id = "keyboard-guard";
+              document.body.appendChild(editor);
+              editor.focus();
+            }"""
+        )
+        guarded_url = page.url
+        page.keyboard.press("n")
+        assert page.url == guarded_url
+        page.locator("#keyboard-guard").evaluate("element => element.remove()")
+        page.locator("body").click(position={"x": 1, "y": 1})
+        page.keyboard.press("n")
+        page.wait_for_function(
+            "label => document.querySelector('.month-nav > strong')?.textContent.trim() !== label",
+            arg=original_label,
+        )
+        page.keyboard.press("p")
+        page.wait_for_function(
+            "label => document.querySelector('.month-nav > strong')?.textContent.trim() === label",
+            arg=original_label,
+        )
     page.goto(base_url + "/settings")
-    page.locator('select[name="theme"]').select_option("moss")
+    page.locator(".theme-picker-details summary").click()
+    assert page.locator('input[name="theme"]').count() == 20
+    target_theme = {1280: "high-contrast", 430: "race-night", 375: "daylight", 320: "jade"}[width]
+    page.locator(f'input[name="theme"][value="{target_theme}"]').check()
     page.locator('form[action="/settings/theme"] button').click()
     page.wait_for_url("**/settings?theme=saved")
-    assert page.locator("html").get_attribute("data-theme") == "moss"
+    assert page.locator("html").get_attribute("data-theme") == target_theme
+    for path in ("/settings", "/month", f"/day/{values['workday_id']}", "/help"):
+        _assert_page(page, base_url + path)
+        assert page.locator("html").get_attribute("data-theme") == target_theme
+        if width in {1280, 320}:
+            slug = path.strip("/").replace("/", "-") or "home"
+            _capture_page(page, f"{slug}-{target_theme}-{width}.png")
+    if width == 1280:
+        page.goto(base_url + "/month")
+        theme_values = page.locator("html").evaluate(
+            "element => { const style = getComputedStyle(element); return [style.getPropertyValue('--bg').trim(), style.getPropertyValue('--text').trim(), style.getPropertyValue('--accent').trim()]; }"
+        )
+        assert [value.lower() for value in theme_values] == ["#000000", "#ffffff", "#ffe45c"]
+        card_colours = page.locator(".shift-card").first.evaluate(
+            "element => { const style = getComputedStyle(element); return [style.color, style.backgroundColor, style.borderLeftColor]; }"
+        )
+        assert len(set(card_colours)) == 3
     assert not errors
     context.close()
 
@@ -353,7 +574,21 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         "/manage/hours",
     ):
         _assert_page(page, base_url + path)
+        if width <= 760:
+            assert page.locator(".brand-compact").is_visible()
+            assert page.locator(".brand > strong:first-child").is_hidden()
+    page.goto(base_url + "/month")
+    assert page.get_by_text("Operations Transit", exact=True).count() == 1
+    assert page.get_by_text("Travel lead", exact=True).count() == 1
+    assert page.locator(".available-shift-dot", has_text="Open").count() == 1
+    _capture_page(page, f"month-{width}.png")
+    if width == 1280:
+        _select_theme(page, base_url, "race-night")
+        page.goto(base_url + "/month")
+        _capture_page(page, "month-race-night-1280.png")
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+    if width in {1280, 320}:
+        _capture_page(page, f"builder-{width}.png")
     if width == 320:
         assert page.locator("main .panel").first.is_visible()
         preview = page.locator('a.button[href$="/preview"]')
@@ -396,15 +631,17 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     for path in ("/admin", "/manage/catalog", "/manage/accounts"):
         _assert_page(page, base_url + path)
     page.goto(base_url + "/admin#branding")
+    if width in {1280, 320}:
+        _capture_page(page, f"admin-{width}.png")
     configured_name = "Trackside Operations Rostering Portal"
     page.locator('input[name="product_name"]').fill(configured_name)
     page.get_by_role("button", name="Save product name").click()
     page.wait_for_url("**/admin#branding")
-    assert page.locator(".brand strong").inner_text() == configured_name
+    assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert configured_name in page.title()
     _assert_no_horizontal_overflow(page)
     page.goto(base_url + "/manage/catalog")
-    assert page.locator(".brand strong").inner_text() == configured_name
+    assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert page.get_by_text("Regions", exact=True).is_visible()
     assert not errors
     context.close()

@@ -3,6 +3,7 @@ import uuid
 import warnings
 from calendar import monthrange
 from datetime import date, time, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pyotp
@@ -22,6 +23,7 @@ from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base
 from app.core.enums import Role
+from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
 from app.identity.models import (
     Invitation,
@@ -1001,9 +1003,80 @@ def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(rou
     )
     assert "cross-region" in cross_region_month.text
     assert 'data-track-colour="#00AA11"' in cross_region_month.text
-    assert "Your rostered week: 45h 0m" in cross_region_month.text
+    assert "Your rostered week" not in cross_region_month.text
+    assert 'class="weekday weekday-total">Week</div>' in cross_region_month.text
+    assert "45h 0m" in cross_region_month.text
     january = employee_client.get("/month?year=2026&month=1")
     assert 'title="Auckland Anniversary Day"' in january.text
+
+
+def test_month_contract_and_all_redeputy_themes(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    client = TestClient(app)
+    csrf = _login(client, "amy@example.test", "654321")
+    with factory() as db:
+        user = db.scalar(select(User).where(User.email == "amy@example.test"))
+        user.theme = "trackside"
+        new_user = User(
+            email="new-theme-default@example.test",
+            display_name="New theme default",
+            credential_hash="not-a-real-login-hash",
+        )
+        db.add(new_user)
+        db.commit()
+        assert new_user.theme == "jade"
+    month = client.get("/month?year=2026&month=9&view=month")
+    assert month.status_code == 200
+    html = month.text
+    assert '<html lang="en" data-theme="jade">' in html
+    assert '<header class="site-header has-month-nav authenticated">' in html
+    assert html.index('aria-label="Month navigation"') < html.index('class="calendar-grid"')
+    assert html.count('class="weekday"') == 7
+    assert 'class="weekday weekday-total">Week</div>' in html
+    assert html.count('class="week-total"') >= 4
+    assert html.index('class="upcoming-strip"') > html.index('class="calendar-grid"')
+    assert "month-head" not in html
+    assert "Your authoritative roster" not in html
+    assert ">Today<" not in html
+    assert 'data-roster-nav' in html
+
+    roster_list = client.get("/month?year=2026&month=9&view=list")
+    assert roster_list.status_code == 200
+    assert 'class="roster-list"' in roster_list.text
+    assert 'aria-label="Month view"' in roster_list.text
+    assert 'class="calendar-grid"' not in roster_list.text
+    assert 'href="/month?year=2026&amp;month=8&amp;view=list"' in roster_list.text
+    assert 'href="/month?year=2026&amp;month=10&amp;view=list"' in roster_list.text
+    next_list = client.get("/month?year=2026&month=10&view=list")
+    assert next_list.status_code == 200
+    assert 'class="roster-list"' in next_list.text
+    assert 'href="/month?year=2026&amp;month=9&amp;view=list"' in next_list.text
+
+    assert len(THEME_VALUES) == 20
+    settings = client.get("/settings")
+    assert settings.status_code == 200
+    assert "Jade dark" in settings.text
+    assert 'name="theme" value="jade" checked' in settings.text
+    theme_css = Path("app/static/redeputy.css").read_text(encoding="utf-8")
+    for theme in THEME_VALUES:
+        assert f'name="theme" value="{theme}"' in settings.text
+        if theme != "jade":
+            assert f'data-theme="{theme}"' in theme_css
+        changed = client.post(
+            "/settings/theme",
+            data={"theme": theme, "csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert changed.status_code == 303
+    assert theme_css.startswith(":root {") and "--accent: #33c4a5;" in theme_css
+    legacy = client.post(
+        "/settings/theme",
+        data={"theme": "trackside", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert legacy.status_code == 303
+    with factory() as db:
+        assert db.scalar(select(User.theme).where(User.email == "amy@example.test")) == "jade"
 
 
 def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore[no-untyped-def]

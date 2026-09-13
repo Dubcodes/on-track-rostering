@@ -1,18 +1,19 @@
 (() => {
   "use strict";
-  const switches = document.querySelectorAll("[data-view]");
-  const calendar = document.getElementById("calendar-view");
-  const list = document.getElementById("list-view");
-  switches.forEach((button) => button.addEventListener("click", () => {
-    const showList = button.dataset.view === "list";
-    if (calendar) calendar.hidden = showList;
-    if (list) list.hidden = !showList;
-    switches.forEach((item) => item.classList.toggle("active", item === button));
-    localStorage.setItem("ontrack-month-view", showList ? "list" : "calendar");
-  }));
-  if (localStorage.getItem("ontrack-month-view") === "list") {
-    document.querySelector('[data-view="list"]')?.click();
-  }
+  const rosterNav = document.querySelector("[data-roster-nav]");
+  const go = (url) => { if (url) window.location.href = url; };
+  const isTyping = (event) => {
+    const tag = event.target?.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable;
+  };
+  document.addEventListener("keydown", (event) => {
+    if (!rosterNav || event.altKey || event.ctrlKey || event.metaKey || isTyping(event)) return;
+    const key = event.key.toLowerCase();
+    if (key === "m") go(rosterNav.dataset.monthUrl);
+    if (key === "l") go(rosterNav.dataset.listUrl);
+    if (key === "n") go(rosterNav.dataset.nextUrl);
+    if (key === "p") go(rosterNav.dataset.prevUrl);
+  });
   const offline = document.getElementById("offline-banner");
   const updateOnline = () => {
     if (navigator.onLine) {
@@ -32,6 +33,12 @@
     const colour = element.dataset.trackColour;
     if (/^#[0-9a-f]{6}$/i.test(colour || "")) element.style.setProperty("--track", colour);
   });
+  document.querySelectorAll("[data-theme-swatch]").forEach((element) => {
+    const swatch = element.dataset.themeSwatch || "";
+    if (/^#[0-9a-f]{6}$/i.test(swatch) || /^linear-gradient\(90deg, (#[0-9a-f]{6}, ){1,2}#[0-9a-f]{6}\)$/i.test(swatch)) {
+      element.style.background = swatch;
+    }
+  });
   document.querySelectorAll("[data-auto-submit]").forEach((element) => {
     element.addEventListener("change", () => element.form?.submit());
   });
@@ -44,17 +51,21 @@
       });
     });
   });
-  let touchStart = null;
-  document.getElementById("calendar-view")?.addEventListener("touchstart", (event) => {
-    touchStart = event.changedTouches[0]?.clientX ?? null;
+  let touchStartX = 0;
+  let touchStartY = 0;
+  document.addEventListener("touchstart", (event) => {
+    if (!rosterNav || event.touches.length !== 1) return;
+    touchStartX = event.touches[0].clientX;
+    touchStartY = event.touches[0].clientY;
   }, {passive: true});
-  document.getElementById("calendar-view")?.addEventListener("touchend", (event) => {
-    if (touchStart === null) return;
-    const distance = (event.changedTouches[0]?.clientX ?? touchStart) - touchStart;
-    if (Math.abs(distance) > 70) {
-      document.querySelector(distance < 0 ? '[aria-label="Next month"]' : '[aria-label="Previous month"]')?.click();
-    }
-    touchStart = null;
+  document.addEventListener("touchend", (event) => {
+    if (!rosterNav || !touchStartX || !event.changedTouches.length) return;
+    const deltaX = event.changedTouches[0].clientX - touchStartX;
+    const deltaY = event.changedTouches[0].clientY - touchStartY;
+    touchStartX = 0;
+    touchStartY = 0;
+    if (Math.abs(deltaX) < 70 || Math.abs(deltaX) < Math.abs(deltaY) * 1.4) return;
+    go(deltaX < 0 ? rosterNav.dataset.nextUrl : rosterNav.dataset.prevUrl);
   }, {passive: true});
   if ("serviceWorker" in navigator && document.body.dataset.userNamespace) {
     navigator.serviceWorker.register("/service-worker.js").then(() => navigator.serviceWorker.ready).then((registration) => {

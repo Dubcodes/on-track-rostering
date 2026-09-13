@@ -32,6 +32,7 @@ from app.auth.security import (
 from app.catalog.models import BasePosition, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
+from app.core.themes import THEME_VALUES, normalize_theme
 from app.core.time import local_today, utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
@@ -58,9 +59,7 @@ def _fresh_auth_keys(request: Request) -> tuple[str, str]:
     )
 
 
-def _verify_fresh_credential(
-    db: Session, request: Request, user: User | None, credential: str
-) -> bool:
+def _verify_fresh_credential(db: Session, request: Request, user: User | None, credential: str) -> bool:
     keys = _fresh_auth_keys(request)
     if (
         any(is_throttled(db, key) for key in keys)
@@ -91,7 +90,11 @@ def root():
 
 @router.get("/month", response_class=HTMLResponse)
 def month_view(
-    request: Request, year: int | None = None, month: int | None = None, db: Session = Depends(get_db)
+    request: Request,
+    year: int | None = None,
+    month: int | None = None,
+    view: str = Query("month", pattern="^(month|list)$"),
+    db: Session = Depends(get_db),
 ):
     today = local_today()
     year, month = year or today.year, month or today.month
@@ -102,11 +105,14 @@ def month_view(
         by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
     holiday_region = ""
     if request.state.actor.person_id:
-        holiday_region = db.scalar(
-            select(Region.statutory_holiday_region)
-            .join(Person, Person.home_region_id == Region.id)
-            .where(Person.id == request.state.actor.person_id)
-        ) or ""
+        holiday_region = (
+            db.scalar(
+                select(Region.statutory_holiday_region)
+                .join(Person, Person.home_region_id == Region.id)
+                .where(Person.id == request.state.actor.person_id)
+            )
+            or ""
+        )
     grid = month_grid(year, month, holiday_region)
     totals_items = month_items(
         db,
@@ -130,7 +136,7 @@ def month_view(
         item
         for item in month_items(db, request.state.actor, today, today + timedelta(days=370))
         if item["own"]
-    ][:3]
+    ][:5]
     previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
     following = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
     return templates.TemplateResponse(
@@ -144,6 +150,14 @@ def month_view(
             month_label=f"{calendar.month_name[month]} {year}",
             previous=previous,
             following=following,
+            today=today,
+            weekdays=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            view=view,
+            header_context=f"{calendar.month_name[month]} {year}",
+            header_prev_url=f"/month?year={previous.year}&month={previous.month}&view={view}",
+            header_next_url=f"/month?year={following.year}&month={following.month}&view={view}",
+            month_view_url=f"/month?year={year}&month={month}&view=month",
+            list_view_url=f"/month?year={year}&month={month}&view=list",
         ),
     )
 
@@ -165,17 +179,19 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         raise HTTPException(404, "Workday not found")
     management = can_view_management_detail(request.state.actor, workday.region_id)
     crew_history = can_crew_view(request.state.actor, workday.region_id)
-    own_rows = list(
-        db.scalars(
-            select(Assignment).where(
-                Assignment.revision_id == revision.id,
-                Assignment.person_id == request.state.actor.person_id,
+    own_rows = (
+        list(
+            db.scalars(
+                select(Assignment).where(
+                    Assignment.revision_id == revision.id,
+                    Assignment.person_id == request.state.actor.person_id,
+                )
             )
         )
-    ) if request.state.actor.person_id else []
-    self_decline = can_self_decline_assignment(
-        request.state.actor, workday, revision, own_rows
+        if request.state.actor.person_id
+        else []
     )
+    self_decline = can_self_decline_assignment(request.state.actor, workday, revision, own_rows)
     assignments = day_assignments(
         db,
         request.state.actor,
@@ -185,13 +201,17 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         can_self_decline=self_decline,
     )
     participation = person_day_participation(revision, own_rows) if own_rows else None
-    history = list(
-        db.scalars(
-            select(HumanChange)
-            .where(HumanChange.workday_id == workday.id)
-            .order_by(HumanChange.occurred_at.desc())
+    history = (
+        list(
+            db.scalars(
+                select(HumanChange)
+                .where(HumanChange.workday_id == workday.id)
+                .order_by(HumanChange.occurred_at.desc())
+            )
         )
-    ) if crew_history else []
+        if crew_history
+        else []
+    )
     if crew_history and not management:
         history = [row for row in history if not row.summary.startswith("Publication reason:")]
     return templates.TemplateResponse(
@@ -219,7 +239,9 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
                         ),
                     )
                 )
-            ) if own_rows else [],
+            )
+            if own_rows
+            else [],
             history=history,
         ),
     )
@@ -231,14 +253,18 @@ def decline_confirmation(
 ):
     workday = db.get(Workday, workday_id)
     revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
-    assignment = db.scalar(
-        select(Assignment).where(
-            Assignment.revision_id == revision.id,
-            Assignment.slot_key == slot_key,
-            Assignment.person_id == request.state.actor.person_id,
-            Assignment.status == "ASSIGNED",
+    assignment = (
+        db.scalar(
+            select(Assignment).where(
+                Assignment.revision_id == revision.id,
+                Assignment.slot_key == slot_key,
+                Assignment.person_id == request.state.actor.person_id,
+                Assignment.status == "ASSIGNED",
+            )
         )
-    ) if revision else None
+        if revision
+        else None
+    )
     region = db.get(Region, workday.region_id) if workday else None
     if not workday or not revision or not assignment or not region:
         raise HTTPException(404, "Assignment not found")
@@ -250,9 +276,7 @@ def decline_confirmation(
             )
         )
     )
-    if not can_self_decline_assignment(
-        request.state.actor, workday, revision, own_rows
-    ):
+    if not can_self_decline_assignment(request.state.actor, workday, revision, own_rows):
         raise HTTPException(403, "Self-decline is no longer available for this assignment.")
     return templates.TemplateResponse(
         "decline_confirmation.html",
@@ -274,16 +298,22 @@ def decline_assignment(
         raise HTTPException(400, "Explicit confirmation is required.")
     workday = db.get(Workday, workday_id)
     revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
-    own_rows = list(
-        db.scalars(
-            select(Assignment).where(
-                Assignment.revision_id == revision.id,
-                Assignment.person_id == request.state.actor.person_id,
+    own_rows = (
+        list(
+            db.scalars(
+                select(Assignment).where(
+                    Assignment.revision_id == revision.id,
+                    Assignment.person_id == request.state.actor.person_id,
+                )
             )
         )
-    ) if revision else []
-    if not workday or not revision or not can_self_decline_assignment(
-        request.state.actor, workday, revision, own_rows
+        if revision
+        else []
+    )
+    if (
+        not workday
+        or not revision
+        or not can_self_decline_assignment(request.state.actor, workday, revision, own_rows)
     ):
         raise HTTPException(403, "Self-decline is no longer available for this assignment.")
     db.commit()
@@ -335,9 +365,7 @@ def crew_view(
                 request.state.actor,
                 revision,
                 can_view_all_rows=True,
-                can_view_private_notes=can_view_management_detail(
-                    request.state.actor, workday.region_id
-                ),
+                can_view_private_notes=can_view_management_detail(request.state.actor, workday.region_id),
             ),
         }
         for workday, revision in rows
@@ -354,6 +382,8 @@ def crew_view(
             month=month,
         ),
     )
+
+
 @router.get("/api/day/{workday_id}")
 def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
     workday = db.get(Workday, workday_id)
@@ -417,7 +447,9 @@ def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, db: Session = Depends(get_db)):
-    positions = list(db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name)))
+    positions = list(
+        db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name))
+    )
     signals = {}
     if request.state.actor.person_id:
         signals = {
@@ -469,12 +501,13 @@ def update_theme(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    if theme not in {"trackside", "steel", "moss", "daylight", "high-contrast"}:
+    normalized_theme = normalize_theme(theme)
+    if theme not in THEME_VALUES and theme != "trackside":
         raise HTTPException(400, "Invalid theme.")
     user = db.get(User, request.state.user.id)
     if not user:
         raise HTTPException(404)
-    user.theme = theme
+    user.theme = normalized_theme
     db.commit()
     return RedirectResponse("/settings?theme=saved", status_code=303)
 
@@ -527,14 +560,10 @@ def update_credential(
         raise HTTPException(400, error)
     user.credential_hash = hash_credential(new_credential)
     user.credential_kind = "pin" if new_credential.isdigit() else "password"
-    user.credential_admin_eligible = not bool(
-        credential_error(new_credential, Role.ADMIN.value)
-    )
+    user.credential_admin_eligible = not bool(credential_error(new_credential, Role.ADMIN.value))
     user.auth_epoch += 1
     for device in db.scalars(
-        select(TrustedDevice).where(
-            TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None)
-        )
+        select(TrustedDevice).where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
     ):
         device.revoked_at = utcnow()
     record_audit(db, "user.credential.updated", "user", user.id, user.id)

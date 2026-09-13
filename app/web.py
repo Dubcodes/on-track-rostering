@@ -10,6 +10,7 @@ from app.auth.security import CSRF_COOKIE
 from app.branding.service import DEFAULT_BRANDING
 from app.core.config import get_settings
 from app.core.holidays import holiday_for_date
+from app.core.themes import THEME_GROUPS, THEME_LABELS, THEME_VALUES, normalize_theme
 from app.core.time import display_datetime, display_time, local_today
 from app.system_settings.service import DEFAULT_OPERATIONAL_SETTINGS
 
@@ -55,37 +56,28 @@ def context(request: Request, **values: object) -> dict[str, object]:
         actor and actor.person_id and any("EMPLOYEE" in roles for roles in actor.regional_roles.values())
     )
     show_accounts = bool(
-        actor
-        and (
-            actor.is_admin
-            or any("MANAGER" in roles for roles in actor.regional_roles.values())
-        )
+        actor and (actor.is_admin or any("MANAGER" in roles for roles in actor.regional_roles.values()))
     )
     show_regional_admin = bool(
-        actor
-        and (
-            actor.is_admin
-            or any("MANAGER" in roles for roles in actor.regional_roles.values())
-        )
+        actor and (actor.is_admin or any("MANAGER" in roles for roles in actor.regional_roles.values()))
     )
     show_hours_management = bool(
         actor
         and (
             actor.is_admin
             or any(
-                {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
-                for roles in actor.regional_roles.values()
+                {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles) for roles in actor.regional_roles.values()
             )
         )
     )
+    user = getattr(request.state, "user", None)
+    current_theme = normalize_theme(user.theme if user else "jade")
     return {
         "request": request,
-        "user": getattr(request.state, "user", None),
+        "user": user,
         "actor": actor,
         "branding": getattr(request.state, "branding", DEFAULT_BRANDING),
-        "system_settings": getattr(
-            request.state, "system_settings", DEFAULT_OPERATIONAL_SETTINGS
-        ),
+        "system_settings": getattr(request.state, "system_settings", DEFAULT_OPERATIONAL_SETTINGS),
         "show_manage": show_manage,
         "show_crew": show_crew,
         "show_open_positions": show_open_positions,
@@ -96,13 +88,15 @@ def context(request: Request, **values: object) -> dict[str, object]:
         "csp_nonce": getattr(request.state, "csp_nonce", ""),
         "app_version": get_settings().app_version,
         "build_id": get_settings().build_id,
+        "current_theme": current_theme,
+        "current_theme_label": THEME_LABELS[current_theme],
+        "theme_groups": THEME_GROUPS,
+        "theme_values": THEME_VALUES,
         **values,
     }
 
 
-def month_grid(
-    year: int, month: int, holiday_region: str = ""
-) -> list[list[dict[str, object]]]:
+def month_grid(year: int, month: int, holiday_region: str = "") -> list[list[dict[str, object]]]:
     rows = []
     for week in Calendar(firstweekday=0).monthdatescalendar(year, month):
         rows.append(

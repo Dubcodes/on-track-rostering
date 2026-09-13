@@ -37,14 +37,21 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         )
     rows = db.execute(statement).all()
     own_by_revision: dict[uuid.UUID, list[Assignment]] = {}
+    statuses_by_revision: dict[uuid.UUID, set[str]] = {}
     if actor.person_id and rows:
         revision_ids = [revision.id for _workday, revision, _region in rows]
         for assignment in db.scalars(
-                select(Assignment).where(
-                    Assignment.revision_id.in_(revision_ids), Assignment.person_id == actor.person_id
-                )
-            ):
+            select(Assignment).where(
+                Assignment.revision_id.in_(revision_ids), Assignment.person_id == actor.person_id
+            )
+        ):
             own_by_revision.setdefault(assignment.revision_id, []).append(assignment)
+    if broad_month and rows:
+        revision_ids = [revision.id for _workday, revision, _region in rows]
+        for revision_id, status in db.execute(
+            select(Assignment.revision_id, Assignment.status).where(Assignment.revision_id.in_(revision_ids))
+        ):
+            statuses_by_revision.setdefault(revision_id, set()).add(status)
     home_region_id = (
         db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
         if actor.person_id
@@ -58,6 +65,9 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         if not own and not can_crew_view(actor, workday.region_id):
             continue
         participation = person_day_participation(revision, own) if own else None
+        visible_statuses = (
+            set(participation.statuses) if participation else statuses_by_revision.get(revision.id, set())
+        )
         result.append(
             {
                 "id": str(workday.id),
@@ -71,6 +81,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "minutes": participation.minutes if participation else 0,
                 "role": participation.role_summary if participation else "Crew view",
                 "status": " / ".join(participation.statuses) if participation else "PUBLISHED",
+                "has_open": "OPEN" in visible_statuses,
                 "cross_region": bool(
                     own and home_region_id is not None and workday.region_id != home_region_id
                 ),

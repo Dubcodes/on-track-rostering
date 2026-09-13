@@ -20,7 +20,7 @@ class User(Base):
     credential_kind: Mapped[str] = mapped_column(String(16), default="pin")
     credential_admin_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
-    theme: Mapped[str] = mapped_column(String(24), default="trackside")
+    theme: Mapped[str] = mapped_column(String(24), default="jade")
     auth_epoch: Mapped[int] = mapped_column(default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -177,9 +177,7 @@ class WebAuthnChallenge(Base):
 
 class TotpFactor(Base):
     __tablename__ = "totp_factors"
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     encrypted_secret: Mapped[bytes]
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
