@@ -48,6 +48,44 @@ def test_public_login_and_liveness_routes_render(routed_db) -> None:  # type: ig
     assert client.get("/health/live").json() == {"status": "ok"}
 
 
+def test_shared_asset_urls_follow_the_exact_build_identifier(routed_db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app import web
+
+    original = web.get_settings()
+    selected_build = {"value": "abc123"}
+    monkeypatch.setattr(
+        web,
+        "get_settings",
+        lambda: original.model_copy(update={"build_id": selected_build["value"]}),
+    )
+    first = TestClient(app).get("/login").text
+    for asset in (
+        "style.css",
+        "redeputy.css",
+        "branding.css",
+        "app.js",
+        "passkeys.js",
+        "notifications.js",
+    ):
+        assert f"/static/{asset}?v=abc123" in first
+    assert 'data-build-id="abc123"' in first
+
+    selected_build["value"] = "def456"
+    second = TestClient(app).get("/login").text
+    assert "/static/redeputy.css?v=def456" in second
+    assert "/static/redeputy.css?v=abc123" not in second
+
+
+def test_asset_version_has_a_stable_local_fallback(routed_db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app import web
+
+    settings = web.get_settings().model_copy(update={"build_id": "", "app_version": "0.3.0"})
+    monkeypatch.setattr(web, "get_settings", lambda: settings)
+    page = TestClient(app).get("/login").text
+    assert "/static/style.css?v=0.3.0" in page
+    assert 'data-build-id="0.3.0"' in page
+
+
 def test_login_post_accepts_trusted_proxy_without_forwarded_host(routed_db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from app.auth import network
     from app.core.config import get_settings

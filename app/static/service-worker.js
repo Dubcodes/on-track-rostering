@@ -1,6 +1,9 @@
-const SHELL_CACHE = "ontrack-shell-v2";
+const BUILD_VERSION = new URL(self.location.href).searchParams.get("v") || "local";
+const SHELL_CACHE = `ontrack-shell-v3-${BUILD_VERSION}`;
 const ROSTER_PREFIX = "ontrack-roster-";
-const SHELL = ["/static/style.css", "/static/branding.css", "/static/app.js", "/static/invite.js", "/static/passkeys.js", "/static/notifications.js"];
+const SHELL_PATHS = ["/static/style.css", "/static/redeputy.css", "/static/branding.css", "/static/app.js", "/static/invite.js", "/static/passkeys.js", "/static/notifications.js"];
+const assetUrl = (path) => `${path}?v=${encodeURIComponent(BUILD_VERSION)}`;
+const SHELL = SHELL_PATHS.map(assetUrl);
 const ACTIVE_USER_KEY = "/__ontrack_active_user";
 
 async function setActiveUser(namespace) {
@@ -31,7 +34,7 @@ async function offlineRosterPage() {
   const productName = html(payload.product_name || "Roster");
   const rows = (payload.days || []).map((day) => `<li><strong>${html(day.date)}</strong> — ${html(day.track)} · ${html(day.role)} · ${html(day.start || "Start TBC")}</li>`).join("");
   const saved = html(payload.cached_at ? new Date(payload.cached_at).toLocaleString() : "unknown");
-  return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><title>${productName} offline</title><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/branding.css"><main class="page-shell"><h1>Upcoming work</h1><div class="offline-banner">Offline — showing roster saved at ${saved}</div><section class="panel"><ul>${rows || "<li>No upcoming work was saved.</li>"}</ul></section><p>Reconnect to view or edit the authoritative roster.</p></main>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
+  return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><title>${productName} offline</title><link rel="stylesheet" href="${assetUrl("/static/style.css")}"><link rel="stylesheet" href="${assetUrl("/static/redeputy.css")}"><link rel="stylesheet" href="${assetUrl("/static/branding.css")}"><main class="page-shell"><h1>Upcoming work</h1><div class="offline-banner">Offline — showing roster saved at ${saved}</div><section class="panel"><ul>${rows || "<li>No upcoming work was saved.</li>"}</ul></section><p>Reconnect to view or edit the authoritative roster.</p></main>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
 }
 
 function timing(label, value) {
@@ -57,11 +60,19 @@ async function offlineDayPage(workdayId) {
     <article class="assignment own"><div><strong>${html(row.role)}</strong><span>${html(row.person)}</span></div>
     <div class="assignment-meta">${html(row.start || "TBC")}–${html(row.end || "TBC")}${row.note ? `<small>${html(row.note)}</small>` : ""}</div></article>`).join("");
   const cached = html(payload.cached_at ? new Date(payload.cached_at).toLocaleString() : "unknown");
-  return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>${html(day.title || "Day")} · ${productName}</title><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/branding.css"></head><body><main class="page-shell"><a class="back-link" href="/month">← Back to month</a><section class="hero-card"><div><p class="eyebrow">${html(String(day.category || "Workday").replaceAll("_", " "))} · Offline</p><h1>${html(day.track || day.title || "Saved workday")}</h1><p class="hero-date">${html(day.date)}</p></div></section><div class="offline-banner">Offline — showing this Day as cached at ${cached}</div><section class="timing-strip">${timing("Start", day.start)}${raceTiming}${timing("Finish", day.end)}</section>${day.note ? `<section class="notice-card"><h2>Day notes</h2><p>${html(day.note)}</p></section>` : ""}<section class="panel"><h2>Your assignment${(day.assignments || []).length === 1 ? "" : "s"}</h2><div class="assignment-list">${assignments || "<p>No personal assignment was saved.</p>"}</div></section><p>Reconnect for the authoritative live roster and any available actions.</p></main></body></html>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
+  return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>${html(day.title || "Day")} · ${productName}</title><link rel="stylesheet" href="${assetUrl("/static/style.css")}"><link rel="stylesheet" href="${assetUrl("/static/redeputy.css")}"><link rel="stylesheet" href="${assetUrl("/static/branding.css")}"></head><body><main class="page-shell"><a class="back-link" href="/month">← Back to month</a><section class="hero-card"><div><p class="eyebrow">${html(String(day.category || "Workday").replaceAll("_", " "))} · Offline</p><h1>${html(day.track || day.title || "Saved workday")}</h1><p class="hero-date">${html(day.date)}</p></div></section><div class="offline-banner">Offline — showing this Day as cached at ${cached}</div><section class="timing-strip">${timing("Start", day.start)}${raceTiming}${timing("Finish", day.end)}</section>${day.note ? `<section class="notice-card"><h2>Day notes</h2><p>${html(day.note)}</p></section>` : ""}<section class="panel"><h2>Your assignment${(day.assignments || []).length === 1 ? "" : "s"}</h2><div class="assignment-list">${assignments || "<p>No personal assignment was saved.</p>"}</div></section><p>Reconnect for the authoritative live roster and any available actions.</p></main></body></html>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
 }
 
-self.addEventListener("install", (event) => event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL))));
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("install", (event) => event.waitUntil(
+  caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())
+));
+self.addEventListener("activate", (event) => event.waitUntil((async () => {
+  const keys = await caches.keys();
+  await Promise.all(keys
+    .filter((key) => key.startsWith("ontrack-shell-") && key !== SHELL_CACHE)
+    .map((key) => caches.delete(key)));
+  await self.clients.claim();
+})()));
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_USER" && /^[a-f0-9-]+$/i.test(String(event.data.namespace || ""))) {
     event.waitUntil(setActiveUser(event.data.namespace));
@@ -106,7 +117,9 @@ self.addEventListener("fetch", (event) => {
     }));
     return;
   }
-  if (SHELL.includes(url.pathname)) event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
+  if (SHELL_PATHS.includes(url.pathname) && url.searchParams.get("v") === BUILD_VERSION) {
+    event.respondWith(caches.open(SHELL_CACHE).then((cache) => cache.match(event.request).then((cached) => cached || fetch(event.request))));
+  }
 });
 self.addEventListener("push", (event) => {
   let payload = {title: "Roster update", body: "Open the roster for details.", url: "/month"};

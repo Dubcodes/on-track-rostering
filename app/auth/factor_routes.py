@@ -249,6 +249,8 @@ def begin_totp_setup(
 ):
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
+    settings = get_settings()
+    asset_version = escape(settings.build_id or settings.app_version, quote=True)
     try:
         _, secret, qr_svg = begin_totp(
             db, request.state.user, product_name=request.state.branding.product_name
@@ -259,7 +261,8 @@ def begin_totp_setup(
         content=(
             "<!doctype html><meta name=viewport content='width=device-width'>"
             f"<title>Set up authenticator · {escape(request.state.branding.product_name)}</title>"
-            "<link rel=stylesheet href='/static/style.css'><main class='auth-setup'>"
+            f"<link rel=stylesheet href='/static/style.css?v={asset_version}'>"
+            "<main class='auth-setup'>"
             "<h1>Set up authenticator</h1><p>Scan this once, then enter the current code.</p>"
             f"<img alt='Authenticator QR code' src='data:image/svg+xml;base64,{qr_svg}' "
             "class='auth-qr'>"

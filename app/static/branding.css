@@ -1,5 +1,4 @@
 .brand {
-  white-space: normal;
   min-width: 0;
   max-width: min(34vw, 360px);
 }
@@ -13,26 +12,21 @@
 }
 
 .brand strong {
-  overflow-wrap: anywhere;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   line-height: 1.08;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 760px) {
   .brand {
-    max-width: calc(100% - 100px);
+    max-width: 100%;
   }
 
   .site-header.authenticated .brand {
-    max-width: none;
-    white-space: nowrap;
-  }
-
-  .site-header.authenticated .brand.brand-long > strong:first-child {
-    display: none;
-  }
-
-  .site-header.authenticated .brand.brand-long .brand-compact {
-    display: block;
+    max-width: 100%;
   }
 }
 

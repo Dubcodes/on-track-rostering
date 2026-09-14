@@ -71,7 +71,9 @@
     go(deltaX < 0 ? rosterNav.dataset.nextUrl : rosterNav.dataset.prevUrl);
   }, {passive: true});
   if ("serviceWorker" in navigator && document.body.dataset.userNamespace) {
-    navigator.serviceWorker.register("/service-worker.js").then(() => navigator.serviceWorker.ready).then((registration) => {
+    const buildId = document.body.dataset.buildId || "local";
+    const workerUrl = `/service-worker.js?v=${encodeURIComponent(buildId)}`;
+    navigator.serviceWorker.register(workerUrl).then(() => navigator.serviceWorker.ready).then((registration) => {
       registration.active?.postMessage({ type: "SET_USER", namespace: document.body.dataset.userNamespace });
     });
     const prefetch = async () => {

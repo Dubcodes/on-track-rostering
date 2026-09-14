@@ -22,6 +22,7 @@ from app.core.database import Base, SessionLocal, engine
 from app.core.enums import Role
 from app.core.time import utcnow
 from app.identity.models import Person, RoleGrant, TrustedDevice, User, UserPersonLink
+from app.notices.models import OperationalNotice
 from app.notifications.models import NotificationPreference
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 
@@ -76,6 +77,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                 employee,
                 admin,
                 viewer,
+                SystemBranding(id=1, product_name="On Track", updated_by_user_id=admin.id),
                 person,
                 manager_person,
                 other_person,
@@ -268,6 +270,36 @@ def browser_site():  # type: ignore[no-untyped-def]
             )
         )
         open_workday.current_published_revision_id = open_revision.id
+        notice_now = utcnow()
+        active_notice_text = "Do not park on the grass today."
+        expired_notice_text = "Expired browser notice"
+        db.add_all(
+            [
+                OperationalNotice(
+                    scope="GLOBAL",
+                    message="Global browser crew notice",
+                    starts_at=notice_now - timedelta(minutes=10),
+                    expires_at=notice_now + timedelta(hours=12),
+                    created_by_user_id=admin.id,
+                ),
+                OperationalNotice(
+                    scope="REGION",
+                    region_id=region.id,
+                    message=active_notice_text,
+                    starts_at=notice_now - timedelta(minutes=5),
+                    expires_at=notice_now + timedelta(hours=12),
+                    created_by_user_id=manager.id,
+                ),
+                OperationalNotice(
+                    scope="REGION",
+                    region_id=region.id,
+                    message=expired_notice_text,
+                    starts_at=notice_now - timedelta(days=1),
+                    expires_at=notice_now - timedelta(minutes=1),
+                    created_by_user_id=manager.id,
+                ),
+            ]
+        )
         db.commit()
         values = {
             "manager": (manager.email, "123456"),
@@ -277,6 +309,8 @@ def browser_site():  # type: ignore[no-untyped-def]
             "workday_id": str(workday.id),
             "cross_workday_id": str(cross_workday.id),
             "region_id": str(region.id),
+            "active_notice_text": active_notice_text,
+            "expired_notice_text": expired_notice_text,
         }
 
     with socket.socket() as probe:
@@ -414,6 +448,14 @@ def _capture_page(page: Page, name: str) -> None:
     page.screenshot(path=str(output / name), full_page=True)
 
 
+def _capture_locator(page: Page, selector: str, name: str) -> None:
+    if os.environ.get("ONTRACK_CAPTURE_BROWSER_SCREENSHOTS") != "1":
+        return
+    output = Path("test-results/ui-fidelity")
+    output.mkdir(parents=True, exist_ok=True)
+    page.locator(selector).screenshot(path=str(output / name))
+
+
 def _select_theme(page: Page, base_url: str, theme: str) -> None:
     page.goto(base_url + "/settings")
     page.locator(".theme-picker-details summary").click()
@@ -474,7 +516,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         assert page.locator(".brand > strong:first-child").is_visible()
         assert page.locator(".brand > strong:first-child").inner_text().strip() == "On Track"
     else:
-        assert page.locator(".brand-compact").is_hidden()
+        assert page.locator(".brand-compact").count() == 0
         assert page.locator(".brand > strong:first-child").is_visible()
     calendar_box = page.locator(".calendar-grid").bounding_box()
     upcoming_box = page.locator(".upcoming-strip").bounding_box()
@@ -673,14 +715,65 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     with SessionLocal() as db:
         branding = db.get(SystemBranding, 1)
         if branding:
-            branding.product_name = "On Track"
+            branding.product_name = "Demo it"
             db.commit()
 
     manager_context = browser.new_context(viewport={"width": width, "height": 900})
     page = manager_context.new_page()
     errors = _watch_browser_errors(page)
     _login(page, base_url, values["manager"])
+    page.goto(base_url + "/month")
+    fixture_notice = page.locator(".crew-notice-strip")
+    assert fixture_notice.is_visible()
+    assert page.get_by_text("Global browser crew notice", exact=True).count() == 0
+    assert page.get_by_text(values["expired_notice_text"], exact=True).count() == 0
+    notice_box = fixture_notice.bounding_box()
+    calendar_box = page.locator(".calendar-grid").bounding_box()
+    assert notice_box and calendar_box and notice_box["y"] < calendar_box["y"]
+    if width == 320:
+        assert notice_box["height"] < 50
+
+    build_id = page.locator("body").get_attribute("data-build-id")
+    assert build_id
+    shared_asset_urls = page.eval_on_selector_all(
+        'link[rel="stylesheet"], script[src]',
+        "elements => elements.map(element => element.href || element.src).filter(url => url.includes('/static/'))",
+    )
+    assert len(shared_asset_urls) == 6
+    assert all(f"?v={build_id}" in url for url in shared_asset_urls)
+
+    settings_link = page.locator('a[aria-label="Settings"]')
+    gear = settings_link.locator('svg[viewBox="0 0 24 24"]')
+    assert gear.is_visible()
+    gear_box = gear.bounding_box()
+    settings_box = settings_link.bounding_box()
+    assert gear_box and settings_box and gear_box["width"] > 0 and gear_box["height"] > 0
+    assert gear_box["x"] >= settings_box["x"] and gear_box["y"] >= settings_box["y"]
+    assert gear_box["x"] + gear_box["width"] <= settings_box["x"] + settings_box["width"]
+    assert gear_box["y"] + gear_box["height"] <= settings_box["y"] + settings_box["height"]
+    _capture_locator(page, ".site-header", f"header-settings-gear-{width}.png")
+
+    for product_name in ("Demo it", "On Track", "Trackside Crew"):
+        with SessionLocal() as db:
+            branding = db.get(SystemBranding, 1)
+            assert branding
+            branding.product_name = product_name
+            db.commit()
+        page.reload()
+        brand_text = page.locator(".brand > strong")
+        assert brand_text.is_visible()
+        assert brand_text.inner_text() == product_name
+        assert brand_text.evaluate("element => element.scrollWidth <= element.clientWidth + 1")
+        _assert_no_horizontal_overflow(page)
+    with SessionLocal() as db:
+        branding = db.get(SystemBranding, 1)
+        assert branding
+        branding.product_name = "Demo it"
+        db.commit()
+
     page.goto(base_url + "/settings#notices")
+    assert page.get_by_text(values["active_notice_text"], exact=True).count() == 1
+    assert page.get_by_text(values["expired_notice_text"], exact=True).count() == 1
     page.locator("#notices > details > summary").click()
     page.locator('#notices select[name="scope"]').select_option("REGION")
     page.locator('#notices select[name="region_id"]').select_option(values["region_id"])
@@ -688,13 +781,33 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     page.locator('#notices textarea[name="message"]').fill(notice_text)
     page.locator('#notices button', has_text="Create notice").click()
     page.wait_for_url("**/settings?notice=created*", wait_until="domcontentloaded")
+    _select_theme(page, base_url, "race-night")
     page.goto(base_url + "/month")
-    assert page.locator(".operational-notice", has_text=notice_text).is_visible()
+    notice = page.locator(".crew-notice-strip", has_text=notice_text)
+    assert notice.is_visible()
+    notice_box = notice.bounding_box()
+    calendar_box = page.locator(".calendar-grid").bounding_box()
+    assert notice_box and calendar_box and notice_box["y"] < calendar_box["y"]
     _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"race-night-personal-month-notice-{width}.png")
     page.goto(base_url + "/crew")
-    assert page.locator(".operational-notice", has_text=notice_text).is_visible()
-    if width in {1280, 320}:
-        _capture_page(page, f"notice-crew-{width}.png")
+    notice = page.locator(".crew-notice-strip", has_text=notice_text)
+    assert notice.is_visible()
+    notice_box = notice.bounding_box()
+    calendar_box = page.locator(".calendar-grid").bounding_box()
+    assert notice_box and calendar_box and notice_box["y"] < calendar_box["y"]
+    _capture_page(page, f"race-night-crew-month-notice-{width}.png")
+
+    page.goto(base_url + "/month?year=2026&month=9")
+    brand = page.get_by_role("link", name="Demo it home")
+    assert brand.is_visible()
+    page.get_by_role("link", name="Next month").click()
+    page.wait_for_url("**/month?year=2026&month=10*")
+    assert page.locator(".month-nav > strong").inner_text() == "October 2026"
+    page.get_by_role("link", name="Demo it home").click()
+    page.wait_for_url(base_url + "/month")
+    assert page.locator(".month-nav > strong").inner_text() == date.today().strftime("%B %Y")
+    _capture_page(page, f"brand-current-month-return-{width}.png")
     assert not errors
     manager_context.close()
 
@@ -730,7 +843,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     page.locator('#reauthenticate input[name="credential"]').fill(values["admin"][1])
     page.locator("#reauthenticate button", has_text="Re-authenticate").click()
     page.wait_for_url("**/admin", wait_until="domcontentloaded")
-    assert page.locator('input[name="product_name"]').input_value() == "On Track"
+    assert page.locator('input[name="product_name"]').input_value() == "Demo it"
     assert page.get_by_text("Fresh auth candidate", exact=True).count() == 0
     assert not errors
     admin_context.close()
@@ -793,9 +906,8 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert configured_name in page.title()
     _assert_no_horizontal_overflow(page)
-    if width <= 760:
-        assert page.locator(".brand-compact").is_visible()
-        assert page.locator(".brand > strong:first-child").is_hidden()
+    assert page.locator(".brand-compact").count() == 0
+    assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + "/manage/catalog")
     assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert page.get_by_text("Regions", exact=True).is_visible()
@@ -829,7 +941,9 @@ def test_specific_personal_day_renders_from_cache_while_physically_offline(
     )
     page.wait_for_function(
         """async (workdayId) => {
-          const shell = await caches.open("ontrack-shell-v2");
+          const shellNames = (await caches.keys()).filter((key) => key.startsWith("ontrack-shell-v3-"));
+          if (shellNames.length !== 1) return false;
+          const shell = await caches.open(shellNames[0]);
           const marker = await shell.match("/__ontrack_active_user");
           if (!marker) return false;
           const namespace = await marker.text();

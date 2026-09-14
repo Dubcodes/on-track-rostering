@@ -5,7 +5,7 @@
 {% block title %}{{ month_label }} · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <div data-roster-nav data-prev-url="{{ header_prev_url }}" data-next-url="{{ header_next_url }}" data-month-url="{{ month_view_url }}" data-list-url="{{ list_view_url }}" hidden></div>
-{% if prominent_notice %}<aside class="operational-notice" role="status"><strong>{% if prominent_notice.scope == 'GLOBAL' %}All crew{% else %}Crew notice{% endif %}</strong><span>{{ prominent_notice.message }}</span><small>Until {{ prominent_notice.expires_at|display_datetime }}</small></aside>{% endif %}
+{% if prominent_notice %}<aside class="crew-notice-strip" role="status"><strong>{% if prominent_notice.scope == 'GLOBAL' %}All crew{% else %}Crew notice{% endif %}</strong><span>{{ prominent_notice.message }}</span><small>Until {{ prominent_notice.expires_at|display_datetime }}</small></aside>{% endif %}
 {% if view == "list" %}
   <section class="roster-list" aria-label="Roster list">
     {% for week in grid %}{% for day in week if day.in_month and (items_by_date.get(day.date) or fortnight_markers.get(day.date) or day.holiday) %}

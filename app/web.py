@@ -34,6 +34,7 @@ templates.env.filters["display_time"] = display_time
 
 
 def context(request: Request, **values: object) -> dict[str, object]:
+    settings = get_settings()
     actor = getattr(request.state, "actor", None)
     show_manage = bool(
         actor
@@ -86,8 +87,9 @@ def context(request: Request, **values: object) -> dict[str, object]:
         "show_hours_management": show_hours_management,
         "csrf_token": request.cookies.get(CSRF_COOKIE, ""),
         "csp_nonce": getattr(request.state, "csp_nonce", ""),
-        "app_version": get_settings().app_version,
-        "build_id": get_settings().build_id,
+        "app_version": settings.app_version,
+        "build_id": settings.build_id,
+        "asset_version": settings.build_id or settings.app_version,
         "current_theme": current_theme,
         "current_theme_label": THEME_LABELS[current_theme],
         "theme_groups": THEME_GROUPS,

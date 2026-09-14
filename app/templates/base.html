@@ -7,16 +7,16 @@
   <meta name="theme-color" content="#101114">
   <link rel="icon" href="data:,">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/redeputy.css">
-  <link rel="stylesheet" href="/static/branding.css">
-  <script src="/static/passkeys.js" defer></script>
-  <script src="/static/notifications.js" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version|urlencode }}">
+  <link rel="stylesheet" href="/static/redeputy.css?v={{ asset_version|urlencode }}">
+  <link rel="stylesheet" href="/static/branding.css?v={{ asset_version|urlencode }}">
+  <script src="/static/passkeys.js?v={{ asset_version|urlencode }}" defer></script>
+  <script src="/static/notifications.js?v={{ asset_version|urlencode }}" defer></script>
   <title>{% block title %}{{ branding.product_name }}{% endblock %}</title>
 </head>
-<body data-user-namespace="{{ user.id if user else '' }}">
+<body data-user-namespace="{{ user.id if user else '' }}" data-build-id="{{ asset_version }}">
   <header class="site-header {% if header_context %}has-month-nav{% else %}no-month-nav{% endif %}{% if user %} authenticated{% endif %}">
-    <div class="brand-stack"><a class="brand{% if branding.product_name|length > 18 %} brand-long{% endif %}" href="/month" aria-label="{{ branding.product_name }} home"><strong>{{ branding.product_name }}</strong><strong class="brand-compact" aria-hidden="true">{{ branding.mark }}</strong></a></div>
+    <div class="brand-stack"><a class="brand" href="/month" aria-label="{{ branding.product_name }} home" title="{{ branding.product_name }}"><strong>{{ branding.product_name }}</strong></a></div>
     {% if user and header_context %}
       <nav class="month-nav" aria-label="Month navigation">
         <a class="icon-button month-step" href="{{ header_prev_url }}" aria-label="Previous month"><span class="nav-label">Previous</span>{{ ui_icon("previous", "nav-symbol") }}</a>
@@ -51,6 +51,6 @@
   <div id="offline-banner" class="offline-banner" hidden>Offline — showing the last roster saved on this device</div>
   <main class="page-shell">{% block content %}{% endblock %}</main>
   <footer class="app-footer">{{ branding.product_name }} {{ app_version }}{% if build_id %} · {{ build_id }}{% endif %}</footer>
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v={{ asset_version|urlencode }}" defer></script>
 </body>
 </html>
