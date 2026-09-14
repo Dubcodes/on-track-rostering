@@ -23,6 +23,7 @@ from app.auth.security import (
     clear_failures,
     credential_error,
     hash_credential,
+    is_safe_next,
     is_throttled,
     record_failure,
     throttle_keys,
@@ -32,10 +33,13 @@ from app.auth.security import (
 from app.catalog.models import BasePosition, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
+from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_VALUES, normalize_theme
 from app.core.time import local_today, utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
+from app.hours.service import fortnight_bounds
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
+from app.notices.service import prominent_notice, recent_notices
 from app.notifications.models import NotificationPreference, PushSubscription
 from app.positions.service import set_preference_signal
 from app.rostering.models import (
@@ -79,6 +83,18 @@ def _month_bounds(year: int, month: int) -> tuple[date, date]:
         raise HTTPException(400, "Invalid month")
     start = date(year, month, 1)
     return start, date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+
+
+def _notice_region_ids(actor, items: list[dict[str, object]]) -> set[uuid.UUID]:
+    visible = {
+        region_id for region_id, roles in actor.regional_roles.items() if set(roles) - {Role.CONTRACTOR.value}
+    }
+    visible.update(
+        item["region_id"]
+        for item in items
+        if item.get("own") and isinstance(item.get("region_id"), uuid.UUID)
+    )
+    return visible
 
 
 @router.get("/", include_in_schema=False)
@@ -139,6 +155,17 @@ def month_view(
     ][:5]
     previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
     following = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+    notice_regions = _notice_region_ids(request.state.actor, items)
+    fortnight_markers: dict[date, str] = {}
+    if request.state.actor.person_id:
+        current_start, _ = fortnight_bounds(today=today)
+        first_grid_day = grid[0][0]["date"]
+        last_grid_day = grid[-1][-1]["date"]
+        first_offset = ((first_grid_day - current_start).days - 13) // 14
+        for marker_offset in range(first_offset, first_offset + 5):
+            marker_date = current_start + timedelta(days=marker_offset * 14 + 13)
+            if first_grid_day <= marker_date <= last_grid_day:
+                fortnight_markers[marker_date] = f"/hours?offset={marker_offset}"
     return templates.TemplateResponse(
         "month.html",
         context(
@@ -158,6 +185,8 @@ def month_view(
             header_next_url=f"/month?year={following.year}&month={following.month}&view={view}",
             month_view_url=f"/month?year={year}&month={month}&view=month",
             list_view_url=f"/month?year={year}&month={month}&view=list",
+            fortnight_markers=fortnight_markers,
+            prominent_notice=prominent_notice(db, notice_regions),
         ),
     )
 
@@ -178,6 +207,7 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
     management = can_view_management_detail(request.state.actor, workday.region_id)
+    region = db.get(Region, workday.region_id)
     crew_history = can_crew_view(request.state.actor, workday.region_id)
     own_rows = (
         list(
@@ -243,6 +273,9 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             if own_rows
             else [],
             history=history,
+            holiday=holiday_info_for_date(
+                revision.work_date, region.statutory_holiday_region or "" if region else ""
+            ),
         ),
     )
 
@@ -336,6 +369,7 @@ def crew_view(
     region_id: uuid.UUID | None = None,
     year: int | None = None,
     month: int | None = None,
+    view: str = Query("month", pattern="^(month|list)$"),
     db: Session = Depends(get_db),
 ):
     today = local_today()
@@ -370,6 +404,28 @@ def crew_view(
         }
         for workday, revision in rows
     ]
+    grid = month_grid(year, month, selected_region.statutory_holiday_region or "")
+    by_date: dict[date, list[dict[str, object]]] = {}
+    for item in days:
+        revision = item["revision"]
+        assignments = item["assignments"]
+        statuses = {row["status"] for row in assignments}
+        by_date.setdefault(revision.work_date, []).append(
+            {
+                "id": str(item["workday"].id),
+                "date": revision.work_date,
+                "track": revision.track_name_snapshot,
+                "title": revision.title,
+                "colour": revision.track_colour_snapshot,
+                "start": revision.start_time,
+                "role": f"{len(assignments)} crew",
+                "has_open": "OPEN" in statuses,
+                "status": "TBC" if "TBC" in statuses else "PUBLISHED",
+            }
+        )
+    previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
+    following = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+    base_query = f"region_id={selected_region.id}"
     return templates.TemplateResponse(
         "crew.html",
         context(
@@ -380,6 +436,18 @@ def crew_view(
             month_label=f"{calendar.month_name[month]} {year}",
             year=year,
             month=month,
+            grid=grid,
+            items_by_date=by_date,
+            weekdays=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            week_counts=[sum(len(by_date.get(cell["date"], [])) for cell in week) for week in grid],
+            view=view,
+            crew_mode=True,
+            header_context=f"{calendar.month_name[month]} {year} · Crew",
+            header_prev_url=f"/crew?{base_query}&year={previous.year}&month={previous.month}&view={view}",
+            header_next_url=f"/crew?{base_query}&year={following.year}&month={following.month}&view={view}",
+            month_view_url=f"/crew?{base_query}&year={year}&month={month}&view=month",
+            list_view_url=f"/crew?{base_query}&year={year}&month={month}&view=list",
+            prominent_notice=prominent_notice(db, {selected_region.id}),
         ),
     )
 
@@ -466,6 +534,13 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
                 )
             )
         }
+    manageable_regions = list(
+        db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name))
+    )
+    manageable_regions = [
+        region for region in manageable_regions if can_manage_region(request.state.actor, region.id)
+    ]
+    history_regions = _notice_region_ids(request.state.actor, [])
     return templates.TemplateResponse(
         "settings.html",
         context(
@@ -489,6 +564,8 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
                     )
                 )
             ),
+            manageable_notice_regions=manageable_regions,
+            notice_history=recent_notices(db, history_regions, request.state.actor.is_admin),
         ),
     )
 
@@ -517,6 +594,7 @@ def reauthenticate(
     request: Request,
     credential: str = Form(...),
     csrf_token: str = Form(...),
+    next: str = Form("/settings"),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
@@ -528,7 +606,8 @@ def reauthenticate(
 
     device.primary_authenticated_at = utcnow()
     db.commit()
-    return RedirectResponse("/settings?reauthenticated=1", status_code=303)
+    destination = next if is_safe_next(next) else "/settings"
+    return RedirectResponse(destination, status_code=303)
 
 
 @router.post("/settings/credential")

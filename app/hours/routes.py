@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -23,18 +25,22 @@ def _offset(value: int) -> int:
 
 
 @router.get("/hours", response_class=HTMLResponse)
-def employee_hours(
-    request: Request, offset: int = Query(0), db: Session = Depends(get_db)
-):
+def employee_hours(request: Request, offset: int = Query(0), db: Session = Depends(get_db)):
     offset = _offset(offset)
     start, end = fortnight_bounds(offset)
     rows = published_hours(db, actor=request.state.actor, start=start, end=end, management=False)
+    rows_by_date = {row["date"]: row for row in rows}
+    days = [
+        rows_by_date.get(start + timedelta(days=index))
+        or {"date": start + timedelta(days=index), "minutes": 0, "duration": "0h"}
+        for index in range(14)
+    ]
     return templates.TemplateResponse(
         "hours.html",
         context(
             request,
             management=False,
-            rows=rows,
+            rows=days,
             people=[],
             total=format_minutes(sum(int(row["minutes"]) for row in rows)),
             start=start,
@@ -45,9 +51,7 @@ def employee_hours(
 
 
 @router.get("/manage/hours", response_class=HTMLResponse)
-def management_hours(
-    request: Request, offset: int = Query(0), db: Session = Depends(get_db)
-):
+def management_hours(request: Request, offset: int = Query(0), db: Session = Depends(get_db)):
     if not request.state.actor.is_admin and not any(
         {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
         for roles in request.state.actor.regional_roles.values()

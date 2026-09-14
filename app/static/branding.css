@@ -27,11 +27,11 @@
     white-space: nowrap;
   }
 
-  .site-header.authenticated .brand > strong:first-child {
+  .site-header.authenticated .brand.brand-long > strong:first-child {
     display: none;
   }
 
-  .site-header.authenticated .brand .brand-compact {
+  .site-header.authenticated .brand.brand-long .brand-compact {
     display: block;
   }
 }

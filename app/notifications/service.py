@@ -98,9 +98,7 @@ def save_subscription(
     ):
         raise ValueError("Malformed push subscription.")
     endpoint_hash = hashlib.sha256(endpoint.encode()).hexdigest()
-    row = db.scalar(
-        select(PushSubscription).where(PushSubscription.endpoint_hash == endpoint_hash)
-    )
+    row = db.scalar(select(PushSubscription).where(PushSubscription.endpoint_hash == endpoint_hash))
     if row and row.user_id != user_id:
         raise ValueError("That push endpoint belongs to another account.")
     if row is None:
@@ -117,15 +115,38 @@ def _preference_allows(db: Session, user_id: uuid.UUID, event_type: str) -> bool
     preference = db.get(NotificationPreference, user_id)
     if not preference:
         return True
+    if event_type != "TEST_NOTIFICATION" and not preference.notifications_enabled:
+        return False
     fields = {
         "OPEN_POSITION_AVAILABLE": "open_positions",
         "ROSTER_PUBLISHED": "roster_changes",
         "NIGHT_BEFORE": "night_before",
         "TWO_DAYS_BEFORE": "two_days_before",
         "ONE_HOUR_BEFORE": "one_hour_before",
+        "ROSTER_CHANGED_SOON": "important_changes_24h",
+        "WEEKLY_DIGEST": "weekly_digest",
+        "OPEN_POSITIONS_DIGEST": "open_positions_digest",
+        "MANAGER_ACTION_REQUIRED": "admin_alerts",
+        "OPERATIONAL_NOTICE": "notifications_enabled",
     }
     field = fields.get(event_type)
     return bool(getattr(preference, field)) if field else True
+
+
+def _roster_change_allows(db: Session, user_id: uuid.UUID, event: NotificationEvent) -> bool:
+    if not _preference_allows(db, user_id, "ROSTER_PUBLISHED"):
+        return False
+    if not event.workday_id:
+        return True
+    workday = db.get(Workday, event.workday_id)
+    revision = (
+        db.get(WorkdayRevision, workday.current_published_revision_id)
+        if workday and workday.current_published_revision_id
+        else None
+    )
+    urgent = bool(revision and revision.work_date <= local_today() + timedelta(days=1))
+    preference = db.get(NotificationPreference, user_id)
+    return not urgent or not preference or preference.important_changes_24h
 
 
 def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
@@ -133,9 +154,7 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
         user = db.get(User, event.audience_user_id)
         return (
             {user.id}
-            if user
-            and user.status == "ACTIVE"
-            and _preference_allows(db, user.id, event.event_type)
+            if user and user.status == "ACTIVE" and _preference_allows(db, user.id, event.event_type)
             else set()
         )
     if event.event_type == "ROSTER_PUBLISHED":
@@ -164,7 +183,7 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
                 .join(User, User.id == UserPersonLink.user_id)
                 .where(UserPersonLink.person_id.in_(person_ids), User.status == "ACTIVE")
             )
-            if _preference_allows(db, user_id, event.event_type)
+            if _roster_change_allows(db, user_id, event)
         }
     if event.event_type == "MANAGER_ACTION_REQUIRED" and event.region_id:
         return set(
@@ -179,6 +198,21 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
                 )
             )
         )
+    if event.event_type == "OPERATIONAL_NOTICE":
+        if event.region_id:
+            candidate_ids = db.scalars(
+                select(RoleGrant.user_id)
+                .join(User, User.id == RoleGrant.user_id)
+                .where(
+                    RoleGrant.region_id == event.region_id,
+                    RoleGrant.status == "ACTIVE",
+                    RoleGrant.role != Role.CONTRACTOR.value,
+                    User.status == "ACTIVE",
+                )
+            )
+        else:
+            candidate_ids = db.scalars(select(User.id).where(User.status == "ACTIVE"))
+        return {user_id for user_id in candidate_ids if _preference_allows(db, user_id, event.event_type)}
     if event.event_type == "OPEN_POSITION_AVAILABLE" and event.region_id:
         try:
             position_id = uuid.UUID(str(event.payload["base_position_id"]))
@@ -213,10 +247,14 @@ def _notification_payload(db: Session, event: NotificationEvent) -> dict[str, st
         "NIGHT_BEFORE": "Roster reminder for tomorrow",
         "TWO_DAYS_BEFORE": "Roster reminder in two days",
         "ONE_HOUR_BEFORE": "Roster starts in one hour",
+        "OPERATIONAL_NOTICE": "Crew notice",
+        "TEST_NOTIFICATION": "Notifications are working",
     }
     return {
         "title": titles.get(event.event_type, f"{product_name} update"),
-        "body": f"Open {product_name} to view the authoritative roster details.",
+        "body": str(
+            event.payload.get("message") or f"Open {product_name} to view the authoritative roster details."
+        ),
         "url": f"/day/{event.workday_id}" if event.workday_id else "/month",
         "event_key": event.event_key,
     }
@@ -288,9 +326,7 @@ def process_event(
     claim_token: str | None = None,
     now: datetime | None = None,
 ) -> NotificationEvent:
-    if claim_token is not None and (
-        event.status != "PROCESSING" or event.claim_token != claim_token
-    ):
+    if claim_token is not None and (event.status != "PROCESSING" or event.claim_token != claim_token):
         raise RuntimeError("Notification event claim is no longer owned by this worker.")
     current = now or utcnow()
     if current.tzinfo is None:
@@ -298,13 +334,17 @@ def process_event(
     if not _reminder_is_current(db, event, current):
         return _finish_stale_event(db, event)
     user_ids = audience_user_ids(db, event)
-    subscriptions = list(
-        db.scalars(
-            select(PushSubscription).where(
-                PushSubscription.user_id.in_(user_ids), PushSubscription.active.is_(True)
+    subscriptions = (
+        list(
+            db.scalars(
+                select(PushSubscription).where(
+                    PushSubscription.user_id.in_(user_ids), PushSubscription.active.is_(True)
+                )
             )
         )
-    ) if user_ids else []
+        if user_ids
+        else []
+    )
     existing = {
         row.subscription_id: row
         for row in db.scalars(
@@ -350,16 +390,14 @@ def process_event(
                 delivery.status = "FAILED"
             else:
                 delivery.status = "RETRY"
-                delivery.next_attempt_at = now + timedelta(minutes=2 ** attempt_count)
+                delivery.next_attempt_at = now + timedelta(minutes=2**attempt_count)
         except (RuntimeError, ValueError):
             delivery.attempt_count = attempt_count
             delivery.last_error = "Push delivery configuration failure"
             delivery.status = (
-                "FAILED"
-                if attempt_count >= get_settings().notification_max_attempts
-                else "RETRY"
+                "FAILED" if attempt_count >= get_settings().notification_max_attempts else "RETRY"
             )
-            delivery.next_attempt_at = now + timedelta(minutes=2 ** attempt_count)
+            delivery.next_attempt_at = now + timedelta(minutes=2**attempt_count)
         else:
             delivery.attempt_count = attempt_count
             delivery.status = "DELIVERED"
@@ -367,9 +405,7 @@ def process_event(
             delivery.last_error = ""
     db.commit()
     retry_at = [
-        delivery.next_attempt_at
-        for delivery in existing.values()
-        if delivery.status in {"PENDING", "RETRY"}
+        delivery.next_attempt_at for delivery in existing.values() if delivery.status in {"PENDING", "RETRY"}
     ]
     if not retry_at:
         event.status = "PROCESSED"
@@ -401,10 +437,7 @@ def process_pending(
                         NotificationEvent.status.in_(["PENDING", "RETRY"])
                         & (NotificationEvent.available_at <= now)
                     ),
-                    (
-                        (NotificationEvent.status == "PROCESSING")
-                        & (NotificationEvent.claimed_at <= stale_at)
-                    ),
+                    ((NotificationEvent.status == "PROCESSING") & (NotificationEvent.claimed_at <= stale_at)),
                 )
             )
             .order_by(NotificationEvent.created_at)
@@ -468,9 +501,7 @@ def _insert_reminder_event(
     return True
 
 
-def generate_reminders(
-    db: Session, *, now: datetime | None = None, horizon_days: int = 14
-) -> int:
+def generate_reminders(db: Session, *, now: datetime | None = None, horizon_days: int = 14) -> int:
     """Create deterministic reminder events from authoritative published snapshots."""
     current = now or utcnow()
     if current.tzinfo is None:
@@ -496,13 +527,17 @@ def generate_reminders(
         grouped.setdefault(key, []).append(assignment)
         revisions[key] = (workday, revision)
     person_ids = {key[2] for key in grouped}
-    users_by_person = dict(
-        db.execute(
-            select(UserPersonLink.person_id, UserPersonLink.user_id)
-            .join(User, User.id == UserPersonLink.user_id)
-            .where(UserPersonLink.person_id.in_(person_ids), User.status == "ACTIVE")
-        ).all()
-    ) if person_ids else {}
+    users_by_person = (
+        dict(
+            db.execute(
+                select(UserPersonLink.person_id, UserPersonLink.user_id)
+                .join(User, User.id == UserPersonLink.user_id)
+                .where(UserPersonLink.person_id.in_(person_ids), User.status == "ACTIVE")
+            ).all()
+        )
+        if person_ids
+        else {}
+    )
     created = 0
     for key, assignments in grouped.items():
         workday, revision = revisions[key]
@@ -510,12 +545,14 @@ def generate_reminders(
         if not user_id:
             continue
         participation = person_day_participation(revision, assignments)
+        preference = db.get(NotificationPreference, user_id)
+        reminder_at = preference.reminder_time if preference else time(19)
         schedules = {
             "NIGHT_BEFORE": datetime.combine(
-                revision.work_date - timedelta(days=1), time(19), tzinfo=settings.timezone
+                revision.work_date - timedelta(days=1), reminder_at, tzinfo=settings.timezone
             ).astimezone(UTC),
             "TWO_DAYS_BEFORE": datetime.combine(
-                revision.work_date - timedelta(days=2), time(19), tzinfo=settings.timezone
+                revision.work_date - timedelta(days=2), reminder_at, tzinfo=settings.timezone
             ).astimezone(UTC),
         }
         if participation.start is not None:
@@ -528,9 +565,7 @@ def generate_reminders(
             ):
                 participation_date += timedelta(days=1)
             schedules["ONE_HOUR_BEFORE"] = (
-                datetime.combine(
-                    participation_date, participation.start, tzinfo=settings.timezone
-                )
+                datetime.combine(participation_date, participation.start, tzinfo=settings.timezone)
                 - timedelta(hours=1)
             ).astimezone(UTC)
         for event_type, available_at in schedules.items():
@@ -538,15 +573,15 @@ def generate_reminders(
                 continue
             event_key = f"reminder:{event_type}:{revision.id}:{key[2]}"
             if _insert_reminder_event(
-                    db,
-                    event_key=event_key,
-                    event_type=event_type,
-                    region_id=workday.region_id,
-                    workday_id=workday.id,
-                    user_id=user_id,
-                    revision_id=revision.id,
-                    available_at=available_at,
-                ):
+                db,
+                event_key=event_key,
+                event_type=event_type,
+                region_id=workday.region_id,
+                workday_id=workday.id,
+                user_id=user_id,
+                revision_id=revision.id,
+                available_at=available_at,
+            ):
                 created += 1
     db.commit()
     return created

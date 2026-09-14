@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -14,12 +15,14 @@ from app.admin.routes import router as admin_router
 from app.auth.factor_routes import router as factor_router
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.routes import router as auth_router
+from app.auth.security import FreshAuthenticationRequired, is_safe_next
 from app.catalog.routes import router as catalog_router
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.crew.routes import router as crew_router
 from app.employee.routes import router as employee_router
 from app.hours.routes import router as hours_router
+from app.notices.routes import router as notices_router
 from app.notifications.routes import router as notifications_router
 from app.open_positions.routes import router as open_positions_router
 from app.rostering.routes import router as rostering_router
@@ -47,10 +50,29 @@ app.include_router(hours_router)
 app.include_router(rostering_router)
 app.include_router(open_positions_router)
 app.include_router(notifications_router)
+app.include_router(notices_router)
 app.include_router(crew_router)
 app.include_router(admin_router)
 app.include_router(accounts_router)
 app.include_router(catalog_router)
+
+
+@app.exception_handler(FreshAuthenticationRequired)
+async def fresh_auth_recovery(request: Request, exc: FreshAuthenticationRequired):
+    accepts_html = (
+        "text/html" in request.headers.get("accept", "")
+        or request.headers.get("sec-fetch-mode") == "navigate"
+    )
+    if accepts_html:
+        referer = request.headers.get("referer", "")
+        parsed = urlsplit(referer)
+        destination = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        if not is_safe_next(destination):
+            destination = "/settings"
+        return RedirectResponse(
+            f"/settings?reauth=required&next={quote(destination, safe='')}", status_code=303
+        )
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
 
 @app.get("/health/live", include_in_schema=False)

@@ -432,8 +432,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     ):
         _assert_page(page, base_url + path)
         if width <= 760:
-            assert page.locator(".brand-compact").is_visible()
-            assert page.locator(".brand > strong:first-child").is_hidden()
+            assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + f"/day/{values['workday_id']}")
     assert page.locator(".hero-card").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim().toUpperCase()"
@@ -454,11 +453,8 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.get_by_role("link", name="Next month").is_visible()
     assert page.locator("[data-roster-nav]").count() == 1
     if width <= 760:
-        assert page.locator(".brand-compact").is_visible()
-        assert page.locator(".brand-compact").inner_text().strip()
-        compact_brand_box = page.locator(".brand-compact").bounding_box()
-        assert compact_brand_box and compact_brand_box["width"] >= 12
-        assert page.locator(".brand > strong:first-child").is_hidden()
+        assert page.locator(".brand > strong:first-child").is_visible()
+        assert page.locator(".brand > strong:first-child").inner_text().strip() == "On Track"
     else:
         assert page.locator(".brand-compact").is_hidden()
         assert page.locator(".brand > strong:first-child").is_visible()
@@ -534,6 +530,12 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page.goto(base_url + "/settings")
     page.locator(".theme-picker-details summary").click()
     assert page.locator('input[name="theme"]').count() == 20
+    swatches = page.locator(".theme-swatch")
+    for index in range(swatches.count()):
+        rendered = swatches.nth(index).evaluate(
+            "element => { const s=getComputedStyle(element); return s.backgroundImage !== 'none' || s.backgroundColor !== 'rgba(0, 0, 0, 0)'; }"
+        )
+        assert rendered
     target_theme = {1280: "high-contrast", 430: "race-night", 375: "daylight", 320: "jade"}[width]
     page.locator(f'input[name="theme"][value="{target_theme}"]').check()
     page.locator('form[action="/settings/theme"] button').click()
@@ -575,8 +577,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     ):
         _assert_page(page, base_url + path)
         if width <= 760:
-            assert page.locator(".brand-compact").is_visible()
-            assert page.locator(".brand > strong:first-child").is_hidden()
+            assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + "/month")
     assert page.get_by_text("Operations Transit", exact=True).count() == 1
     assert page.get_by_text("Travel lead", exact=True).count() == 1
@@ -640,6 +641,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert configured_name in page.title()
     _assert_no_horizontal_overflow(page)
+    if width <= 760:
+        assert page.locator(".brand-compact").is_visible()
+        assert page.locator(".brand > strong:first-child").is_hidden()
     page.goto(base_url + "/manage/catalog")
     assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert page.get_by_text("Regions", exact=True).is_visible()

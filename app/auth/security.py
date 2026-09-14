@@ -25,6 +25,14 @@ ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2, hash_len=32, 
 ELEVATED_ROLES = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value, Role.ADMIN.value}
 
 
+class FreshAuthenticationRequired(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Recent authentication is required. Re-enter your credential in Settings.",
+        )
+
+
 def credential_error(secret: str, role: str) -> str:
     if role == Role.ADMIN.value:
         if secret.isascii() and secret.isdigit():
@@ -114,11 +122,7 @@ def clear_failures(db: Session, key: str) -> None:
 def create_device(db: Session, user: User, label: str = "Browser") -> tuple[str, str, TrustedDevice]:
     session_token, csrf_token = secrets.token_urlsafe(40), secrets.token_urlsafe(32)
     roles = set(
-        db.scalars(
-            select(RoleGrant.role).where(
-                RoleGrant.user_id == user.id, RoleGrant.status == "ACTIVE"
-            )
-        )
+        db.scalars(select(RoleGrant.role).where(RoleGrant.user_id == user.id, RoleGrant.status == "ACTIVE"))
     )
     elevated = bool(roles & ELEVATED_ROLES)
     days = (
@@ -163,10 +167,7 @@ def require_fresh_auth(request: Request) -> None:
         authenticated_at = authenticated_at.replace(tzinfo=UTC)
     cutoff = utcnow() - timedelta(minutes=get_settings().fresh_auth_minutes)
     if not authenticated_at or authenticated_at < cutoff:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Recent authentication is required. Re-enter your credential in Settings.",
-        )
+        raise FreshAuthenticationRequired()
 
 
 def set_auth_cookies(

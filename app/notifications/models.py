@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Time, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -30,6 +30,12 @@ class NotificationPreference(Base):
     two_days_before: Mapped[bool] = mapped_column(Boolean, default=False)
     one_hour_before: Mapped[bool] = mapped_column(Boolean, default=True)
     open_positions: Mapped[bool] = mapped_column(Boolean, default=True)
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    important_changes_24h: Mapped[bool] = mapped_column(Boolean, default=True)
+    weekly_digest: Mapped[bool] = mapped_column(Boolean, default=False)
+    open_positions_digest: Mapped[bool] = mapped_column(Boolean, default=False)
+    admin_alerts: Mapped[bool] = mapped_column(Boolean, default=True)
+    reminder_time: Mapped[time] = mapped_column(Time, default=time(19, 0))
 
 
 class NotificationEvent(Base):

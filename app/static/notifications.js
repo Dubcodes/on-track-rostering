@@ -9,6 +9,26 @@
     const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
     return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
   };
+  const describeDevice = async () => {
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      if (status) status.textContent = "Notifications are unsupported in this browser.";
+      return;
+    }
+    if (Notification.permission === "denied") {
+      if (status) status.textContent = "Notification permission is denied for this browser.";
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (status) status.textContent = subscription
+        ? "Notifications are active on this browser."
+        : "Notifications are supported but not enabled on this browser.";
+    } catch (_) {
+      if (status) status.textContent = "Notification device status is unavailable.";
+    }
+  };
+  describeDevice();
   enable?.addEventListener("click", async () => {
     try {
       const config = await fetch("/settings/notifications/config").then((response) => response.json());

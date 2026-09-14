@@ -1,8 +1,9 @@
 {% extends "base.html" %}{% set help_context = 'day' %}
+{% from "_holiday_marker.html" import holiday_marker %}
 {% block title %}{{ revision.title }} · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <style nonce="{{ csp_nonce }}">[data-track-colour="{{ revision.track_colour_snapshot }}"]{--track:{{ revision.track_colour_snapshot }}}</style>
-<a class="back-link" href="/month">← Back to month</a>
+<div class="day-toolbar"><a class="back-link" href="/month">← Back to Month</a>{{ holiday_marker(holiday, 'start') }}</div>
 <section class="hero-card" data-track-colour="{{ revision.track_colour_snapshot }}">
   <div><p class="eyebrow">{{ workday.category.replace('_',' ').title() }} · Published revision {{ revision.revision_number }}</p><h1>{{ revision.track_name_snapshot }}</h1><p class="hero-date">{{ revision.work_date.strftime('%A') }} {{ revision.work_date.day }} {{ revision.work_date.strftime('%B') }}</p>{% if participation %}<p><strong>{{ participation.role_summary }}</strong></p>{% endif %}</div>
   {% if can_edit %}<a class="button secondary" href="/manage/workdays/{{ workday.id }}">Edit private draft</a>{% endif %}
@@ -22,7 +23,7 @@
 {% if revision.day_note %}<section class="notice-card"><h2>Day notes</h2><p>{{ revision.day_note }}</p></section>{% endif %}
 {% if allowances %}<section class="panel"><h2>Allowance indicators</h2><div class="record-list">{% for item in allowances %}<span><strong>{{ item.kind.replace('_',' ').title() }}</strong><small>{{ item.explanation }}</small></span>{% endfor %}</div><p class="muted">Informational only; no payroll or break deduction is performed.</p></section>{% endif %}
 <section class="panel"><div class="section-head"><div><p class="eyebrow">Published crew</p><h2>Assignments</h2></div><span class="revision-badge">Revision {{ revision.revision_number }}</span></div>
-  <div class="assignment-list">{% for row in assignments %}<article class="assignment{% if row.is_own %} own{% endif %}"><div><strong>{{ row.role }}</strong><span>{{ row.person }}</span>{% if row.can_decline %}<a class="text-action" href="/day/{{ workday.id }}/assignments/{{ row.slot_key }}/decline">I’m not available</a>{% endif %}</div><div class="assignment-meta">{% if row.start or row.end %}{{ row.start|display_time or 'TBC' }}–{{ row.end|display_time or 'TBC' }}{% endif %}{% if row.note %}<small>{{ row.note }}</small>{% endif %}</div></article>{% else %}<p class="muted">No positions have been added.</p>{% endfor %}</div>
+  <div class="assignment-list">{% for row in assignments %}<article class="assignment{% if row.is_own %} own{% endif %}"><div><strong>{{ row.role }}</strong><span>{{ row.person }}</span>{% if row.can_decline %}<a class="text-action" href="/day/{{ workday.id }}/assignments/{{ row.slot_key }}/decline">I’m not available</a>{% endif %}</div><div class="assignment-meta">{% if row.start or row.end %}{{ row.start|display_time or 'TBC' }}–{{ row.end|display_time or 'TBC' }}{% endif %}{% if row.vehicle %}<small>Vehicle · {{ row.vehicle }}</small>{% endif %}{% if row.accommodation %}<small>Accommodation · {{ row.accommodation }}</small>{% endif %}{% if row.note %}<small>{{ row.note }}</small>{% endif %}</div></article>{% else %}<p class="muted">No positions have been added.</p>{% endfor %}</div>
 </section>
 <details class="panel"><summary>Time calculation</summary><p>Effective person/day span: {% if minutes %}{{ minutes // 60 }}h {{ minutes % 60 }}m{% else %}not complete{% endif %}. Multiple roles are combined once and no break is deducted.</p></details>
 {% if history_available %}<details class="panel"><summary>Change history</summary><div class="record-list">{% for change in history %}<span>{{ change.summary }} <small>{{ change.occurred_at|display_datetime }}</small></span>{% else %}<span>No published changes recorded.</span>{% endfor %}</div></details>{% else %}<p class="muted">Published roster history is available to authorised crew and management viewers.</p>{% endif %}

@@ -11,7 +11,7 @@ from app.auth.policy import Actor
 from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.enums import Role
-from app.core.holidays import holiday_for_date
+from app.core.holidays import holiday_for_date, holiday_info_for_date
 from app.core.time import local_today
 from app.identity.models import Person
 from app.rostering.models import AllowanceIndicator, Assignment, Workday, WorkdayRevision
@@ -34,11 +34,7 @@ def _visible_regions(actor: Actor) -> set[uuid.UUID] | None:
     if actor.is_admin:
         return None
     allowed = {Role.MANAGER.value, Role.SUB_MANAGER.value, Role.VIEWER.value}
-    return {
-        region_id
-        for region_id, roles in actor.regional_roles.items()
-        if set(roles) & allowed
-    }
+    return {region_id for region_id, roles in actor.regional_roles.items() if set(roles) & allowed}
 
 
 def published_hours(
@@ -136,6 +132,9 @@ def published_hours(
                 "minutes": minutes,
                 "duration": format_minutes(minutes),
                 "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
+                "holiday_info": holiday_info_for_date(
+                    revision.work_date, region.statutory_holiday_region or ""
+                ),
                 "allowances": allowance_rows,
                 "raw": (
                     f"{start_time.strftime('%H:%M') if start_time else 'not set'} → "

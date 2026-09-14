@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import lru_cache
 
@@ -141,3 +142,25 @@ def holidays_for_year(year: int, region: str = "") -> dict[date, tuple[str, ...]
 
 def holiday_for_date(value: date, region: str = "") -> str:
     return " / ".join(holidays_for_year(value.year, region).get(value, ()))
+
+
+@dataclass(frozen=True)
+class HolidayInfo:
+    names: tuple[str, ...]
+
+    @property
+    def name(self) -> str:
+        return " / ".join(self.names)
+
+    @property
+    def aria_label(self) -> str:
+        return f"Public holiday: {self.name}"
+
+    @property
+    def is_public_holiday(self) -> bool:
+        return bool(self.names)
+
+
+def holiday_info_for_date(value: date, region: str = "") -> HolidayInfo | None:
+    names = holidays_for_year(value.year, region).get(value, ())
+    return HolidayInfo(names) if names else None

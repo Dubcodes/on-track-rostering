@@ -33,12 +33,6 @@
     const colour = element.dataset.trackColour;
     if (/^#[0-9a-f]{6}$/i.test(colour || "")) element.style.setProperty("--track", colour);
   });
-  document.querySelectorAll("[data-theme-swatch]").forEach((element) => {
-    const swatch = element.dataset.themeSwatch || "";
-    if (/^#[0-9a-f]{6}$/i.test(swatch) || /^linear-gradient\(90deg, (#[0-9a-f]{6}, ){1,2}#[0-9a-f]{6}\)$/i.test(swatch)) {
-      element.style.background = swatch;
-    }
-  });
   document.querySelectorAll("[data-auto-submit]").forEach((element) => {
     element.addEventListener("change", () => element.form?.submit());
   });
@@ -46,6 +40,15 @@
     search.addEventListener("input", () => {
       const query = search.value.trim().toLocaleLowerCase();
       document.querySelectorAll("[data-crew-picker] option").forEach((option) => {
+        if (!option.value) return;
+        option.hidden = Boolean(query) && !option.textContent.toLocaleLowerCase().includes(query);
+      });
+    });
+  });
+  document.querySelectorAll("[data-position-search]").forEach((search) => {
+    search.addEventListener("input", () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      document.querySelectorAll('select[name="base_position_id"] option').forEach((option) => {
         if (!option.value) return;
         option.hidden = Boolean(query) && !option.textContent.toLocaleLowerCase().includes(query);
       });

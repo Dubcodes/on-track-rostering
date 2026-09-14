@@ -16,7 +16,7 @@
 </head>
 <body data-user-namespace="{{ user.id if user else '' }}">
   <header class="site-header {% if header_context %}has-month-nav{% else %}no-month-nav{% endif %}{% if user %} authenticated{% endif %}">
-    <div class="brand-stack"><a class="brand" href="/month" aria-label="{{ branding.product_name }} home"><strong>{{ branding.product_name }}</strong><strong class="brand-compact" aria-hidden="true">{{ branding.mark }}</strong></a></div>
+    <div class="brand-stack"><a class="brand{% if branding.product_name|length > 18 %} brand-long{% endif %}" href="/month" aria-label="{{ branding.product_name }} home"><strong>{{ branding.product_name }}</strong><strong class="brand-compact" aria-hidden="true">{{ branding.mark }}</strong></a></div>
     {% if user and header_context %}
       <nav class="month-nav" aria-label="Month navigation">
         <a class="icon-button month-step" href="{{ header_prev_url }}" aria-label="Previous month"><span class="nav-label">Previous</span>{{ ui_icon("previous", "nav-symbol") }}</a>
@@ -29,7 +29,7 @@
         {% if header_context %}
           <div class="header-view-toggle" aria-label="Roster view">
             {% if view == 'list' %}<a class="icon-button" href="{{ month_view_url }}" aria-label="Month view">{{ ui_icon("month") }}</a>{% else %}<a class="icon-button" href="{{ list_view_url }}" aria-label="List view">{{ ui_icon("list") }}</a>{% endif %}
-            {% if show_crew %}<a class="icon-button" href="/crew" aria-label="Crew calendar">{{ ui_icon("shared") }}</a>{% endif %}
+            {% if crew_mode %}<a class="icon-button" href="/month" aria-label="Personal calendar">{{ ui_icon("person") }}</a>{% elif show_crew %}<a class="icon-button" href="/crew" aria-label="Crew calendar">{{ ui_icon("shared") }}</a>{% endif %}
           </div>
         {% else %}<a class="icon-button" href="/month" aria-label="Calendar">{{ ui_icon("calendar") }}</a>{% endif %}
         <a class="icon-button" href="/settings" aria-label="Settings">{{ ui_icon("settings") }}</a>

@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from app.auth.security import CSRF_COOKIE
 from app.branding.service import DEFAULT_BRANDING
 from app.core.config import get_settings
-from app.core.holidays import holiday_for_date
+from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_GROUPS, THEME_LABELS, THEME_VALUES, normalize_theme
 from app.core.time import display_datetime, display_time, local_today
 from app.system_settings.service import DEFAULT_OPERATIONAL_SETTINGS
@@ -104,7 +104,7 @@ def month_grid(year: int, month: int, holiday_region: str = "") -> list[list[dic
                 {
                     "date": day,
                     "in_month": day.month == month,
-                    "holiday": holiday_for_date(day, holiday_region),
+                    "holiday": holiday_info_for_date(day, holiday_region),
                     "today": day == local_today(),
                 }
                 for day in week

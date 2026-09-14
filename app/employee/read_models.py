@@ -71,6 +71,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         result.append(
             {
                 "id": str(workday.id),
+                "region_id": workday.region_id,
                 "date": revision.work_date,
                 "category": workday.category,
                 "title": revision.title,
@@ -124,6 +125,8 @@ def day_assignments(
                 "note": note,
                 "is_own": is_own,
                 "can_decline": bool(is_own and row.status == "ASSIGNED" and can_self_decline),
+                "vehicle": row.vehicle_name_snapshot,
+                "accommodation": row.accommodation_name,
             }
         )
     return result

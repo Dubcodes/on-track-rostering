@@ -17,3 +17,25 @@ Reference examined read-only at local commit `20d65d9` (`Re-Deputy 0.5.5`) on 20
 | `main.py` / `database.py` | Behavioral study only | Their behavior informed boundaries; their monolithic architecture was rejected. |
 | Deputy capture, OAuth, iCal, evidence reconciliation, interpreted workdays, roster-note inference | Deputy-specific / do not migrate | Entirely absent. On Track assignments and revision snapshots are authoritative. |
 | Live Love Racing/HRNZ | Deferred investigation | Provider-neutral programme/source override schema only; no scraping occurs in request paths. |
+# Fidelity inventory (2026-09-14)
+
+The current application deliberately reuses Re-Deputy's interaction language, not its data source or runtime architecture.
+
+## Ported or adapted
+
+- Personal Month/List: shared header navigation, seven-day calendar plus desktop Week column, compact cards, Next Up, keyboard navigation and guarded horizontal swipe.
+- Public holidays: reusable accessible star marker and tap/click popover, backed by On Track's configurable New Zealand holiday engine.
+- Hours: fortnight marker derived from `fortnight_anchor` and a 14-day personal view backed only by current published assignment spans.
+- Crew: the same Month/List calendar language, with On Track regional authorization and privacy filtering remaining authoritative.
+- Day: compact published-workday hierarchy, category-specific timing, assignments, allowances and collapsible calculation/history.
+- Settings and notifications: compact progressive sections, built-in CSP-safe theme previews, per-device push state, persisted preferences and outbox-backed test notifications.
+- Builder: private-draft status, searchable people/positions, advisory capability and same-date hints, explicit On Track assignment states, human preview summary and atomic publish.
+- Operational notices: the small calendar-banner location is reused for persisted On Track global/regional notices. Regional notices outrank global notices; within a scope the latest start/create/id wins deterministically.
+
+## Intentionally not ported
+
+Deputy credentials, login, synchronization, scraping, API behavior, source evidence/diagnostics, source-specific alerts, the `S` shortcut, hard-coded historical timesheet anchors, Deputy payroll semantics and SQLite architecture are excluded.
+
+## Deferred to Operations/Travel
+
+Vehicle/accommodation mutation in the ordinary builder, travel legs and larger operation coordination remain deferred. Existing published values may be displayed, but this pass does not invent service behavior around schema fields whose product workflow is not yet settled.

@@ -1,19 +1,22 @@
 {% extends "base.html" %}
+{% from "_holiday_marker.html" import holiday_marker %}
+{% from "_icons.html" import ui_icon %}
 {% set help_context = 'month' %}
 {% block title %}{{ month_label }} · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <div data-roster-nav data-prev-url="{{ header_prev_url }}" data-next-url="{{ header_next_url }}" data-month-url="{{ month_view_url }}" data-list-url="{{ list_view_url }}" hidden></div>
+{% if prominent_notice %}<aside class="operational-notice" role="status"><strong>{% if prominent_notice.scope == 'GLOBAL' %}All crew{% else %}Crew notice{% endif %}</strong><span>{{ prominent_notice.message }}</span><small>Until {{ prominent_notice.expires_at|display_datetime }}</small></aside>{% endif %}
 {% if view == "list" %}
   <section class="roster-list" aria-label="Roster list">
-    {% for week in grid %}{% for day in week if day.in_month and items_by_date.get(day.date) %}
+    {% for week in grid %}{% for day in week if day.in_month and (items_by_date.get(day.date) or fortnight_markers.get(day.date) or day.holiday) %}
       <article class="list-day{% if day.today %} today-list-day{% endif %}">
-        <div class="list-day-heading"><a class="list-day-date" href="/day/{{ items_by_date[day.date][0].id }}"><strong>{{ day.date.strftime('%a') }}</strong><span>{{ day.date.day }}</span></a></div>
+        <div class="list-day-heading">{% if items_by_date.get(day.date) %}<a class="list-day-date" href="/day/{{ items_by_date[day.date][0].id }}">{% else %}<span class="list-day-date">{% endif %}<strong>{{ day.date.strftime('%a') }}</strong><span>{{ day.date.day }}</span>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}{{ holiday_marker(day.holiday, 'start') }}</div>
         <div class="list-day-shifts">{% for item in items_by_date[day.date] %}
           <a class="list-shift{% if item.cross_region %} cross-region{% endif %}" href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-track-colour="{{ item.colour }}">
             <span class="list-shift-main"><strong>{{ item.track or item.title }}</strong><span>{{ item.role }}</span></span>
             <span class="list-shift-meta"><span>{{ item.start|display_time or 'Time TBC' }}</span><span>{{ item.minutes // 60 }}h {{ item.minutes % 60 }}m</span>{% if item.status != 'ASSIGNED' %}<span>{{ item.status|replace('_', ' ')|title }}</span>{% endif %}</span>
           </a>
-        {% endfor %}</div>
+        {% endfor %}{% if fortnight_markers.get(day.date) %}<a class="list-shift timesheet-list-card" href="{{ fortnight_markers[day.date] }}"><span class="list-shift-main"><strong>Fortnight hours</strong><span>Review all 14 days</span></span>{{ ui_icon('timesheet') }}</a>{% endif %}</div>
       </article>
     {% endfor %}{% endfor %}
   </section>
@@ -25,7 +28,8 @@
         <article class="day-cell{% if not day.in_month %} outside-month{% endif %}{% if day.today %} today{% endif %}">
           <div class="calendar-date-heading">
             {% if items_by_date.get(day.date) %}<a class="day-link" href="/day/{{ items_by_date[day.date][0].id }}">{% else %}<span class="day-link">{% endif %}<span>{{ day.date.strftime('%a') }}</span><strong>{{ day.date.day }}</strong>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}
-            {% set regional_holiday = items_by_date.get(day.date, [])|selectattr('holiday')|map(attribute='holiday')|first %}{% if regional_holiday or day.holiday %}<span class="holiday" title="{{ regional_holiday or day.holiday }}" aria-label="Public holiday: {{ regional_holiday or day.holiday }}">★</span>{% endif %}
+            {{ holiday_marker(day.holiday, "start" if loop.index0 < 2 else "end") }}
+            {% if fortnight_markers.get(day.date) %}<a class="timesheet-dot" href="{{ fortnight_markers[day.date] }}" aria-label="Open fortnight hours ending {{ day.date.strftime('%d %B') }}" title="Fortnight hours">{{ ui_icon("timesheet") }}</a>{% endif %}
           </div>
           <div class="shift-list">{% for item in items_by_date.get(day.date, []) %}
             <a class="shift-card{% if item.cross_region %} cross-region{% endif %}" href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-track-colour="{{ item.colour }}">

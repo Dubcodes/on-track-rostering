@@ -551,6 +551,7 @@ def _publish_rows(
 
 def test_manager_publish_employee_visibility_and_route_authorization(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, track_id, position_id, person_id) = routed_db
+    work_date = local_today() + timedelta(days=7)
     manager_client = TestClient(app)
     csrf = _login(manager_client, "manager@example.test", "123456")
     created = manager_client.post(
@@ -558,7 +559,7 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
         data={
             "region_id": str(region_id),
             "category": "RACE_DAY",
-            "work_date": "2026-09-14",
+            "work_date": work_date.isoformat(),
             "track_id": str(track_id),
             "title": "Ellerslie Race Day",
             "csrf_token": csrf,
@@ -604,7 +605,7 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
 
     employee_client = TestClient(app)
     _login(employee_client, "amy@example.test", "654321")
-    month = employee_client.get("/month?year=2026&month=9")
+    month = employee_client.get(f"/month?year={work_date.year}&month={work_date.month}")
     assert month.status_code == 200
     assert "Ellerslie" in month.text and "CCU 2" in month.text
     day = employee_client.get(f"/day/{workday_id}")
@@ -615,7 +616,9 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     assert "cached_at" not in day_payload
     assert day_payload["workday"]["revision_id"]
     assert day_payload["workday"]["revision_number"] == 1
-    crew = employee_client.get(f"/crew?region_id={region_id}&year=2026&month=9")
+    crew = employee_client.get(
+        f"/crew?region_id={region_id}&year={work_date.year}&month={work_date.month}"
+    )
     assert crew.status_code == 200 and "Ellerslie" in crew.text
     assert employee_client.get("/manage/workdays/new").status_code == 403
     assert manager_client.get("/admin").status_code == 403
@@ -633,7 +636,9 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
         draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
         draft.track_name_snapshot = "DRAFT LEAK SENTINEL"
         db.commit()
-    assert "DRAFT LEAK SENTINEL" not in employee_client.get("/month?year=2026&month=9").text
+    assert "DRAFT LEAK SENTINEL" not in employee_client.get(
+        f"/month?year={work_date.year}&month={work_date.month}"
+    ).text
     with factory() as db:
         workday = db.get(Workday, workday_id)
         published_assignment = db.scalar(
