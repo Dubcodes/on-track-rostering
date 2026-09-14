@@ -11,10 +11,22 @@ from sqlalchemy import select
 from app.auth.security import hash_credential
 from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, Region
-from app.identity.models import Person, User, UserPersonLink
-from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
-from app.notifications.service import audience_user_ids, generate_reminders, process_event, save_subscription
-from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.core.enums import CapabilitySignal, Role
+from app.identity.models import Person, RoleGrant, User, UserPersonLink
+from app.notifications.models import (
+    NotificationDelivery,
+    NotificationEvent,
+    NotificationPreference,
+    PushSubscription,
+)
+from app.notifications.service import (
+    audience_user_ids,
+    generate_periodic_digests,
+    generate_reminders,
+    process_event,
+    save_subscription,
+)
+from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 
 
 def _user(db, status: str = "ACTIVE") -> User:  # type: ignore[no-untyped-def]
@@ -262,6 +274,110 @@ def test_reminders_use_person_day_start_and_are_idempotent(db) -> None:  # type:
         available_at = available_at.replace(tzinfo=UTC)
     local_available = available_at.astimezone(ZoneInfo("Pacific/Auckland"))
     assert (local_available.date(), local_available.time()) == (date(2026, 10, 2), time(0))
+
+
+def test_periodic_digests_use_published_authorised_state_and_are_idempotent(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Digest")
+    user = User(
+        email="digest@example.test",
+        display_name="Digest Crew",
+        credential_hash=hash_credential("123456"),
+    )
+    person = Person(display_name="Digest Crew")
+    camera = BasePosition(name="Camera")
+    audio = BasePosition(name="Audio")
+    db.add_all([region, user, person, camera, audio])
+    db.flush()
+    db.add_all(
+        [
+            UserPersonLink(user_id=user.id, person_id=person.id),
+            RoleGrant(user_id=user.id, role=Role.EMPLOYEE.value, region_id=region.id),
+            NotificationPreference(
+                user_id=user.id,
+                weekly_digest=True,
+                open_positions_digest=True,
+            ),
+            PositionCapability(
+                person_id=person.id,
+                base_position_id=camera.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
+            ),
+        ]
+    )
+    workday = Workday(region_id=region.id, created_by_user_id=user.id)
+    db.add(workday)
+    db.flush()
+    revision = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=1,
+        state="PUBLISHED",
+        work_date=date(2026, 10, 8),
+        track_name_snapshot="Harbour Park",
+        start_time=time(8),
+        created_by_user_id=user.id,
+    )
+    stale = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=2,
+        state="DRAFT",
+        work_date=date(2026, 10, 8),
+        track_name_snapshot="Private draft",
+        created_by_user_id=user.id,
+    )
+    db.add_all([revision, stale])
+    db.flush()
+    db.add_all(
+        [
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=camera.id,
+                display_name_snapshot="Camera 1",
+                person_id=person.id,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+                start_time=time(7, 30),
+                note="private detail",
+            ),
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=camera.id,
+                display_name_snapshot="Camera 2",
+                status="OPEN",
+            ),
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=audio.id,
+                display_name_snapshot="Audio",
+                status="OPEN",
+            ),
+            Assignment(
+                revision_id=stale.id,
+                base_position_id=camera.id,
+                display_name_snapshot="Stale opening",
+                status="OPEN",
+            ),
+        ]
+    )
+    workday.current_published_revision_id = revision.id
+    db.commit()
+
+    now = datetime(2026, 10, 5, tzinfo=UTC)
+    assert generate_periodic_digests(db, now=now) == 2
+    assert generate_periodic_digests(db, now=now) == 0
+    events = list(
+        db.scalars(
+            select(NotificationEvent)
+            .where(NotificationEvent.audience_user_id == user.id)
+            .order_by(NotificationEvent.event_type)
+        )
+    )
+    assert [event.event_type for event in events] == ["OPEN_POSITIONS_DIGEST", "WEEKLY_DIGEST"]
+    open_message = str(events[0].payload["message"])
+    weekly_message = str(events[1].payload["message"])
+    assert "Camera 2" in open_message
+    assert "Audio" not in open_message and "Stale opening" not in open_message
+    assert "Camera 1" in weekly_message and "Harbour Park" in weekly_message
+    assert "private detail" not in weekly_message and "Private draft" not in weekly_message
 
 
 def _reminder_roster(db, suffix: str, work_date: date):  # type: ignore[no-untyped-def]

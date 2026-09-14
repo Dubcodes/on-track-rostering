@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.policy import can_manage_region, require_manage_region
 from app.auth.security import verify_csrf
-from app.catalog.models import BasePosition, Region, Track
+from app.catalog.models import BasePosition, PersonCrewGroup, Region, Track
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, WorkdayCategory
 from app.identity.models import Person, UserPersonLink
@@ -112,6 +112,7 @@ def _builder_context(
         )
     )
     person_hints: dict[tuple[uuid.UUID, uuid.UUID], str] = {}
+    people_groups_by_assignment: dict[uuid.UUID, list[tuple[str, list[Person]]]] = {}
     eligibility_by_pair = bulk_eligibility(
         db,
         {person.id for person in people},
@@ -121,15 +122,61 @@ def _builder_context(
             if assignment.base_position_id is not None
         },
     )
+    positions_by_id = {
+        position.id: position
+        for position in db.scalars(
+            select(BasePosition).where(
+                BasePosition.id.in_(
+                    {
+                        assignment.base_position_id
+                        for assignment in assignments
+                        if assignment.base_position_id is not None
+                    }
+                )
+            )
+        )
+    }
+    crew_groups_by_person: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for person_id, crew_group_id in db.execute(select(PersonCrewGroup.person_id, PersonCrewGroup.crew_group_id)):
+        crew_groups_by_person.setdefault(person_id, set()).add(crew_group_id)
+    hint_labels = {
+        "Allowed": "Preferred or approved",
+        "Worked before": "Worked this position before",
+        "Manager restricted": "Manager marked unavailable for this position",
+        "Employee opted out": "Crew member opted out of this position",
+        "No capability signal": "No position history recorded",
+    }
     for assignment in assignments:
-        if assignment.base_position_id is None:
-            continue
+        relevant: list[Person] = []
+        other: list[Person] = []
+        position = positions_by_id.get(assignment.base_position_id)
         for person in people:
-            _, reason = eligibility_by_pair[(person.id, assignment.base_position_id)]
-            hint = reason
+            eligible, reason = (
+                eligibility_by_pair[(person.id, assignment.base_position_id)]
+                if assignment.base_position_id is not None
+                else (False, "No capability signal")
+            )
+            hint = hint_labels[reason]
             if person.id in same_date_people:
                 hint += "; also rostered this date"
             person_hints[(assignment.id, person.id)] = hint
+            is_relevant = bool(
+                person.id == assignment.person_id
+                or eligible
+                or person.home_region_id == workday.region_id
+                or (
+                    position
+                    and position.crew_group_id
+                    and position.crew_group_id in crew_groups_by_person.get(person.id, set())
+                )
+            )
+            (relevant if is_relevant else other).append(person)
+        people_groups_by_assignment[assignment.id] = [
+            ("Relevant crew", relevant),
+            ("Other active crew", other),
+        ]
+    regional_people = [person for person in people if person.home_region_id == workday.region_id]
+    other_people = [person for person in people if person.home_region_id != workday.region_id]
     application_rows = db.execute(
         select(OpenPositionApplication, Person)
         .join(Person, Person.id == OpenPositionApplication.person_id)
@@ -161,6 +208,8 @@ def _builder_context(
         people=people,
         assignments=assignments,
         person_hints=person_hints,
+        people_groups_by_assignment=people_groups_by_assignment,
+        new_slot_people_groups=[("Crew from this region", regional_people), ("Other active crew", other_people)],
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
         **extra,

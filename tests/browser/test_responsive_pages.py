@@ -6,19 +6,23 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from datetime import time as clock_time
 from pathlib import Path
 
 import httpx
 import pytest
 from playwright.sync_api import Page, sync_playwright
+from sqlalchemy import select
 
-from app.auth.security import hash_credential
+from app.auth.security import hash_credential, token_hash
+from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
-from app.core.database import SessionLocal
+from app.core.database import Base, SessionLocal, engine
 from app.core.enums import Role
-from app.identity.models import Person, RoleGrant, User, UserPersonLink
+from app.core.time import utcnow
+from app.identity.models import Person, RoleGrant, TrustedDevice, User, UserPersonLink
+from app.notifications.models import NotificationPreference
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 
 pytestmark = pytest.mark.skipif(
@@ -29,9 +33,11 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def browser_site():  # type: ignore[no-untyped-def]
+    if engine.dialect.name == "sqlite":
+        Base.metadata.create_all(engine)
     suffix = uuid.uuid4().hex[:10]
     with SessionLocal() as db:
-        region = Region(name=f"Browser Region {suffix}")
+        region = Region(name=f"Browser Region {suffix}", statutory_holiday_region="Auckland")
         cross_region = Region(name=f"Cross Region {suffix}")
         group = CrewGroup(name=f"Browser Crew {suffix}")
         manager = User(
@@ -97,6 +103,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                 RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
+                NotificationPreference(user_id=employee.id, weekly_digest=True),
             ]
         )
         workday = Workday(region_id=region.id, created_by_user_id=manager.id)
@@ -152,6 +159,12 @@ def browser_site():  # type: ignore[no-untyped-def]
                 person_id=manager_person.id,
                 person_name_snapshot=manager_person.display_name,
                 status="ASSIGNED",
+            ),
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position.id,
+                display_name_snapshot="Reserve camera",
+                status="TBC",
             )]
         )
         workday.current_published_revision_id = revision.id
@@ -413,6 +426,11 @@ def _select_theme(page: Page, base_url: str, theme: str) -> None:
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])
 def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
+    with SessionLocal() as db:
+        branding = db.get(SystemBranding, 1)
+        if branding:
+            branding.product_name = "On Track"
+            db.commit()
     context = browser.new_context(
         viewport={"width": width, "height": 900}, has_touch=width <= 760
     )
@@ -490,6 +508,32 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             }"""
         )
         page.wait_for_url(f"**{next_url}")
+        previous_url = page.locator("[data-roster-nav]").get_attribute("data-prev-url")
+        page.evaluate(
+            """() => {
+              const start = new Event("touchstart");
+              Object.defineProperty(start, "touches", {value: [{clientX: 90, clientY: 120}]});
+              document.dispatchEvent(start);
+              const end = new Event("touchend");
+              Object.defineProperty(end, "changedTouches", {value: [{clientX: 250, clientY: 125}]});
+              document.dispatchEvent(end);
+            }"""
+        )
+        page.wait_for_url(f"**{previous_url}")
+        unchanged_url = page.url
+        for end_x, end_y in ((240, 122), (275, 260)):
+            page.evaluate(
+                """([endX, endY]) => {
+                  const start = new Event("touchstart");
+                  Object.defineProperty(start, "touches", {value: [{clientX: 280, clientY: 120}]});
+                  document.dispatchEvent(start);
+                  const end = new Event("touchend");
+                  Object.defineProperty(end, "changedTouches", {value: [{clientX: endX, clientY: endY}]});
+                  document.dispatchEvent(end);
+                }""",
+                [end_x, end_y],
+            )
+            assert page.url == unchanged_url
     else:
         assert page.locator(".week-total").first.is_visible()
         column_count = page.locator(".calendar-grid").evaluate(
@@ -527,6 +571,11 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             "label => document.querySelector('.month-nav > strong')?.textContent.trim() === label",
             arg=original_label,
         )
+        page.goto(base_url + "/crew")
+        page.keyboard.press("l")
+        page.wait_for_url("**view=list")
+        page.keyboard.press("m")
+        page.wait_for_url("**view=month")
     page.goto(base_url + "/settings")
     page.locator(".theme-picker-details summary").click()
     assert page.locator('input[name="theme"]').count() == 20
@@ -557,6 +606,10 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             "element => { const style = getComputedStyle(element); return [style.color, style.backgroundColor, style.borderLeftColor]; }"
         )
         assert len(set(card_colours)) == 3
+        page.goto(base_url + "/settings")
+        assert page.locator("label").first.evaluate(
+            "element => getComputedStyle(element).color"
+        ) == "rgb(255, 255, 255)"
     assert not errors
     context.close()
 
@@ -576,6 +629,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         "/manage/hours",
     ):
         _assert_page(page, base_url + path)
+        if width in {1280, 320}:
+            slug = path.strip("/").replace("/", "-") or "home"
+            _capture_page(page, f"manager-{slug}-{width}.png")
         if width <= 760:
             assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + "/month")
@@ -601,8 +657,104 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         _assert_no_horizontal_overflow(page)
     page.locator("[data-crew-search]").fill("Browser Crew")
     assert page.locator("[data-crew-picker] option", has_text="Browser Crew Member").count() >= 1
+    if width > 760:
+        for selector in ('input[name="title"]', 'textarea[name="day_note"]', 'select[name="track_id"]'):
+            page.locator(selector).focus()
+            guarded_url = page.url
+            page.keyboard.press("n")
+            assert page.url == guarded_url
     assert not errors
     context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
+def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    with SessionLocal() as db:
+        branding = db.get(SystemBranding, 1)
+        if branding:
+            branding.product_name = "On Track"
+            db.commit()
+
+    manager_context = browser.new_context(viewport={"width": width, "height": 900})
+    page = manager_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/settings#notices")
+    page.locator("#notices > details > summary").click()
+    page.locator('#notices select[name="scope"]').select_option("REGION")
+    page.locator('#notices select[name="region_id"]').select_option(values["region_id"])
+    notice_text = f"Call time moved for browser review {width}"
+    page.locator('#notices textarea[name="message"]').fill(notice_text)
+    page.locator('#notices button', has_text="Create notice").click()
+    page.wait_for_url("**/settings?notice=created*", wait_until="domcontentloaded")
+    page.goto(base_url + "/month")
+    assert page.locator(".operational-notice", has_text=notice_text).is_visible()
+    _assert_no_horizontal_overflow(page)
+    page.goto(base_url + "/crew")
+    assert page.locator(".operational-notice", has_text=notice_text).is_visible()
+    if width in {1280, 320}:
+        _capture_page(page, f"notice-crew-{width}.png")
+    assert not errors
+    manager_context.close()
+
+    admin_context = browser.new_context(viewport={"width": width, "height": 900})
+    page = admin_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["admin"])
+    page.goto(base_url + "/settings")
+    raw_session = next(
+        cookie["value"] for cookie in admin_context.cookies() if cookie["name"] == "ontrack_session"
+    )
+    with SessionLocal() as db:
+        device = db.scalar(
+            select(TrustedDevice)
+            .where(
+                TrustedDevice.token_hash == token_hash(raw_session),
+                TrustedDevice.revoked_at.is_(None),
+            )
+        )
+        assert device
+        device.primary_authenticated_at = utcnow() - timedelta(hours=1)
+        db.commit()
+    page.goto(base_url + "/admin#branding")
+    page.get_by_text("Send a one-time invitation", exact=True).click()
+    invitation_form = page.locator('form[action="/admin/invitations"]')
+    invitation_form.locator('input[name="display_name"]').fill("Fresh auth candidate")
+    invitation_form.locator('input[name="email"]').fill(f"fresh-{width}@example.test")
+    invitation_form.locator('select[name="role"]').select_option("EMPLOYEE")
+    invitation_form.locator('select[name="region_id"]').select_option(values["region_id"])
+    invitation_form.get_by_role("button", name="Create invitation").click()
+    page.wait_for_url("**/settings?reauth=required*", wait_until="domcontentloaded")
+    assert page.get_by_text("The privileged action will not be replayed automatically.").is_visible()
+    page.locator('#reauthenticate input[name="credential"]').fill(values["admin"][1])
+    page.locator("#reauthenticate button", has_text="Re-authenticate").click()
+    page.wait_for_url("**/admin", wait_until="domcontentloaded")
+    assert page.locator('input[name="product_name"]').input_value() == "On Track"
+    assert page.get_by_text("Fresh auth candidate", exact=True).count() == 0
+    assert not errors
+    admin_context.close()
+
+    employee_context = browser.new_context(viewport={"width": width, "height": 900})
+    page = employee_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["employee"])
+    page.goto(base_url + "/month")
+    assert page.locator(".timesheet-dot").count() >= 1
+    page.goto(base_url + "/settings")
+    assert page.locator('input[name="weekly_digest"]').is_checked()
+    page.goto(base_url + "/hours")
+    assert page.locator(".hours-total strong").inner_text() != "0h 0m"
+    page.goto(base_url + "/month?year=2026&month=1")
+    holiday = page.locator(".holiday-marker").first
+    assert page.locator('.holiday-marker summary[title*="Auckland Anniversary Day"]').count() == 1
+    holiday.locator("summary").click()
+    assert holiday.locator(".holiday-popover").is_visible()
+    _assert_no_horizontal_overflow(page)
+    if width in {1280, 320}:
+        _capture_page(page, f"holiday-popover-{width}.png")
+    assert not errors
+    employee_context.close()
     context = browser.new_context(viewport={"width": width, "height": 900})
     page = context.new_page()
     errors = _watch_browser_errors(page)

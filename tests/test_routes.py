@@ -745,6 +745,52 @@ def test_office_day_builder_uses_category_appropriate_fields_and_warnings(routed
     assert "Race Day timing is incomplete" not in preview.text
 
 
+def test_builder_groups_relevant_crew_before_other_active_people(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "category": "RACE_DAY",
+            "work_date": "2026-10-22",
+            "track_id": str(track_id),
+            "title": "Grouped builder",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    edit_url = created.headers["location"]
+    manager.get(edit_url)
+    workday_id = uuid.UUID(edit_url.rsplit("/", 1)[1])
+    with factory() as db:
+        version = db.get(Workday, workday_id).lock_version
+    added = manager.post(
+        edit_url + "/assignments",
+        data={
+            "base_position_id": str(position_id),
+            "slot_index": "1",
+            "person_id": "",
+            "status": "TBC",
+            "note": "",
+            "assignment_start_time": "",
+            "assignment_end_time": "",
+            "expected_version": str(version),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert added.status_code == 303
+    html = manager.get(edit_url).text
+    assert '<optgroup label="Relevant crew">' in html
+    assert '<optgroup label="Other active crew">' in html
+    assert html.index('<optgroup label="Relevant crew">') < html.index("Amy Crew")
+    assert html.index("Amy Crew") < html.index('<optgroup label="Other active crew">')
+    assert "No position history recorded" in html
+    assert "Move up" not in html and "Move down" not in html
+
+
 def test_historical_self_decline_is_denied_without_changing_publication(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, position_id, person_id) = routed_db
     workday_id = _publish_rows(

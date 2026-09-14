@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import uuid
+from calendar import monthrange
 from collections.abc import Callable
 from datetime import UTC, datetime, time, timedelta
 from urllib.parse import urlsplit
@@ -15,6 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
 from app.branding.service import branding_for
+from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import local_today, utcnow
@@ -249,13 +251,18 @@ def _notification_payload(db: Session, event: NotificationEvent) -> dict[str, st
         "ONE_HOUR_BEFORE": "Roster starts in one hour",
         "OPERATIONAL_NOTICE": "Crew notice",
         "TEST_NOTIFICATION": "Notifications are working",
+        "WEEKLY_DIGEST": "Your week ahead",
+        "OPEN_POSITIONS_DIGEST": "Open positions this month",
     }
     return {
         "title": titles.get(event.event_type, f"{product_name} update"),
         "body": str(
             event.payload.get("message") or f"Open {product_name} to view the authoritative roster details."
         ),
-        "url": f"/day/{event.workday_id}" if event.workday_id else "/month",
+        "url": str(
+            event.payload.get("url")
+            or (f"/day/{event.workday_id}" if event.workday_id else "/month")
+        ),
         "event_key": event.event_key,
     }
 
@@ -583,5 +590,147 @@ def generate_reminders(db: Session, *, now: datetime | None = None, horizon_days
                 available_at=available_at,
             ):
                 created += 1
+    db.commit()
+    return created
+
+
+def _insert_digest_event(
+    db: Session,
+    *,
+    event_key: str,
+    event_type: str,
+    user_id: uuid.UUID,
+    payload: dict[str, object],
+    available_at: datetime,
+) -> bool:
+    values = {
+        "event_key": event_key,
+        "event_type": event_type,
+        "audience_user_id": user_id,
+        "payload": payload,
+        "available_at": available_at,
+    }
+    if db.get_bind().dialect.name == "postgresql":
+        inserted = db.scalar(
+            postgresql_insert(NotificationEvent)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=[NotificationEvent.event_key])
+            .returning(NotificationEvent.event_key)
+        )
+        return inserted is not None
+    if db.get(NotificationEvent, event_key) is not None:
+        return False
+    db.add(NotificationEvent(**values))
+    return True
+
+
+def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> int:
+    """Create one weekly work summary and one monthly opening summary per opted-in user.
+
+    Periods use the application timezone. The weekly period begins Monday and covers
+    seven days; the openings period covers the remaining days of the calendar month.
+    Stable per-user period keys make repeated worker runs safe.
+    """
+    current = now or utcnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    local_date = current.astimezone(get_settings().timezone).date()
+    week_start = local_date - timedelta(days=local_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    month_end = local_date.replace(day=monthrange(local_date.year, local_date.month)[1])
+    candidates = db.execute(
+        select(User.id, UserPersonLink.person_id, NotificationPreference)
+        .join(UserPersonLink, UserPersonLink.user_id == User.id)
+        .join(NotificationPreference, NotificationPreference.user_id == User.id)
+        .where(User.status == "ACTIVE", NotificationPreference.notifications_enabled.is_(True))
+    ).all()
+    created = 0
+    for user_id, person_id, preference in candidates:
+        grants = db.execute(
+            select(RoleGrant.role, RoleGrant.region_id).where(
+                RoleGrant.user_id == user_id,
+                RoleGrant.status == "ACTIVE",
+            )
+        ).all()
+        authorised_regions = (
+            set(db.scalars(select(Region.id)))
+            if any(role == Role.ADMIN.value for role, _region_id in grants)
+            else {region_id for _role, region_id in grants if region_id is not None}
+        )
+        if preference.weekly_digest:
+            rows = db.execute(
+                select(Workday, WorkdayRevision, Assignment)
+                .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
+                .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
+                .where(
+                    Workday.region_id.in_(authorised_regions),
+                    WorkdayRevision.work_date >= week_start,
+                    WorkdayRevision.work_date <= week_end,
+                    Assignment.person_id == person_id,
+                    Assignment.status == "ASSIGNED",
+                )
+                .order_by(WorkdayRevision.work_date, Assignment.display_name_snapshot)
+            ).all()
+            if rows:
+                items = []
+                for _workday, revision, assignment in rows[:4]:
+                    starts = assignment.start_time or revision.start_time
+                    start_label = starts.strftime("%H:%M") if starts else "time TBC"
+                    items.append(
+                        f"{revision.work_date:%a} {revision.work_date.day} "
+                        f"{revision.work_date:%b} · {revision.track_name_snapshot} · "
+                        f"{assignment.display_name_snapshot} · {start_label}"
+                    )
+                message = "; ".join(items)
+                if len(rows) > len(items):
+                    message += f"; plus {len(rows) - len(items)} more"
+                if _insert_digest_event(
+                    db,
+                    event_key=f"digest:weekly:{user_id}:{week_start.isoformat()}",
+                    event_type="WEEKLY_DIGEST",
+                    user_id=user_id,
+                    payload={"message": message, "url": f"/month?date={week_start.isoformat()}"},
+                    available_at=current,
+                ):
+                    created += 1
+        if preference.open_positions_digest:
+            openings = db.execute(
+                select(Workday, WorkdayRevision, Assignment)
+                .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
+                .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
+                .where(
+                    Workday.region_id.in_(authorised_regions),
+                    WorkdayRevision.work_date >= local_date,
+                    WorkdayRevision.work_date <= month_end,
+                    Assignment.status == "OPEN",
+                    Assignment.base_position_id.is_not(None),
+                )
+                .order_by(WorkdayRevision.work_date, Assignment.display_name_snapshot)
+            ).all()
+            eligible = [
+                (workday, revision, assignment)
+                for workday, revision, assignment in openings
+                if assignment.base_position_id
+                and eligibility(db, person_id, assignment.base_position_id)[0]
+            ]
+            if eligible:
+                items = [
+                    f"{revision.work_date:%a} {revision.work_date.day} "
+                    f"{revision.work_date:%b} · {revision.track_name_snapshot} · "
+                    f"{assignment.display_name_snapshot}"
+                    for _workday, revision, assignment in eligible[:4]
+                ]
+                message = "; ".join(items)
+                if len(eligible) > len(items):
+                    message += f"; plus {len(eligible) - len(items)} more"
+                if _insert_digest_event(
+                    db,
+                    event_key=f"digest:open:{user_id}:{local_date:%Y-%m}",
+                    event_type="OPEN_POSITIONS_DIGEST",
+                    user_id=user_id,
+                    payload={"message": message, "url": f"/month?date={local_date:%Y-%m}-01"},
+                    available_at=current,
+                ):
+                    created += 1
     db.commit()
     return created

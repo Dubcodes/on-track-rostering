@@ -656,6 +656,7 @@ html[data-theme="high-contrast"] {
   --location-colour-9: #b7c96d;
   --location-colour-10: #ef9ca8;
 }
+html[data-theme="high-contrast"] label { color: var(--text); }
 
 html[data-theme="race-night"] {
   --bg: #08090d;
@@ -1046,3 +1047,18 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
   .site-header.has-month-nav .month-step { width: 20px; min-width: 20px; }
   .site-header.has-month-nav .site-nav .icon-button { width: 27px; min-width: 27px; height: 30px; min-height: 30px; }
 }
+
+/* Dense control surfaces: keep common state visible and edits one click away. */
+.admin-grid { gap: 10px; }
+.admin-grid .panel, .settings-grid .panel { padding: 16px; }
+.admin-grid h2, .settings-grid h2 { margin-bottom: 8px; }
+.admin-grid .record-list { margin-bottom: 10px; }
+.admin-grid details + details, .settings-grid details + details { margin-top: 8px; }
+.admin-grid details > form, .settings-grid details > form, .builder-add-slot > form { margin-top: 12px; }
+.control-record { border-top: 1px solid var(--line); padding: 9px 2px; }
+.control-record > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.control-record[open] > summary { margin-bottom: 10px; }
+.compact-signout { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.compact-signout form { margin: 0; }
+.builder-add-slot { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+@media (max-width: 560px) { .compact-signout { align-items: stretch; flex-direction: column; } }

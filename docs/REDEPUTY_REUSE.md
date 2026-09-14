@@ -30,7 +30,21 @@ The current application deliberately reuses Re-Deputy's interaction language, no
 - Day: compact published-workday hierarchy, category-specific timing, assignments, allowances and collapsible calculation/history.
 - Settings and notifications: compact progressive sections, built-in CSP-safe theme previews, per-device push state, persisted preferences and outbox-backed test notifications.
 - Builder: private-draft status, searchable people/positions, advisory capability and same-date hints, explicit On Track assignment states, human preview summary and atomic publish.
+- Builder people pickers: selected, position-capable, matching crew-group, and home-region people appear in a labelled relevant group before other active crew. The server remains the authorization layer. Arbitrary row reordering is intentionally omitted: `slot_index` identifies numbered position slots and is not a presentation-order field, so reorder controls require a deliberate future domain field and optimistic-lock mutation rather than client-only arrows.
 - Operational notices: the small calendar-banner location is reused for persisted On Track global/regional notices. Regional notices outrank global notices; within a scope the latest start/create/id wins deterministically.
+
+## Notification truth table
+
+| Notification | Source and audience | Preference / dedupe rule |
+|---|---|---|
+| Published roster change | Current and previous published assignment union | Master switch + roster changes; changes within 24 hours also require the important-change switch; one publication event key |
+| Night-before / two-days-before / one-hour | Current published assignment for the linked person | Individual reminder switch; stable revision/person/type key; stale or late reminders finish without delivery |
+| Immediate open position | Current published OPEN slot, regional Employee grant, authoritative eligibility | Master switch + eligible-openings switch; one slot/publication event key |
+| Weekly digest | Current published assignments in the Monday–Sunday application-timezone period | Explicit weekly opt-in; one user/week-start key; generated on the first worker run in that period |
+| Open-position digest | Eligible current published OPEN slots from today through calendar month end | Explicit monthly digest opt-in; one user/month key; deliberately a compact periodic summary distinct from immediate alerts |
+| Manager action | Current regional Manager/Sub-Manager audience | Admin-alert switch; source event key |
+| Operational notice | Active global audience, or non-Contractor grants in the selected region | Master switch; one notice event key when optional push is selected |
+| Test notification | Requesting active user only | Deliberately bypasses preference switches; one unique user-request event key |
 
 ## Intentionally not ported
 
