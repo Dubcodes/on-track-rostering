@@ -77,13 +77,18 @@ def browser_site():  # type: ignore[no-untyped-def]
                 employee,
                 admin,
                 viewer,
-                SystemBranding(id=1, product_name="On Track", updated_by_user_id=admin.id),
                 person,
                 manager_person,
                 other_person,
             ]
         )
         db.flush()
+        branding = db.get(SystemBranding, 1)
+        if branding:
+            branding.product_name = "On Track"
+            branding.updated_by_user_id = admin.id
+        else:
+            db.add(SystemBranding(id=1, product_name="On Track", updated_by_user_id=admin.id))
         track = Track(
             name=f"Browser Track {suffix}", region_id=region.id, display_colour="#2E7D6A"
         )
