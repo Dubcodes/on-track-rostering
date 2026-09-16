@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, time
+from datetime import date
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -13,7 +13,9 @@ from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, PersonCrewGroup, Region, Track
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, WorkdayCategory
+from app.core.time import parse_time
 from app.identity.models import Person, UserPersonLink
+from app.positions.ordering import position_order
 from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
@@ -34,10 +36,6 @@ from app.web import context, templates
 router = APIRouter(prefix="/manage")
 
 
-def _parse_time(value: str) -> time | None:
-    return time.fromisoformat(value) if value.strip() else None
-
-
 def _editable_regions(db: Session, request: Request) -> list[Region]:
     regions = list(db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)))
     return [region for region in regions if can_manage_region(request.state.actor, region.id)]
@@ -48,7 +46,13 @@ def new_workday_page(request: Request, db: Session = Depends(get_db)):
     regions = _editable_regions(db, request)
     if not regions:
         raise HTTPException(403, "Regional roster authority required")
-    tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE").order_by(Track.name)))
+    tracks = list(
+        db.scalars(
+            select(Track)
+            .where(Track.lifecycle == "ACTIVE", Track.region_id.in_([region.id for region in regions]))
+            .order_by(Track.name)
+        )
+    )
     return templates.TemplateResponse(
         "workday_new.html",
         context(request, regions=regions, tracks=tracks, categories=[item.value for item in WorkdayCategory]),
@@ -96,6 +100,7 @@ def _builder_context(
             .order_by(Assignment.display_name_snapshot)
         )
     )
+    assignments.sort(key=lambda row: (position_order(row.display_name_snapshot), str(row.slot_key)))
     people = list(
         db.scalars(select(Person).where(Person.lifecycle == "ACTIVE").order_by(Person.display_name))
     )
@@ -200,10 +205,10 @@ def _builder_context(
                 .order_by(Track.name)
             )
         ),
-        positions=list(
+        positions=sorted(
             db.scalars(
                 select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name)
-            )
+            ), key=lambda position: position_order(position.name)
         ),
         people=people,
         assignments=assignments,
@@ -338,12 +343,12 @@ def save_details(
             work_date=work_date,
             track_id=uuid.UUID(track_id) if track_id else None,
             title=title,
-            start_time=_parse_time(start_time),
-            end_time=_parse_time(end_time),
-            on_track_time=_parse_time(on_track_time),
-            first_trial_time=_parse_time(first_trial_time),
-            first_race_time=_parse_time(first_race_time),
-            last_race_time=_parse_time(last_race_time),
+            start_time=parse_time(start_time),
+            end_time=parse_time(end_time),
+            on_track_time=parse_time(on_track_time),
+            first_trial_time=parse_time(first_trial_time),
+            first_race_time=parse_time(first_race_time),
+            last_race_time=parse_time(last_race_time),
             race_count=count,
             day_note=day_note,
             change_reason=change_reason,
@@ -392,8 +397,8 @@ def create_assignment(
                 status=status,
                 note=note,
                 note_private=note_private,
-                start_time=_parse_time(assignment_start_time),
-                end_time=_parse_time(assignment_end_time),
+                start_time=parse_time(assignment_start_time),
+                end_time=parse_time(assignment_end_time),
             ),
         )
     except DraftConflict as exc:
@@ -437,8 +442,8 @@ def change_assignment(
             status=status,
             note=note,
             note_private=note_private,
-            start_time=_parse_time(assignment_start_time),
-            end_time=_parse_time(assignment_end_time),
+            start_time=parse_time(assignment_start_time),
+            end_time=parse_time(assignment_end_time),
         )
     except DraftConflict as exc:
         raise HTTPException(409, str(exc)) from exc

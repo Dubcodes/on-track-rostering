@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
+from app.positions.ordering import position_order
 from app.rostering.models import Assignment, WorkdayRevision
 
 
@@ -45,7 +46,7 @@ def person_day_participation(
     ordered = sorted(
         assignments,
         key=lambda row: (
-            row.display_name_snapshot.casefold(),
+            position_order(row.display_name_snapshot),
             row.slot_index if row.slot_index is not None else -1,
             str(row.slot_key),
         ),

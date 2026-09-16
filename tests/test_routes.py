@@ -39,6 +39,50 @@ from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.system_settings.models import SystemSettings
 
 
+def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        other_region = db.scalar(select(Region).where(Region.id != region_id))
+        other_id = other_region.id
+        outside_track = Track(name="Outside Track", region_id=other_id)
+        archived = Track(name="Archived Track", region_id=region_id, lifecycle="ARCHIVED")
+        db.add_all([outside_track, archived])
+        db.commit()
+    client = TestClient(app)
+    csrf = _login(client, "manager@example.test", "123456")
+    create_page = client.get("/manage/workdays/new")
+    assert "Outside Track" not in create_page.text
+    assert "Archived Track" not in create_page.text
+    forged = client.post("/manage/workdays", data={
+        "region_id": str(region_id), "track_id": str(outside_track.id),
+        "work_date": "2026-09-20", "category": "RACE_DAY", "csrf_token": csrf,
+    })
+    assert forged.status_code == 400
+    created = client.post("/manage/workdays", data={
+        "region_id": str(region_id), "track_id": str(track_id),
+        "work_date": "2026-09-20", "category": "RACE_DAY", "csrf_token": csrf,
+    }, follow_redirects=False)
+    assert created.status_code == 303
+    url = created.headers["location"]
+    assert 'name="change_reason"' not in client.get(url).text
+    with factory() as db:
+        wd = db.get(Workday, uuid.UUID(url.rsplit("/", 1)[1]))
+        version = wd.lock_version
+    saved = client.post(url + "/details", data={
+        "work_date": "2026-09-20", "track_id": str(track_id), "title": "Friendly times",
+        "start_time": "930", "end_time": "1730", "on_track_time": "9:30",
+        "first_trial_time": "0930", "first_race_time": "09:30", "last_race_time": "1630",
+        "expected_version": version, "csrf_token": csrf,
+    }, follow_redirects=False)
+    assert saved.status_code == 303
+    with factory() as db:
+        wd = db.get(Workday, uuid.UUID(url.rsplit("/", 1)[1]))
+        draft = db.get(WorkdayRevision, wd.current_draft_revision_id)
+        assert draft.start_time == draft.on_track_time == draft.first_trial_time == draft.first_race_time == time(9, 30)
+        assert draft.end_time == time(17, 30)
+        assert wd.lock_version == version + 1
+
+
 def test_public_login_and_liveness_routes_render(routed_db) -> None:  # type: ignore[no-untyped-def]
     client = TestClient(app)
     login = client.get("/login")

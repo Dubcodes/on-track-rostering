@@ -11,6 +11,7 @@ from app.catalog.models import Region
 from app.core.enums import Role
 from app.core.holidays import holiday_for_date
 from app.identity.models import Person
+from app.positions.ordering import position_order
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.participation import person_day_participation
 
@@ -109,6 +110,7 @@ def day_assignments(
             return []
         statement = statement.where(Assignment.person_id == actor.person_id)
     rows = list(db.scalars(statement.order_by(Assignment.display_name_snapshot)))
+    rows.sort(key=lambda row: (position_order(row.display_name_snapshot), str(row.slot_key)))
     result = []
     for row in rows:
         is_own = actor.person_id == row.person_id

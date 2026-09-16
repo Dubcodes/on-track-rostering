@@ -314,6 +314,9 @@ def browser_site():  # type: ignore[no-untyped-def]
             "workday_id": str(workday.id),
             "cross_workday_id": str(cross_workday.id),
             "region_id": str(region.id),
+            "cross_region_id": str(cross_region.id),
+            "track_id": str(track.id),
+            "cross_track_id": str(cross_track.id),
             "active_notice_text": active_notice_text,
             "expired_notice_text": expired_notice_text,
         }
@@ -352,6 +355,38 @@ def browser_site():  # type: ignore[no-untyped-def]
     finally:
         process.terminate()
         process.wait(timeout=10)
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["admin"])
+    page.goto(base_url + "/manage/workdays/new")
+    region = page.locator("[data-track-region]")
+    tracks = page.locator("[data-region-track]")
+    region.select_option(values["region_id"])
+    assert tracks.locator(f'option[value="{values["track_id"]}"]').count() == 1
+    assert tracks.locator(f'option[value="{values["cross_track_id"]}"]').count() == 0
+    tracks.select_option(values["track_id"])
+    region.select_option(values["cross_region_id"])
+    assert tracks.input_value() == ""
+    assert tracks.locator(f'option[value="{values["track_id"]}"]').count() == 0
+    tracks.select_option(values["cross_track_id"])
+    region.select_option(values["region_id"])
+    assert tracks.input_value() == ""
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"region-track-filter-{width}.png")
+    page.goto(base_url + f'/manage/workdays/{values["workday_id"]}')
+    start = page.locator('input[name="start_time"]')
+    assert start.get_attribute("type") == "text"
+    assert start.get_attribute("inputmode") == "numeric"
+    for value in ("930", "0930", "9:30", "09:30"):
+        start.fill(value)
+        start.press("Tab")
+        assert start.input_value() == "09:30"
+    context.close()
 
 
 def _login(page: Page, base_url: str, credentials: tuple[str, str]) -> None:
