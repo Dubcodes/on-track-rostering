@@ -43,8 +43,8 @@ staging/production deployment, or Re-Deputy modification occurred.
 
 ## Required continuation — not yet implemented
 
-1. Track palette slots, deterministic migration/backfill, theme palettes,
-   region moves with both-region authorization/audit, and obsolete hex cleanup.
+1. Track palette implementation is delivered in the second checkpoint below;
+   actual PostgreSQL migration/concurrency qualification remains pending.
 2. Fixed shared header controls, three-dot removal, measured Month centering,
    global POST scroll restoration, and holiday-star alignment.
 3. Canonical calendar event/observations, reconciliation/provenance, Online
@@ -60,3 +60,66 @@ staging/production deployment, or Re-Deputy modification occurred.
 Operations/Travel architecture and live-source production scraping remain out
 of scope. Manual rostering, immutable publication, optimistic locking, privacy,
 and existing server-side authorization must be preserved through continuation.
+
+## Second local checkpoint — track palette and editing
+
+The first checkpoint `3f83b8de1a56c9d4da33934736b56688e02394bf` is preserved,
+not amended or rewritten. This remains a partial structural pass, not permission
+to push or deploy halfway through.
+
+Migration `26a91f48b3d0_track_palette_slots.py` follows `91ce2f784ab0`.
+Existing active tracks are ranked deterministically by name/UUID per region.
+Archived tracks retain history and receive deterministic reusable slots. The
+migration aborts transactionally if any region has more than 20 active tracks;
+it never silently collides or deletes tracks. The active-only unique index and
+range check enforce the intended PostgreSQL model.
+
+`Track.palette_slot` is stored, not hashed, and has no default shared colour or
+user colour input. Both create endpoints call the same destination-Region-locking
+allocation service. Moves/reactivation retain a slot when free or choose the
+first free destination slot; a full region produces a controlled error. Editing
+supports name, region, lifecycle, and map reference. Managers need administration
+authority in both the current and destination regions; Admin is global. Audit
+records previous/destination region and slot.
+
+`Track.display_colour` and `WorkdayRevision.track_colour_snapshot` are removed,
+not retained as a second presentation authority. All roster business snapshots,
+IDs, dates, published names, assignment identities, and publication pointers are
+untouched by the migration. Downgrade recreates neutral prototype defaults; it
+cannot recover discarded prototype colour values.
+
+One `track_token` resolver supplies Month/List/upcoming, Crew and Day; Master Data
+uses the same resolver as a Jinja filter. `track-palette.css` defines all 20 slots
+and reserved source/unconfirmed/Office/Training tokens for every supported theme.
+Race Night is muted; bright and high-contrast themes have their own presentation;
+Track Colours uses the raw palette. Travel preserves its linked track token with
+a shared pattern treatment. No transport architecture is introduced. The shared
+stylesheet is build-versioned and included in service-worker shell/offline assets.
+Old hex injection and colour-distance warning code are deleted.
+
+The centralized position service is retained rather than adding `sort_order`:
+no manual ordering editor is requested, and a new persistent field would require
+otherwise unnecessary precedence/snapshot rules. Imports must reuse the service;
+slot index remains identity, not display order.
+
+Qualification:
+
+- Native Windows release gate passed compile, Ruff, Alembic PostgreSQL SQL
+  generation through the new revision, deterministic tests (104 passed,
+  12 PostgreSQL-only skips), `pip check`, `pip-audit --local` (no known
+  vulnerabilities), and all JavaScript syntax checks.
+- Native Playwright: 14 passed at 1280/430/375/320. New Master Data tests cover
+  no colour input, editable region/map controls, and distinct computed palette
+  values across Race Night/Daylight/High Contrast/Track Colours. Existing
+  privacy, cross-region, upcoming work, offline, and fresh-auth flows passed.
+- Screenshots: `test-results/ui-fidelity/master-data-palette-{theme}-{width}.png`.
+  Race Night 320 and Daylight 1280 were visually inspected, without overflow.
+- A real PostgreSQL simultaneous-track-create regression is added and remains
+  skipped locally until a disposable `ONTRACK_TEST_DATABASE_URL` is configured.
+  SQL generation and SQLite unit/browser fixtures are not PostgreSQL execution
+  or migration-preservation qualification.
+
+No push, exact-head GitHub workflow, Compose/image qualification for this new
+checkpoint, Docker execution, or deployment occurred. Sources/import/preferences,
+header/scroll/Month/holiday refinements, and Builder/Day transplantation remain
+unimplemented. The continuation work list above remains authoritative.

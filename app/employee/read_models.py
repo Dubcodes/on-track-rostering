@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.policy import Actor, can_crew_view
-from app.catalog.models import Region
+from app.catalog.models import Region, Track
+from app.catalog.presentation import track_token
 from app.core.enums import Role
 from app.core.holidays import holiday_for_date
 from app.identity.models import Person
@@ -22,9 +23,10 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         bool(set(roles) & broad_roles) for roles in actor.regional_roles.values()
     )
     statement = (
-        select(Workday, WorkdayRevision, Region)
+        select(Workday, WorkdayRevision, Region, Track.palette_slot)
         .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
         .join(Region, Region.id == Workday.region_id)
+        .outerjoin(Track, Track.id == WorkdayRevision.track_id)
         .where(WorkdayRevision.work_date >= start, WorkdayRevision.work_date < end)
         .order_by(WorkdayRevision.work_date)
     )
@@ -40,7 +42,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
     own_by_revision: dict[uuid.UUID, list[Assignment]] = {}
     statuses_by_revision: dict[uuid.UUID, set[str]] = {}
     if actor.person_id and rows:
-        revision_ids = [revision.id for _workday, revision, _region in rows]
+        revision_ids = [revision.id for _workday, revision, _region, _slot in rows]
         for assignment in db.scalars(
             select(Assignment).where(
                 Assignment.revision_id.in_(revision_ids), Assignment.person_id == actor.person_id
@@ -48,7 +50,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         ):
             own_by_revision.setdefault(assignment.revision_id, []).append(assignment)
     if broad_month and rows:
-        revision_ids = [revision.id for _workday, revision, _region in rows]
+        revision_ids = [revision.id for _workday, revision, _region, _slot in rows]
         for revision_id, status in db.execute(
             select(Assignment.revision_id, Assignment.status).where(Assignment.revision_id.in_(revision_ids))
         ):
@@ -59,7 +61,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         else None
     )
     result: list[dict[str, object]] = []
-    for workday, revision, region in rows:
+    for workday, revision, region, palette_slot in rows:
         own = own_by_revision.get(revision.id, [])
         if not own and not broad_month:
             continue
@@ -77,7 +79,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "category": workday.category,
                 "title": revision.title,
                 "track": revision.track_name_snapshot,
-                "colour": revision.track_colour_snapshot,
+                "presentation": track_token(palette_slot, workday.category),
                 "start": participation.start if participation else revision.start_time,
                 "end": participation.end if participation else revision.end_time,
                 "minutes": participation.minutes if participation else 0,

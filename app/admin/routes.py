@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -20,7 +19,7 @@ from app.auth.security import (
 from app.auth.service import create_invitation, validated_email
 from app.branding.service import update_branding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
-from app.catalog.service import close_colour_warnings
+from app.catalog.service import allocate_palette_slot
 from app.core.database import get_db
 from app.core.enums import Lifecycle, Role
 from app.core.forms import controlled_integrity, optional_uuid
@@ -79,7 +78,6 @@ def admin_page(request: Request, db: Session = Depends(get_db)):
             request,
             regions=list(db.scalars(select(Region).order_by(Region.name))),
             tracks=track_rows,
-            colour_warnings=close_colour_warnings([row[0] for row in track_rows]),
             groups=list(db.scalars(select(CrewGroup).order_by(CrewGroup.name))),
             positions=list(
                 db.execute(
@@ -184,21 +182,22 @@ def create_track(
     request: Request,
     name: str = Form(...),
     region_id: uuid.UUID = Form(...),
-    display_colour: str = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", display_colour):
-        raise HTTPException(400, "Track colour must be a six-digit hex colour")
     region = db.get(Region, region_id)
     if not region or region.lifecycle != Lifecycle.ACTIVE.value:
         raise HTTPException(400, "Select an active region.")
+    try:
+        slot = allocate_palette_slot(db, region_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     track = Track(
         name=_name_or_400(name, "Track name", 120),
         region_id=region_id,
-        display_colour=display_colour.upper(),
+        palette_slot=slot,
     )
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.add(track)
@@ -210,7 +209,7 @@ def create_track(
             track.id,
             request.state.user.id,
             region_id=region_id,
-            detail={"name": track.name, "colour": track.display_colour},
+            detail={"name": track.name, "palette_slot": track.palette_slot},
         )
         db.commit()
     return RedirectResponse("/admin#tracks", status_code=303)

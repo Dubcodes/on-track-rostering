@@ -90,12 +90,12 @@ def browser_site():  # type: ignore[no-untyped-def]
         else:
             db.add(SystemBranding(id=1, product_name="On Track", updated_by_user_id=admin.id))
         track = Track(
-            name=f"Browser Track {suffix}", region_id=region.id, display_colour="#2E7D6A"
+            name=f"Browser Track {suffix}", region_id=region.id, palette_slot=1
         )
         cross_track = Track(
             name=f"Cross Track {suffix}",
             region_id=cross_region.id,
-            display_colour="#8A2BE2",
+            palette_slot=1,
         )
         position = BasePosition(name=f"Browser Position {suffix}", crew_group_id=group.id)
         person.home_region_id = region.id
@@ -123,7 +123,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             work_date=date.today(),
             track_id=track.id,
             track_name_snapshot=track.name,
-            track_colour_snapshot=track.display_colour,
+
             title="Browser qualification day",
             start_time=clock_time(7, 30),
             on_track_time=clock_time(9),
@@ -185,7 +185,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             work_date=date.today(),
             track_id=cross_track.id,
             track_name_snapshot=cross_track.name,
-            track_colour_snapshot=cross_track.display_colour,
+
             title="Cross-region qualification day",
             start_time=clock_time(8),
             end_time=clock_time(17),
@@ -218,7 +218,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             state="PUBLISHED",
             work_date=date.today().replace(day=8),
             track_name_snapshot="Operations Transit",
-            track_colour_snapshot="#1D638E",
+
             title="Travel to race meeting",
             start_time=clock_time(9),
             end_time=clock_time(16, 30),
@@ -257,7 +257,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             state="PUBLISHED",
             work_date=date.today().replace(day=22),
             track_name_snapshot="Browser Track Open Day",
-            track_colour_snapshot="#B5791E",
+
             title="Open race day",
             start_time=clock_time(8),
             end_time=clock_time(17),
@@ -386,6 +386,28 @@ def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> No
         start.fill(value)
         start.press("Tab")
         assert start.input_value() == "09:30"
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
+def test_master_data_palette_changes_with_theme(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["admin"])
+    colours = []
+    for theme in ("race-night", "daylight", "high-contrast", "track-colours"):
+        _select_theme(page, base_url, theme)
+        page.goto(base_url + "/manage/catalog")
+        assert page.locator('input[type="color"]').count() == 0
+        record = page.locator(f'form[action="/manage/catalog/tracks/{values["track_id"]}"]')
+        record.locator("..").locator("summary").click()
+        assert record.locator('select[name="region_id"]').is_visible()
+        assert record.locator('input[name="map_reference"]').is_visible()
+        colours.append(page.locator('.track-dot[data-presentation="track-01"]').first.evaluate("element => getComputedStyle(element).getPropertyValue('--track').trim()"))
+        _assert_no_horizontal_overflow(page)
+        _capture_page(page, f"master-data-palette-{theme}-{width}.png")
+    assert len(set(colours)) == 4
     context.close()
 
 
@@ -535,13 +557,13 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + f"/day/{values['workday_id']}")
     assert page.locator(".hero-card").evaluate(
-        "element => getComputedStyle(element).getPropertyValue('--track').trim().toUpperCase()"
-    ) == "#2E7D6A"
+        "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
+    )
     page.goto(base_url + "/month")
     assert page.locator(".shift-card.cross-region").count() == 1
     assert page.locator(".shift-card.cross-region").evaluate(
-        "element => getComputedStyle(element).getPropertyValue('--track').trim().toUpperCase()"
-    ) == "#8A2BE2"
+        "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
+    )
     assert page.locator(".site-header.has-month-nav").is_visible()
     assert page.locator(".month-nav").is_visible()
     assert page.locator(".calendar-grid").is_visible()
@@ -779,7 +801,8 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
         'link[rel="stylesheet"], script[src]',
         "elements => elements.map(element => element.href || element.src).filter(url => url.includes('/static/'))",
     )
-    assert len(shared_asset_urls) == 6
+    assert len(shared_asset_urls) == 7
+    assert any("/static/track-palette.css?v=" in url for url in shared_asset_urls)
     assert all(f"?v={build_id}" in url for url in shared_asset_urls)
 
     settings_link = page.locator('a[aria-label="Settings"]')

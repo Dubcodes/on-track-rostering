@@ -12,7 +12,7 @@
       <article class="list-day{% if day.today %} today-list-day{% endif %}">
         <div class="list-day-heading">{% if items_by_date.get(day.date) %}<a class="list-day-date" href="/day/{{ items_by_date[day.date][0].id }}">{% else %}<span class="list-day-date">{% endif %}<strong>{{ day.date.strftime('%a') }}</strong><span>{{ day.date.day }}</span>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}{{ holiday_marker(day.holiday, 'start') }}</div>
         <div class="list-day-shifts">{% for item in items_by_date[day.date] %}
-          <a class="list-shift{% if item.cross_region %} cross-region{% endif %}" href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-track-colour="{{ item.colour }}">
+          <a class="list-shift{% if item.cross_region %} cross-region{% endif %}" href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-presentation="{{ item.presentation }}" data-category="{{ item.category }}">
             <span class="list-shift-main"><strong>{{ item.track or item.title }}</strong><span>{{ item.role }}</span></span>
             <span class="list-shift-meta"><span>{{ item.start|display_time or 'Time TBC' }}</span><span>{{ item.minutes // 60 }}h {{ item.minutes % 60 }}m</span>{% if item.status != 'ASSIGNED' %}<span>{{ item.status|replace('_', ' ')|title }}</span>{% endif %}</span>
           </a>
@@ -32,7 +32,7 @@
             {% if fortnight_markers.get(day.date) %}<a class="timesheet-dot" href="{{ fortnight_markers[day.date] }}" aria-label="Open fortnight hours ending {{ day.date.strftime('%d %B') }}" title="Fortnight hours">{{ ui_icon("timesheet") }}</a>{% endif %}
           </div>
           <div class="shift-list">{% for item in items_by_date.get(day.date, []) %}
-            <a class="shift-card{% if item.cross_region %} cross-region{% endif %}" href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-track-colour="{{ item.colour }}">
+            <a class="shift-card{% if item.cross_region %} cross-region{% endif %}" href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-presentation="{{ item.presentation }}" data-category="{{ item.category }}">
               <strong class="shift-track">{{ item.track or item.title }}</strong>
               <span class="shift-mini"><span class="shift-mini-role">{{ item.role }}</span><span class="shift-mini-time">{{ item.start|display_time or 'TBC' }}</span></span>
               {% if items_by_date.get(day.date, [])|length == 1 and item.minutes %}<span class="shift-meta">{{ item.minutes // 60 }}h {{ item.minutes % 60 }}m</span>{% endif %}
@@ -47,7 +47,7 @@
   </section>
   <section class="upcoming-strip" aria-label="Upcoming shifts">
     <div class="section-heading"><h2>Next Up</h2></div>
-    {% if next_up %}<div class="upcoming-list">{% for item in next_up %}<a class="upcoming-card" href="/day/{{ item.id }}" data-track-colour="{{ item.colour }}"><span>{{ item.date.strftime('%a %d %b') }}</span><strong>{{ item.track or item.title }}</strong><span>{{ item.role }} · {{ item.start|display_time or 'Time TBC' }}{% if item.minutes %} · {{ item.minutes // 60 }}h {{ item.minutes % 60 }}m{% endif %}</span></a>{% endfor %}</div>{% else %}<div class="empty-state">No upcoming work listed.</div>{% endif %}
+    {% if next_up %}<div class="upcoming-list">{% for item in next_up %}<a class="upcoming-card" href="/day/{{ item.id }}" data-presentation="{{ item.presentation }}" data-category="{{ item.category }}"><span>{{ item.date.strftime('%a %d %b') }}</span><strong>{{ item.track or item.title }}</strong><span>{{ item.role }} · {{ item.start|display_time or 'Time TBC' }}{% if item.minutes %} · {{ item.minutes // 60 }}h {{ item.minutes % 60 }}m{% endif %}</span></a>{% endfor %}</div>{% else %}<div class="empty-state">No upcoming work listed.</div>{% endif %}
   </section>
 {% endif %}
 {% endblock %}

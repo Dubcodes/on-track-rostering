@@ -58,10 +58,6 @@
   window.addEventListener("online", updateOnline);
   window.addEventListener("offline", updateOnline);
   updateOnline();
-  document.querySelectorAll("[data-track-colour]").forEach((element) => {
-    const colour = element.dataset.trackColour;
-    if (/^#[0-9a-f]{6}$/i.test(colour || "")) element.style.setProperty("--track", colour);
-  });
   document.querySelectorAll("[data-auto-submit]").forEach((element) => {
     element.addEventListener("change", () => element.form?.submit());
   });

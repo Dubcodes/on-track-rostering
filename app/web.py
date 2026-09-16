@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.auth.security import CSRF_COOKIE
 from app.branding.service import DEFAULT_BRANDING
+from app.catalog.presentation import track_token
 from app.core.config import get_settings
 from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_GROUPS, THEME_LABELS, THEME_VALUES, normalize_theme
@@ -31,6 +32,7 @@ class OnTrackTemplates(Jinja2Templates):
 templates = OnTrackTemplates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["display_datetime"] = display_datetime
 templates.env.filters["display_time"] = display_time
+templates.env.filters["track_token"] = track_token
 
 
 def context(request: Request, **values: object) -> dict[str, object]:

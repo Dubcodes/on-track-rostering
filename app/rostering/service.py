@@ -52,18 +52,13 @@ class AssignmentInput:
     end_time: time | None = None
 
 
-def _track_snapshot(db: Session, track_id: uuid.UUID | None) -> tuple[str, str]:
-    track = db.get(Track, track_id) if track_id else None
-    return (track.name, track.display_colour) if track else ("To be confirmed", "#667085")
-
-
-def _validated_track(db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID) -> tuple[str, str]:
+def _validated_track(db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID) -> str:
     if track_id is None:
-        return "To be confirmed", "#667085"
+        return "To be confirmed"
     track = db.get(Track, track_id)
     if not track or track.lifecycle != "ACTIVE" or track.region_id != region_id:
         raise ValueError("Select an active track from the workday region.")
-    return track.name, track.display_colour
+    return track.name
 
 
 def create_workday(
@@ -79,7 +74,7 @@ def create_workday(
     region = db.get(Region, region_id)
     if not region or region.lifecycle != "ACTIVE":
         raise ValueError("Select an active region.")
-    track_name, track_colour = _validated_track(db, track_id, region_id)
+    track_name = _validated_track(db, track_id, region_id)
     workday = Workday(region_id=region_id, category=category, created_by_user_id=actor_user_id)
     db.add(workday)
     db.flush()
@@ -90,7 +85,6 @@ def create_workday(
         work_date=work_date,
         track_id=track_id,
         track_name_snapshot=track_name,
-        track_colour_snapshot=track_colour,
         title=title.strip() or category.replace("_", " ").title(),
         created_by_user_id=actor_user_id,
     )
@@ -124,7 +118,6 @@ def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> Wor
         work_date=published.work_date,
         track_id=published.track_id,
         track_name_snapshot=published.track_name_snapshot,
-        track_colour_snapshot=published.track_colour_snapshot,
         title=published.title,
         start_time=published.start_time,
         end_time=published.end_time,
@@ -217,7 +210,7 @@ def update_draft_details(
     )
     draft.work_date = work_date
     draft.track_id = track_id
-    draft.track_name_snapshot, draft.track_colour_snapshot = _validated_track(db, track_id, workday.region_id)
+    draft.track_name_snapshot = _validated_track(db, track_id, workday.region_id)
     draft.title = title.strip() or "Workday"
     draft.start_time, draft.end_time, draft.on_track_time = start_time, end_time, on_track_time
     draft.first_trial_time = first_trial_time
@@ -520,7 +513,6 @@ def decline_published_assignment(
             work_date=published.work_date,
             track_id=published.track_id,
             track_name_snapshot=published.track_name_snapshot,
-            track_colour_snapshot=published.track_colour_snapshot,
             title=published.title,
             start_time=published.start_time,
             end_time=published.end_time,

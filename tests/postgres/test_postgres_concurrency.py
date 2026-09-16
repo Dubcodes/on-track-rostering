@@ -12,7 +12,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.auth.security import hash_credential
 from app.auth.service import activate_pending_grants
-from app.catalog.models import BasePosition, Region
+from app.catalog.models import BasePosition, Region, Track
+from app.catalog.service import allocate_palette_slot
 from app.core.time import local_today, utcnow
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
@@ -60,6 +61,33 @@ def _authority(factory) -> tuple[uuid.UUID, uuid.UUID]:  # type: ignore[no-untyp
         db.add(RoleGrant(user_id=user.id, role="MANAGER", region_id=region.id))
         db.commit()
         return user.id, region.id
+
+
+def test_simultaneous_track_creation_allocates_distinct_palette_slots(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    _user_id, region_id = _authority(pg_factory)
+    barrier = threading.Barrier(2)
+    results: list[int] = []
+    errors: list[Exception] = []
+
+    def attempt(index: int) -> None:
+        try:
+            with pg_factory() as db:
+                barrier.wait(timeout=10)
+                slot = allocate_palette_slot(db, region_id)
+                db.add(Track(name=f"Concurrent Track {index}", region_id=region_id, palette_slot=slot))
+                db.commit()
+                results.append(slot)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=attempt, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert not any(thread.is_alive() for thread in threads)
+    assert not errors
+    assert sorted(results) == [1, 2]
 
 
 def test_concurrent_publish_preserves_one_authoritative_winner(pg_factory) -> None:  # type: ignore[no-untyped-def]

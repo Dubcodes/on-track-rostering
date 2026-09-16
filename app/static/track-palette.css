@@ -1,0 +1,608 @@
+/* Stored slots resolve here once. No database colour or per-track CSS injection. */
+html[data-theme="jade"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="steel"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="moss"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="rose"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="amber"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="daylight"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="paper"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="mint"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="sky"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="peach"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="track-colours"] {
+  --track-01: #e6194b;
+  --track-02: #3cb44b;
+  --track-03: #ffe119;
+  --track-04: #4363d8;
+  --track-05: #f58231;
+  --track-06: #911eb4;
+  --track-07: #42d4f4;
+  --track-08: #f032e6;
+  --track-09: #bfef45;
+  --track-10: #fabed4;
+  --track-11: #469990;
+  --track-12: #dcbeff;
+  --track-13: #9a6324;
+  --track-14: #fffac8;
+  --track-15: #800000;
+  --track-16: #aaffc3;
+  --track-17: #808000;
+  --track-18: #ffd8b1;
+  --track-19: #000075;
+  --track-20: #a9a9a9;
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="aurora"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="sunset"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="ocean"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="berry"] {
+  --track-01: hsl(350 62% 54%);
+  --track-02: hsl(125 62% 70%);
+  --track-03: hsl(48 62% 54%);
+  --track-04: hsl(230 62% 70%);
+  --track-05: hsl(26 62% 54%);
+  --track-06: hsl(282 62% 70%);
+  --track-07: hsl(190 62% 54%);
+  --track-08: hsl(315 62% 70%);
+  --track-09: hsl(82 62% 54%);
+  --track-10: hsl(330 62% 70%);
+  --track-11: hsl(173 62% 54%);
+  --track-12: hsl(263 62% 70%);
+  --track-13: hsl(36 62% 54%);
+  --track-14: hsl(57 62% 70%);
+  --track-15: hsl(5 62% 54%);
+  --track-16: hsl(145 62% 70%);
+  --track-17: hsl(64 62% 54%);
+  --track-18: hsl(18 62% 70%);
+  --track-19: hsl(245 62% 54%);
+  --track-20: hsl(205 62% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="candy"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="high-contrast"] {
+  --track-01: hsl(350 95% 48%);
+  --track-02: hsl(125 95% 70%);
+  --track-03: hsl(48 95% 48%);
+  --track-04: hsl(230 95% 70%);
+  --track-05: hsl(26 95% 48%);
+  --track-06: hsl(282 95% 70%);
+  --track-07: hsl(190 95% 48%);
+  --track-08: hsl(315 95% 70%);
+  --track-09: hsl(82 95% 48%);
+  --track-10: hsl(330 95% 70%);
+  --track-11: hsl(173 95% 48%);
+  --track-12: hsl(263 95% 70%);
+  --track-13: hsl(36 95% 48%);
+  --track-14: hsl(57 95% 70%);
+  --track-15: hsl(5 95% 48%);
+  --track-16: hsl(145 95% 70%);
+  --track-17: hsl(64 95% 48%);
+  --track-18: hsl(18 95% 70%);
+  --track-19: hsl(245 95% 48%);
+  --track-20: hsl(205 95% 70%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="race-night"] {
+  --track-01: hsl(350 46% 42%);
+  --track-02: hsl(125 46% 55%);
+  --track-03: hsl(48 46% 42%);
+  --track-04: hsl(230 46% 55%);
+  --track-05: hsl(26 46% 42%);
+  --track-06: hsl(282 46% 55%);
+  --track-07: hsl(190 46% 42%);
+  --track-08: hsl(315 46% 55%);
+  --track-09: hsl(82 46% 42%);
+  --track-10: hsl(330 46% 55%);
+  --track-11: hsl(173 46% 42%);
+  --track-12: hsl(263 46% 55%);
+  --track-13: hsl(36 46% 42%);
+  --track-14: hsl(57 46% 55%);
+  --track-15: hsl(5 46% 42%);
+  --track-16: hsl(145 46% 55%);
+  --track-17: hsl(64 46% 42%);
+  --track-18: hsl(18 46% 55%);
+  --track-19: hsl(245 46% 42%);
+  --track-20: hsl(205 46% 55%);
+  --source-only: #98aac8;
+  --source-love-racing: #d5b667;
+  --source-harness: #7ca8cf;
+  --source-api: #ab91d0;
+  --unconfirmed: #969cab;
+  --office: #84aaa4;
+  --training: #c2a185;
+}
+html[data-theme="garden"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+html[data-theme="studio"] {
+  --track-01: hsl(350 74% 39%);
+  --track-02: hsl(125 74% 53%);
+  --track-03: hsl(48 74% 39%);
+  --track-04: hsl(230 74% 53%);
+  --track-05: hsl(26 74% 39%);
+  --track-06: hsl(282 74% 53%);
+  --track-07: hsl(190 74% 39%);
+  --track-08: hsl(315 74% 53%);
+  --track-09: hsl(82 74% 39%);
+  --track-10: hsl(330 74% 53%);
+  --track-11: hsl(173 74% 39%);
+  --track-12: hsl(263 74% 53%);
+  --track-13: hsl(36 74% 39%);
+  --track-14: hsl(57 74% 53%);
+  --track-15: hsl(5 74% 39%);
+  --track-16: hsl(145 74% 53%);
+  --track-17: hsl(64 74% 39%);
+  --track-18: hsl(18 74% 53%);
+  --track-19: hsl(245 74% 39%);
+  --track-20: hsl(205 74% 53%);
+  --source-only: #63718e;
+  --source-love-racing: #a87416;
+  --source-harness: #357fc0;
+  --source-api: #8660b3;
+  --unconfirmed: #667085;
+  --office: #567773;
+  --training: #8b6b52;
+}
+[data-presentation="track-01"] { --track: var(--track-01); }
+[data-presentation="track-02"] { --track: var(--track-02); }
+[data-presentation="track-03"] { --track: var(--track-03); }
+[data-presentation="track-04"] { --track: var(--track-04); }
+[data-presentation="track-05"] { --track: var(--track-05); }
+[data-presentation="track-06"] { --track: var(--track-06); }
+[data-presentation="track-07"] { --track: var(--track-07); }
+[data-presentation="track-08"] { --track: var(--track-08); }
+[data-presentation="track-09"] { --track: var(--track-09); }
+[data-presentation="track-10"] { --track: var(--track-10); }
+[data-presentation="track-11"] { --track: var(--track-11); }
+[data-presentation="track-12"] { --track: var(--track-12); }
+[data-presentation="track-13"] { --track: var(--track-13); }
+[data-presentation="track-14"] { --track: var(--track-14); }
+[data-presentation="track-15"] { --track: var(--track-15); }
+[data-presentation="track-16"] { --track: var(--track-16); }
+[data-presentation="track-17"] { --track: var(--track-17); }
+[data-presentation="track-18"] { --track: var(--track-18); }
+[data-presentation="track-19"] { --track: var(--track-19); }
+[data-presentation="track-20"] { --track: var(--track-20); }
+[data-presentation="unconfirmed"] { --track: var(--unconfirmed); }
+[data-presentation="office"] { --track: var(--office); }
+[data-presentation="training"] { --track: var(--training); }
+[data-category="TRAVEL_DAY"] {
+  background-image: repeating-linear-gradient(135deg, transparent 0 14px,
+    color-mix(in srgb, var(--track, var(--unconfirmed)) 16%, transparent) 14px 18px);
+}

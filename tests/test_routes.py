@@ -44,8 +44,8 @@ def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None: 
     with factory() as db:
         other_region = db.scalar(select(Region).where(Region.id != region_id))
         other_id = other_region.id
-        outside_track = Track(name="Outside Track", region_id=other_id)
-        archived = Track(name="Archived Track", region_id=region_id, lifecycle="ARCHIVED")
+        outside_track = Track(name="Outside Track", region_id=other_id, palette_slot=1)
+        archived = Track(name="Archived Track", region_id=region_id, lifecycle="ARCHIVED", palette_slot=1)
         db.add_all([outside_track, archived])
         db.commit()
     client = TestClient(app)
@@ -81,6 +81,41 @@ def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None: 
         assert draft.start_time == draft.on_track_time == draft.first_trial_time == draft.first_race_time == time(9, 30)
         assert draft.end_time == time(17, 30)
         assert wd.lock_version == version + 1
+
+
+def test_track_edit_region_authority_palette_and_history(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, position_id, person_id) = routed_db
+    with factory() as db:
+        destination_id = db.scalar(select(Region.id).where(Region.id != region_id))
+        db.add(Track(name="Destination occupied", region_id=destination_id, palette_slot=1))
+        db.commit()
+    wd_id = _publish_rows(factory, region_id=region_id, position_id=position_id, work_date=date(2026, 9, 20), rows=[(person_id, "Amy Crew", "", False)])
+    with factory() as db:
+        wd = db.get(Workday, wd_id)
+        published = db.get(WorkdayRevision, wd.current_published_revision_id)
+        published.track_id = track_id
+        db.commit()
+        before = (wd.region_id, wd.current_published_revision_id, published.work_date, published.track_name_snapshot)
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    data = {"name": "Corrected Ellerslie", "region_id": str(destination_id), "lifecycle": "ACTIVE", "map_reference": "https://example.test/map", "csrf_token": csrf}
+    assert manager.post(f"/manage/catalog/tracks/{track_id}", data=data).status_code == 403
+    admin = TestClient(app)
+    data["csrf_token"] = _login(admin, "admin@example.test", "99887766")
+    assert 'type="color"' not in admin.get("/manage/catalog").text
+    assert admin.post(f"/manage/catalog/tracks/{track_id}", data=data, follow_redirects=False).status_code == 303
+    with factory() as db:
+        track = db.get(Track, track_id)
+        assert (track.region_id, track.palette_slot, track.map_reference) == (destination_id, 2, "https://example.test/map")
+        wd = db.get(Workday, wd_id)
+        published = db.get(WorkdayRevision, wd.current_published_revision_id)
+        assert before == (wd.region_id, wd.current_published_revision_id, published.work_date, published.track_name_snapshot)
+        audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "track.updated"))
+        assert audit is not None
+    data["name"] = "Corrected Ellerslie again"
+    assert admin.post(f"/manage/catalog/tracks/{track_id}", data=data, follow_redirects=False).status_code == 303
+    with factory() as db:
+        assert db.get(Track, track_id).palette_slot == 2
 
 
 def test_public_login_and_liveness_routes_render(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -180,7 +215,7 @@ def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) 
             {
                 "name": "Ellerslie",
                 "region_id": str(region_id),
-                "display_colour": "#123456",
+
                 "csrf_token": csrf,
             },
             409,
@@ -241,7 +276,7 @@ def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) 
             {
                 "name": "Missing Region Track",
                 "region_id": str(uuid.uuid4()),
-                "display_colour": "#123456",
+
                 "csrf_token": csrf,
             },
             400,
@@ -496,7 +531,7 @@ def routed_db(monkeypatch):  # type: ignore[no-untyped-def]
         group = CrewGroup(name="OB Crew")
         db.add_all([region, other_region, group])
         db.flush()
-        track = Track(name="Ellerslie", region_id=region.id, display_colour="#C33D52")
+        track = Track(name="Ellerslie", region_id=region.id, palette_slot=1)
         position = BasePosition(name="CCU", crew_group_id=group.id)
         person = Person(display_name="Amy Crew", email="amy@example.test", home_region_id=region.id)
         manager = User(
@@ -603,7 +638,7 @@ def _publish_rows(
             work_date=work_date,
             title="Published privacy day",
             track_name_snapshot="Ellerslie",
-            track_colour_snapshot="#C33D52",
+
             start_time=time(8),
             end_time=time(17),
             day_note=day_note,
@@ -693,7 +728,7 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     day = employee_client.get(f"/day/{workday_id}")
     assert "Private transport" in day.text
     assert "'unsafe-inline'" not in day.headers["content-security-policy"]
-    assert 'style nonce="' in day.text and 'data-track-colour="#C33D52"' in day.text
+    assert 'data-presentation="track-01"' in day.text
     day_payload = employee_client.get(f"/api/day/{workday_id}").json()
     assert "cached_at" not in day_payload
     assert day_payload["workday"]["revision_id"]
@@ -1022,7 +1057,7 @@ def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(rou
         data={
             "region_id": str(region_id),
             "name": "Pukekohe",
-            "display_colour": "#123ABC",
+
             "csrf_token": manager_csrf,
         },
         follow_redirects=False,
@@ -1101,7 +1136,7 @@ def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(rou
                 work_date=work_date,
                 title=f"Boundary {index}",
                 track_name_snapshot="South Track" if index == 1 else "North Track",
-                track_colour_snapshot="#00AA11" if index == 1 else "#123ABC",
+
                 start_time=time(8),
                 end_time=time(17),
                 published_at=utcnow(),
@@ -1135,7 +1170,7 @@ def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(rou
         f"/month?year={dates[0].year}&month={dates[0].month}"
     )
     assert "cross-region" in cross_region_month.text
-    assert 'data-track-colour="#00AA11"' in cross_region_month.text
+    assert 'data-presentation="unconfirmed"' in cross_region_month.text
     assert "Your rostered week" not in cross_region_month.text
     assert 'class="weekday weekday-total">Week</div>' in cross_region_month.text
     assert "45h 0m" in cross_region_month.text

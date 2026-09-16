@@ -9,7 +9,6 @@ from sqlalchemy import select
 from app.auth.policy import Actor, can_crew_view, can_manage_region
 from app.auth.security import credential_error, is_safe_next
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
-from app.catalog.service import close_colour_warnings
 from app.core.enums import (
     AssignmentStatus,
     CapabilitySignal,
@@ -54,7 +53,7 @@ def seed_vertical(db):  # type: ignore[no-untyped-def]
     group = CrewGroup(name="OB Crew")
     db.add_all([region, group])
     db.flush()
-    track = Track(name="Ellerslie", region_id=region.id, display_colour="#C33D52")
+    track = Track(name="Ellerslie", region_id=region.id, palette_slot=1)
     position = BasePosition(name="CCU", crew_group_id=group.id)
     person = Person(display_name="Amy Crew", email="amy@example.test", home_region_id=region.id)
     manager = User(email="manager@example.test", display_name="Manager", credential_hash="unused")
@@ -111,16 +110,14 @@ def test_public_holiday_marker() -> None:
     assert holiday_for_date(date(2026, 7, 10)) == "Matariki"
 
 
-def test_track_colour_warning_is_regional_not_global() -> None:
-    northern, central = uuid.uuid4(), uuid.uuid4()
-    tracks = [
-        Track(name="A", region_id=northern, display_colour="#CC0000", lifecycle="ACTIVE"),
-        Track(name="B", region_id=northern, display_colour="#CD0002", lifecycle="ACTIVE"),
-        Track(name="C", region_id=central, display_colour="#CC0000", lifecycle="ACTIVE"),
-    ]
-    warnings = close_colour_warnings(tracks)
-    assert len(warnings) == 1
-    assert "A and B" in warnings[0]
+def test_track_token_is_theme_independent() -> None:
+    from app.catalog.presentation import track_token
+
+    assert track_token(7) == "track-07"
+    assert track_token(None) == "unconfirmed"
+    assert track_token(7, "OFFICE_DAY") == "office"
+    assert track_token(7, "TRAINING_DAY") == "training"
+    assert track_token(7, "TRAVEL_DAY") == "track-07"
 
 
 def test_roles_are_capability_and_scope_not_numeric() -> None:

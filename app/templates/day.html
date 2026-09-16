@@ -2,9 +2,9 @@
 {% from "_holiday_marker.html" import holiday_marker %}
 {% block title %}{{ revision.title }} · {{ branding.product_name }}{% endblock %}
 {% block content %}
-<style nonce="{{ csp_nonce }}">[data-track-colour="{{ revision.track_colour_snapshot }}"]{--track:{{ revision.track_colour_snapshot }}}</style>
+
 <div class="day-toolbar"><a class="back-link" href="/month">← Back to Month</a>{{ holiday_marker(holiday, 'start') }}</div>
-<section class="hero-card" data-track-colour="{{ revision.track_colour_snapshot }}">
+<section class="hero-card" data-presentation="{{ presentation }}" data-category="{{ workday.category }}">
   <div><p class="eyebrow">{{ workday.category.replace('_',' ').title() }} · Published revision {{ revision.revision_number }}</p><h1>{{ revision.track_name_snapshot }}</h1><p class="hero-date">{{ revision.work_date.strftime('%A') }} {{ revision.work_date.day }} {{ revision.work_date.strftime('%B') }}</p>{% if participation %}<p><strong>{{ participation.role_summary }}</strong></p>{% endif %}</div>
   {% if can_edit %}<a class="button secondary" href="/manage/workdays/{{ workday.id }}">Edit private draft</a>{% endif %}
 </section>

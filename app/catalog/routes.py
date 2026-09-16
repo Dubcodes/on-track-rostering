@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -12,6 +11,7 @@ from app.audit.service import record_audit
 from app.auth.policy import can_administer_region, require_admin
 from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
+from app.catalog.service import allocate_palette_slot
 from app.core.database import get_db
 from app.core.enums import DeclinePolicy, Lifecycle
 from app.core.forms import controlled_integrity, optional_uuid
@@ -56,12 +56,6 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-def _colour(value: str) -> str:
-    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
-        raise HTTPException(400, "Track colour must be a six-digit hex colour.")
-    return value.upper()
-
-
 def _active_group(db: Session, raw_id: str) -> CrewGroup | None:
     group_id = optional_uuid(raw_id, "crew group")
     if group_id is None:
@@ -73,14 +67,18 @@ def _active_group(db: Session, raw_id: str) -> CrewGroup | None:
 
 
 @router.post("/tracks")
-def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str = Form(...), display_colour: str = Form(...), map_reference: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str = Form(...), map_reference: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     verify_csrf(request, csrf_token)
     region = db.get(Region, region_id)
     if not region or region.lifecycle != Lifecycle.ACTIVE.value:
         raise HTTPException(400, "Select an active region.")
     if not can_administer_region(request.state.actor, region_id):
         raise HTTPException(403, "Regional administration authority required.")
-    row = Track(region_id=region_id, name=_name(name, 120), display_colour=_colour(display_colour), map_reference=map_reference.strip()[:500] or None)
+    try:
+        slot = allocate_palette_slot(db, region_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    row = Track(region_id=region_id, name=_name(name, 120), palette_slot=slot, map_reference=map_reference.strip()[:500] or None)
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.add(row)
         db.flush()
@@ -90,16 +88,28 @@ def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str =
 
 
 @router.post("/tracks/{track_id}")
-def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), display_colour: str = Form(...), lifecycle: str = Form(...), map_reference: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), region_id: uuid.UUID = Form(...), lifecycle: str = Form(...), map_reference: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     verify_csrf(request, csrf_token)
-    row = db.get(Track, track_id)
+    row = db.scalar(select(Track).where(Track.id == track_id).with_for_update())
     if not row:
         raise HTTPException(404)
-    if not can_administer_region(request.state.actor, row.region_id):
+    if not can_administer_region(request.state.actor, row.region_id) or not can_administer_region(request.state.actor, region_id):
         raise HTTPException(403, "Regional administration authority required.")
-    row.name, row.display_colour = _name(name, 120), _colour(display_colour)
-    row.map_reference, row.lifecycle = map_reference.strip()[:500] or None, _lifecycle(lifecycle)
-    record_audit(db, "track.updated", "track", row.id, request.state.user.id, region_id=row.region_id)
+    destination = db.get(Region, region_id)
+    if not destination or (region_id != row.region_id and destination.lifecycle != "ACTIVE"):
+        raise HTTPException(400, "Select an active destination region.")
+    previous_region, previous_slot = row.region_id, row.palette_slot
+    clean_lifecycle = _lifecycle(lifecycle)
+    if region_id != row.region_id or (clean_lifecycle == "ACTIVE" and row.lifecycle != "ACTIVE"):
+        try:
+            row.palette_slot = allocate_palette_slot(db, region_id, preferred=row.palette_slot, exclude_track_id=row.id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+    row.name, row.region_id = _name(name, 120), region_id
+    row.map_reference, row.lifecycle = map_reference.strip()[:500] or None, clean_lifecycle
+    record_audit(db, "track.updated", "track", row.id, request.state.user.id, region_id=row.region_id,
+                 detail={"previous_region_id": str(previous_region), "region_id": str(row.region_id),
+                         "previous_palette_slot": previous_slot, "palette_slot": row.palette_slot})
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.commit()
     return RedirectResponse("/manage/catalog#tracks", status_code=303)

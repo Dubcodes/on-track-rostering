@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -26,14 +26,20 @@ class Track(Base):
     __tablename__ = "tracks"
     __table_args__ = (
         UniqueConstraint("region_id", "name"),
-        CheckConstraint(
-            "length(display_colour) = 7 AND substr(display_colour, 1, 1) = '#'", name="valid_hex_colour"
+        CheckConstraint("palette_slot BETWEEN 1 AND 20", name="track_palette_range"),
+        Index(
+            "uq_track_active_palette",
+            "region_id",
+            "palette_slot",
+            unique=True,
+            postgresql_where=text("lifecycle = 'ACTIVE'"),
+            sqlite_where=text("lifecycle = 'ACTIVE'"),
         ),
     )
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     region_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regions.id"), index=True)
     name: Mapped[str] = mapped_column(String(120))
-    display_colour: Mapped[str] = mapped_column(String(7), default="#2E7D6A")
+    palette_slot: Mapped[int] = mapped_column()
     map_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

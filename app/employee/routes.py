@@ -30,7 +30,8 @@ from app.auth.security import (
     verify_credential,
     verify_csrf,
 )
-from app.catalog.models import BasePosition, Region
+from app.catalog.models import BasePosition, Region, Track
+from app.catalog.presentation import track_token
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
 from app.core.holidays import holiday_info_for_date
@@ -250,6 +251,7 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             request,
             workday=workday,
             revision=revision,
+            presentation=track_token(db.scalar(select(Track.palette_slot).where(Track.id == revision.track_id)), workday.category),
             assignments=assignments,
             management=management,
             can_edit=can_manage_region(request.state.actor, workday.region_id),
@@ -381,8 +383,9 @@ def crew_view(
         raise HTTPException(403, "Crew View is not available for this account.")
     selected_region = next((region for region in regions if region.id == region_id), regions[0])
     rows = db.execute(
-        select(Workday, WorkdayRevision)
+        select(Workday, WorkdayRevision, Track.palette_slot)
         .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
+        .outerjoin(Track, Track.id == WorkdayRevision.track_id)
         .where(
             Workday.region_id == selected_region.id,
             WorkdayRevision.work_date >= start,
@@ -394,6 +397,7 @@ def crew_view(
         {
             "workday": workday,
             "revision": revision,
+            "presentation": track_token(slot, workday.category),
             "assignments": day_assignments(
                 db,
                 request.state.actor,
@@ -402,7 +406,7 @@ def crew_view(
                 can_view_private_notes=can_view_management_detail(request.state.actor, workday.region_id),
             ),
         }
-        for workday, revision in rows
+        for workday, revision, slot in rows
     ]
     grid = month_grid(year, month, selected_region.statutory_holiday_region or "")
     by_date: dict[date, list[dict[str, object]]] = {}
@@ -413,10 +417,11 @@ def crew_view(
         by_date.setdefault(revision.work_date, []).append(
             {
                 "id": str(item["workday"].id),
+                "category": item["workday"].category,
                 "date": revision.work_date,
                 "track": revision.track_name_snapshot,
                 "title": revision.title,
-                "colour": revision.track_colour_snapshot,
+                "presentation": item["presentation"],
                 "start": revision.start_time,
                 "role": f"{len(assignments)} crew",
                 "has_open": "OPEN" in statuses,

@@ -62,7 +62,6 @@ class WorkdayRevision(Base):
     work_date: Mapped[date] = mapped_column(Date, index=True)
     track_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tracks.id"), nullable=True)
     track_name_snapshot: Mapped[str] = mapped_column(String(120), default="To be confirmed")
-    track_colour_snapshot: Mapped[str] = mapped_column(String(7), default="#667085")
     title: Mapped[str] = mapped_column(String(160), default="Race Day")
     start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
