@@ -3,6 +3,7 @@
 {% block content %}
 
 <section class="page-head"><p class="eyebrow">System administration</p><h1>Foundation setup</h1><p class="lede">Configure operational records. Archive lifecycle controls will replace deletion.</p></section>
+<div class="row-actions"><a class="button secondary" href="/admin/data-import">Data Import</a><a class="button secondary" href="/admin/online-sources">Online Sources</a></div>
 <div class="admin-grid">
 <section class="panel wide" id="branding"><h2>System branding</h2><p class="muted">This name appears throughout the application, installed app, passkeys, and notifications.</p>
 <form method="post" action="/admin/branding" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Product name<input name="product_name" value="{{ branding.product_name }}" required maxlength="80"></label><button>Save product name</button></form></section>

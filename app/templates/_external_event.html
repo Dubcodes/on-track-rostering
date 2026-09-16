@@ -1,0 +1,4 @@
+{% macro external_event_card(item, compact=false) -%}
+{% if item.minimal %}<details class="external-marker" data-presentation="{{ item.presentation }}"><summary aria-label="{{ item.track }} {{ item.kind|title }}">●</summary><a href="/external-events/{{ item.id }}"><strong>{{ item.track }}</strong><span>{{ item.kind|title }} · {{ item.discipline|replace('_',' ')|title }}{% if item.time %} · {{ item.time|display_time }}{% endif %}</span></a></details>
+{% else %}<a class="{% if compact %}list-shift{% else %}shift-card{% endif %} external-event source-{{ item.source }}" href="/external-events/{{ item.id }}" data-presentation="{{ item.presentation }}"><strong>{{ item.track }}</strong><span>{{ item.kind|title }} · {{ item.discipline|replace('_',' ')|title }}{% if item.time %} · {{ item.time|display_time }}{% endif %}</span></a>{% endif %}
+{%- endmacro %}

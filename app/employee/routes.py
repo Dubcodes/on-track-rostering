@@ -38,6 +38,8 @@ from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_VALUES, normalize_theme
 from app.core.time import local_today, utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
+from app.external_calendar.models import CalendarDisplayPreference
+from app.external_calendar.read_models import calendar_preference, external_calendar_items
 from app.hours.service import fortnight_bounds
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notices.service import prominent_notice, recent_notices
@@ -117,9 +119,13 @@ def month_view(
     year, month = year or today.year, month or today.month
     start, end = _month_bounds(year, month)
     items = month_items(db, request.state.actor, start, end)
+    external_items = external_calendar_items(db, request.state.user.id, start, end)
     by_date: dict[date, list[dict[str, object]]] = {}
     for item in items:
         by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
+    external_by_date: dict[date, list[dict[str, object]]] = {}
+    for item in external_items:
+        external_by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
     holiday_region = ""
     if request.state.actor.person_id:
         holiday_region = (
@@ -173,6 +179,7 @@ def month_view(
             request,
             grid=grid,
             items_by_date=by_date,
+            external_by_date=external_by_date,
             week_minutes=week_minutes,
             next_up=upcoming,
             month_label=f"{calendar.month_name[month]} {year}",
@@ -561,6 +568,7 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
             ),
             totp_factor=db.get(TotpFactor, request.state.user.id),
             notification_preference=db.get(NotificationPreference, request.state.user.id),
+            calendar_preference=calendar_preference(db, request.state.user.id),
             push_subscriptions=list(
                 db.scalars(
                     select(PushSubscription).where(
@@ -592,6 +600,29 @@ def update_theme(
     user.theme = normalized_theme
     db.commit()
     return RedirectResponse("/settings?theme=saved", status_code=303)
+
+
+@router.post("/settings/calendar")
+def update_calendar_preferences(
+    request: Request,
+    show_thoroughbred: bool = Form(False),
+    show_harness: bool = Form(False),
+    show_trials: bool = Form(False),
+    minimal_external_detail: bool = Form(False),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    preference = db.get(CalendarDisplayPreference, request.state.user.id)
+    if not preference:
+        preference = CalendarDisplayPreference(user_id=request.state.user.id)
+        db.add(preference)
+    preference.show_thoroughbred = show_thoroughbred
+    preference.show_harness = show_harness
+    preference.show_trials = show_trials
+    preference.minimal_external_detail = minimal_external_detail
+    db.commit()
+    return RedirectResponse("/settings?calendar=saved#calendar", status_code=303)
 
 
 @router.post("/settings/reauthenticate")

@@ -4,6 +4,7 @@ from app.audit import models as audit_models  # noqa: F401
 from app.branding import models as branding_models  # noqa: F401
 from app.catalog import models as catalog_models  # noqa: F401
 from app.core.database import Base
+from app.external_calendar import models as external_calendar_models  # noqa: F401
 from app.identity import models as identity_models  # noqa: F401
 from app.notices import models as notice_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401

@@ -606,3 +606,11 @@ html[data-theme="studio"] {
   background-image: repeating-linear-gradient(135deg, transparent 0 14px,
     color-mix(in srgb, var(--track, var(--unconfirmed)) 16%, transparent) 14px 18px);
 }
+.external-event { --source-accent: var(--source-only); background-image: linear-gradient(105deg, color-mix(in srgb, var(--source-accent) 34%, var(--shift-bg)) 0 18%, var(--shift-location-bg) 38%); }
+.external-event.source-love-racing { --source-accent: var(--source-love-racing); }
+.external-event.source-hrnz { --source-accent: var(--source-harness); }
+.external-event.source-api { --source-accent: var(--source-api); }
+.external-marker { position: relative; display: inline-block; color: var(--track, var(--unconfirmed)); }
+.external-marker summary { cursor: pointer; list-style: none; font-size: 1.1rem; }
+.external-marker > a { position: absolute; z-index: 5; display: grid; width: min(220px, 75vw); padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); text-decoration: none; }
+.source-metrics { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; }

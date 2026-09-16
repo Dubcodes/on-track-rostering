@@ -37,6 +37,9 @@ class Workday(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     region_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regions.id"), index=True)
     operation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("operations.id"), nullable=True)
+    external_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("external_calendar_events.id"), nullable=True, unique=True
+    )
     category: Mapped[str] = mapped_column(String(32), default=WorkdayCategory.RACE_DAY.value)
     current_published_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("workday_revisions.id", use_alter=True), nullable=True
