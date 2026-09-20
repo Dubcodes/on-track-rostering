@@ -22,7 +22,7 @@ from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base
-from app.core.enums import Role
+from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
@@ -36,7 +36,7 @@ from app.identity.models import (
     UserPersonLink,
 )
 from app.main import app
-from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 from app.system_settings.models import SystemSettings
 
 
@@ -932,6 +932,122 @@ def test_office_day_builder_uses_category_appropriate_fields_and_warnings(routed
     assert "Race Day timing is incomplete" not in preview.text
 
 
+def test_trials_builder_edits_first_trial_without_erasing_omitted_race_fields(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "category": "TRIALS",
+            "work_date": "2026-10-21",
+            "track_id": str(track_id),
+            "title": "Trials timing",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    edit_url = created.headers["location"]
+    workday_id = uuid.UUID(edit_url.rsplit("/", 1)[1])
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        draft.on_track_time = time(8, 30)
+        draft.first_trial_time = time(9, 15)
+        draft.first_race_time = time(12, 45)
+        version = workday.lock_version
+        db.commit()
+
+    builder = manager.get(edit_url)
+    assert 'name="on_track_time" value="08:30"' in builder.text
+    assert 'name="first_trial_time" value="09:15"' in builder.text
+    assert 'name="first_race_time"' not in builder.text
+    assert 'name="last_race_time"' not in builder.text
+    assert 'name="race_count"' not in builder.text
+    saved = manager.post(
+        edit_url + "/draft",
+        data={
+            "expected_version": str(version),
+            "csrf_token": csrf,
+            "work_date": "2026-10-21",
+            "track_id": str(track_id),
+            "title": "Trials timing",
+            "start_time": "07:30",
+            "on_track_time": "08:30",
+            "first_trial_time": "09:45",
+            "end_time": "14:00",
+            "day_note": "",
+            "change_reason": "",
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    preview = manager.get(saved.headers["location"])
+    assert "09:45" in preview.text
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        assert draft.first_trial_time == time(9, 45)
+        assert draft.first_race_time == time(12, 45)
+
+
+def test_position_aware_crew_picker_endpoint_keeps_duplicate_ids_distinct(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "category": "TRIALS",
+            "work_date": "2026-10-22",
+            "track_id": str(track_id),
+            "title": "Picker endpoint",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    workday_id = uuid.UUID(created.headers["location"].rsplit("/", 1)[1])
+    with factory() as db:
+        manager_id = db.scalar(select(User.id).where(User.email == "manager@example.test"))
+        position = BasePosition(name="Head On")
+        duplicate_a = Person(display_name="John Smith", home_region_id=region_id)
+        duplicate_b = Person(display_name="John Smith", home_region_id=region_id)
+        db.add_all([position, duplicate_a, duplicate_b])
+        db.flush()
+        db.add(
+            PositionCapability(
+                person_id=duplicate_a.id,
+                base_position_id=position.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
+                changed_by_user_id=manager_id,
+            )
+        )
+        db.commit()
+        position_id = position.id
+
+    response = manager.get(
+        f"/manage/workdays/{workday_id}/crew-picker?position_id={position_id}"
+    )
+    assert response.status_code == 200
+    johns = [
+        person
+        for group in response.json()["groups"]
+        for person in group["people"]
+        if person["label"] == "John Smith"
+    ]
+    assert len(johns) == 2
+    assert len({person["id"] for person in johns}) == 2
+    assert len({person["context"] for person in johns}) == 2
+
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    assert employee.get(
+        f"/manage/workdays/{workday_id}/crew-picker?position_id={position_id}"
+    ).status_code == 403
+
+
 def test_builder_groups_relevant_crew_before_other_active_people(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, track_id, position_id, _person_id) = routed_db
     manager = TestClient(app)
@@ -1141,7 +1257,9 @@ def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> 
         assert "Canonical facts" in response.text
         assert "Love Racing" in response.text
         assert "SECRET-SENTINEL" not in response.text
-    assert "Raw Race Day Data" not in employee.get(f"/day/{manual_workday_id}").text
+    manual_day = employee.get(f"/day/{manual_workday_id}")
+    assert "Raw Race Day Data" not in manual_day.text
+    assert "Saturday 24 October 2026" in manual_day.text
 
 
 def test_upcoming_feed_is_today_when_rostered_plus_three_across_months(

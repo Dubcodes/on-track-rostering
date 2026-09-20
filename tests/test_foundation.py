@@ -24,6 +24,7 @@ from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.notifications.models import NotificationEvent
 from app.open_positions.service import apply_for_position, available_positions, select_application
 from app.positions.service import eligibility, set_signal
+from app.rostering.builder_read import crew_picker_views
 from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
@@ -650,6 +651,126 @@ def test_atomic_builder_rejects_inactive_position_before_mutation(db) -> None:  
     )
     db.refresh(assignment)
     assert assignment.status == AssignmentStatus.ASSIGNED.value
+
+
+def test_trials_atomic_save_updates_timing_and_ignores_only_untouched_new_row(db) -> None:  # type: ignore[no-untyped-def]
+    region, track, _position, _person, manager, *_ = seed_vertical(db)
+    workday = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.TRIALS.value,
+        work_date=date(2026, 10, 12),
+        track_id=track.id,
+        title="Trials builder",
+        actor_user_id=manager.id,
+    )
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    draft.on_track_time = time(8, 30)
+    draft.first_trial_time = time(9, 15)
+    draft.first_race_time = time(12, 45)
+    db.commit()
+    version = workday.lock_version
+
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=draft.id,
+        expected_version=version,
+        details=draft_details(draft, first_trial_time=time(9, 45)),
+        assignments=[
+            DraftAssignmentInput(
+                base_position_id=None,
+                slot_index=None,
+                person_id=None,
+                status=AssignmentStatus.TBC.value,
+            )
+        ],
+    )
+    db.refresh(draft)
+    assert draft.first_trial_time == time(9, 45)
+    assert draft.first_race_time == time(12, 45)
+    assert not db.scalars(select(Assignment).where(Assignment.revision_id == draft.id)).all()
+
+    db.refresh(workday)
+    with pytest.raises(ValueError, match="Select a position"):
+        save_draft(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=workday.lock_version,
+            details=draft_details(draft),
+            assignments=[
+                DraftAssignmentInput(
+                    base_position_id=None,
+                    slot_index=None,
+                    person_id=None,
+                    status=AssignmentStatus.OPEN.value,
+                    note="Not an untouched row",
+                )
+            ],
+        )
+
+
+def test_position_aware_crew_picker_and_duplicate_names_are_id_safe(db) -> None:  # type: ignore[no-untyped-def]
+    region, track, _position, _person, manager, *_ = seed_vertical(db)
+    other_region = Region(name="Southern")
+    head_on = BasePosition(name="Head On")
+    director = BasePosition(name="Director")
+    db.add(other_region)
+    db.flush()
+    remote = Person(display_name="Remote Crew", home_region_id=other_region.id)
+    duplicate_a = Person(display_name="John Smith", home_region_id=other_region.id)
+    duplicate_b = Person(display_name="John Smith", home_region_id=other_region.id)
+    db.add_all([head_on, director, remote, duplicate_a, duplicate_b])
+    db.flush()
+    db.add_all(
+        [
+            PositionCapability(
+                person_id=remote.id,
+                base_position_id=head_on.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
+                changed_by_user_id=manager.id,
+            ),
+            PositionCapability(
+                person_id=remote.id,
+                base_position_id=director.id,
+                signal=CapabilitySignal.MANAGER_BLOCK.value,
+                changed_by_user_id=manager.id,
+            ),
+        ]
+    )
+    workday = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.TRIALS.value,
+        work_date=date(2026, 10, 13),
+        track_id=track.id,
+        title="Position-aware picker",
+        actor_user_id=manager.id,
+    )
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    db.commit()
+
+    views = crew_picker_views(
+        db,
+        workday=workday,
+        draft=draft,
+        position_ids={head_on.id, director.id},
+    )
+    head_relevant = {person.id: person for person in views[head_on.id].relevant}
+    director_other = {person.id: person for person in views[director.id].other}
+    assert head_relevant[remote.id].hint == "Preferred or approved"
+    assert director_other[remote.id].hint == "Manager marked unavailable for this position"
+
+    duplicate_options = [
+        person
+        for _label, people in views[head_on.id].groups
+        for person in people
+        if person.display_name == "John Smith"
+    ]
+    assert {person.id for person in duplicate_options} == {duplicate_a.id, duplicate_b.id}
+    assert len({person.context_label for person in duplicate_options}) == 2
+    assert all("Southern" in person.context_label for person in duplicate_options)
 
 def test_cross_region_uses_person_home_region_not_role_scope(db) -> None:  # type: ignore[no-untyped-def]
     north, central = Region(name="North"), Region(name="Central")

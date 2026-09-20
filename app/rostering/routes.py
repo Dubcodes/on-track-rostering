@@ -1,22 +1,23 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, time
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.policy import can_manage_region, require_manage_region
 from app.auth.security import verify_csrf
-from app.catalog.models import BasePosition, PersonCrewGroup, Region, Track
+from app.catalog.models import BasePosition, Region, Track
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, WorkdayCategory
 from app.core.time import parse_time
 from app.identity.models import Person, UserPersonLink
 from app.positions.ordering import position_order
 from app.positions.service import bulk_eligibility
+from app.rostering.builder_read import crew_picker_views
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
@@ -104,87 +105,22 @@ def _builder_context(
         )
     )
     assignments.sort(key=lambda row: (position_order(row.display_name_snapshot), str(row.slot_key)))
-    people = list(
-        db.scalars(select(Person).where(Person.lifecycle == "ACTIVE").order_by(Person.display_name))
-    )
-    same_date_people = set(
-        db.scalars(
-            select(Assignment.person_id)
-            .join(WorkdayRevision, WorkdayRevision.id == Assignment.revision_id)
-            .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
-            .where(
-                WorkdayRevision.work_date == draft.work_date,
-                Workday.id != workday.id,
-                Assignment.person_id.is_not(None),
-            )
-        )
-    )
-    person_hints: dict[tuple[uuid.UUID, uuid.UUID], str] = {}
-    people_groups_by_assignment: dict[uuid.UUID, list[tuple[str, list[Person]]]] = {}
-    eligibility_by_pair = bulk_eligibility(
-        db,
-        {person.id for person in people},
-        {
-            assignment.base_position_id
-            for assignment in assignments
-            if assignment.base_position_id is not None
-        },
-    )
-    positions_by_id = {
-        position.id: position
-        for position in db.scalars(
-            select(BasePosition).where(
-                BasePosition.id.in_(
-                    {
-                        assignment.base_position_id
-                        for assignment in assignments
-                        if assignment.base_position_id is not None
-                    }
-                )
-            )
-        )
-    }
-    crew_groups_by_person: dict[uuid.UUID, set[uuid.UUID]] = {}
-    for person_id, crew_group_id in db.execute(select(PersonCrewGroup.person_id, PersonCrewGroup.crew_group_id)):
-        crew_groups_by_person.setdefault(person_id, set()).add(crew_group_id)
-    hint_labels = {
-        "Allowed": "Preferred or approved",
-        "Worked before": "Worked this position before",
-        "Manager restricted": "Manager marked unavailable for this position",
-        "Employee opted out": "Crew member opted out of this position",
-        "No capability signal": "No position history recorded",
-    }
+    position_ids = {assignment.base_position_id for assignment in assignments}
+    forced_relevant: dict[uuid.UUID | None, set[uuid.UUID]] = {}
     for assignment in assignments:
-        relevant: list[Person] = []
-        other: list[Person] = []
-        position = positions_by_id.get(assignment.base_position_id)
-        for person in people:
-            eligible, reason = (
-                eligibility_by_pair[(person.id, assignment.base_position_id)]
-                if assignment.base_position_id is not None
-                else (False, "No capability signal")
-            )
-            hint = hint_labels[reason]
-            if person.id in same_date_people:
-                hint += "; also rostered this date"
-            person_hints[(assignment.id, person.id)] = hint
-            is_relevant = bool(
-                person.id == assignment.person_id
-                or eligible
-                or person.home_region_id == workday.region_id
-                or (
-                    position
-                    and position.crew_group_id
-                    and position.crew_group_id in crew_groups_by_person.get(person.id, set())
-                )
-            )
-            (relevant if is_relevant else other).append(person)
-        people_groups_by_assignment[assignment.id] = [
-            ("Relevant crew", relevant),
-            ("Other crew", other),
-        ]
-    regional_people = [person for person in people if person.home_region_id == workday.region_id]
-    other_people = [person for person in people if person.home_region_id != workday.region_id]
+        if assignment.person_id:
+            forced_relevant.setdefault(assignment.base_position_id, set()).add(assignment.person_id)
+    picker_views = crew_picker_views(
+        db,
+        workday=workday,
+        draft=draft,
+        position_ids=position_ids,
+        forced_relevant=forced_relevant,
+    )
+    people_groups_by_assignment = {
+        assignment.id: picker_views[assignment.base_position_id].groups
+        for assignment in assignments
+    }
     application_rows = db.execute(
         select(OpenPositionApplication, Person)
         .join(Person, Person.id == OpenPositionApplication.person_id)
@@ -213,14 +149,57 @@ def _builder_context(
                 select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name)
             ), key=lambda position: position_order(position.name)
         ),
-        people=people,
         assignments=assignments,
-        person_hints=person_hints,
         people_groups_by_assignment=people_groups_by_assignment,
-        new_slot_people_groups=[("Relevant crew", regional_people), ("Other crew", other_people)],
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
         **extra,
+    )
+
+
+@router.get("/workdays/{workday_id}/crew-picker", response_class=JSONResponse)
+def workday_crew_picker(
+    workday_id: uuid.UUID,
+    position_id: uuid.UUID,
+    request: Request,
+    person_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+):
+    workday = db.get(Workday, workday_id)
+    if not workday:
+        raise HTTPException(404)
+    require_manage_region(request.state.actor, workday.region_id)
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    if not draft:
+        raise HTTPException(409, "Open the editor again to create a draft")
+    try:
+        view = crew_picker_views(
+            db,
+            workday=workday,
+            draft=draft,
+            position_ids={position_id},
+            forced_relevant={position_id: {person_id}} if person_id else None,
+        )[position_id]
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return JSONResponse(
+        {
+            "groups": [
+                {
+                    "label": label,
+                    "people": [
+                        {
+                            "id": str(person.id),
+                            "label": person.display_name,
+                            "hint": person.hint,
+                            "context": person.context_label,
+                        }
+                        for person in people
+                    ],
+                }
+                for label, people in view.groups
+            ]
+        }
     )
 
 
@@ -328,6 +307,9 @@ async def save_workday_draft(
         text = str(value or "").strip()
         return int(text) if text else None
 
+    def submitted_time(name: str, current: time | None) -> time | None:
+        return parse_time(str(form.get(name, ""))) if name in form else current
+
     try:
         assignment_ids = form.getlist("assignment_id")
         position_ids = form.getlist("base_position_id")
@@ -374,11 +356,13 @@ async def save_workday_draft(
             title=str(form.get("title", "")),
             start_time=parse_time(str(form.get("start_time", ""))),
             end_time=parse_time(str(form.get("end_time", ""))),
-            on_track_time=parse_time(str(form.get("on_track_time", ""))),
-            first_trial_time=parse_time(str(form.get("first_trial_time", ""))),
-            first_race_time=parse_time(str(form.get("first_race_time", ""))),
-            last_race_time=parse_time(str(form.get("last_race_time", ""))),
-            race_count=optional_int(form.get("race_count")),
+            on_track_time=submitted_time("on_track_time", draft.on_track_time),
+            first_trial_time=submitted_time("first_trial_time", draft.first_trial_time),
+            first_race_time=submitted_time("first_race_time", draft.first_race_time),
+            last_race_time=submitted_time("last_race_time", draft.last_race_time),
+            race_count=(
+                optional_int(form.get("race_count")) if "race_count" in form else draft.race_count
+            ),
             day_note=str(form.get("day_note", "")),
             change_reason=str(form.get("change_reason", "")),
         )

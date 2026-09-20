@@ -32,12 +32,73 @@
     row.classList.toggle("is-tbc", state === "TBC" || state === "MANAGER_ACTION_REQUIRED");
     row.classList.toggle("needs-manager-action", state === "MANAGER_ACTION_REQUIRED");
   };
+  const renderCrewGroups = (picker, groups) => {
+    const container = picker.querySelector("[data-picker-groups]");
+    if (!container) return;
+    container.replaceChildren();
+    groups.forEach((group) => {
+      if (!group.people.length) return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "search-picker-group";
+      const heading = document.createElement("span");
+      heading.textContent = group.label;
+      wrapper.append(heading);
+      group.people.forEach((person) => {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = "search-picker-option";
+        option.setAttribute("role", "option");
+        option.dataset.pickerOption = "";
+        option.dataset.value = person.id;
+        option.dataset.state = "ASSIGNED";
+        option.dataset.label = person.label;
+        option.dataset.search = `${person.label} ${person.context || ""} ${person.hint || ""}`;
+        const name = document.createElement("strong");
+        name.textContent = person.label;
+        option.append(name);
+        [person.context, person.hint].filter(Boolean).forEach((detail) => {
+          const small = document.createElement("small");
+          small.textContent = detail;
+          option.append(small);
+        });
+        wrapper.append(option);
+      });
+      container.append(wrapper);
+    });
+  };
+  const loadCrewPicker = async (row, positionId) => {
+    const picker = row.querySelector('[data-picker-kind="person"]');
+    const empty = picker.querySelector("[data-picker-empty]");
+    const requestKey = `${positionId}-${Date.now()}`;
+    row.dataset.crewPickerRequest = requestKey;
+    renderCrewGroups(picker, []);
+    empty.textContent = "Loading position-aware crew…";
+    empty.hidden = false;
+    const selectedPersonId = row.querySelector("[data-person-value]").value;
+    const url = new URL(form.dataset.crewPickerUrl, window.location.origin);
+    url.searchParams.set("position_id", positionId);
+    if (selectedPersonId) url.searchParams.set("person_id", selectedPersonId);
+    try {
+      const response = await fetch(url, {headers: {Accept: "application/json"}});
+      if (!response.ok) throw new Error("Crew suggestions unavailable");
+      const payload = await response.json();
+      if (row.dataset.crewPickerRequest !== requestKey) return;
+      renderCrewGroups(picker, payload.groups || []);
+      empty.textContent = "No matching results";
+      empty.hidden = true;
+    } catch (_) {
+      if (row.dataset.crewPickerRequest !== requestKey) return;
+      empty.textContent = "Crew suggestions unavailable. Refresh and try again.";
+      empty.hidden = false;
+    }
+  };
   const choose = (picker, option) => {
     const row = picker.closest("[data-assignment-row]");
     const input = picker.querySelector("[data-picker-input]");
     input.value = option.dataset.label || "";
     if (picker.dataset.pickerKind === "position") {
       row.querySelector("[data-position-value]").value = option.dataset.value || "";
+      if (option.dataset.value) loadCrewPicker(row, option.dataset.value);
     } else {
       row.querySelector("[data-person-value]").value = option.dataset.value || "";
       row.querySelector("[data-assignment-state]").value = option.dataset.state || "ASSIGNED";
@@ -79,7 +140,10 @@
         choose(picker, active || options[0]);
       }
     });
-    picker.querySelectorAll("[data-picker-option]").forEach((option) => option.addEventListener("click", () => choose(picker, option)));
+    picker.querySelector("[data-picker-menu]").addEventListener("click", (event) => {
+      const option = event.target.closest("[data-picker-option]");
+      if (option) choose(picker, option);
+    });
   };
   const wireTimeInput = (input) => {
     const normalizeTime = () => {

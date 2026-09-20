@@ -19,13 +19,13 @@ from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base, SessionLocal, engine
-from app.core.enums import Role
+from app.core.enums import CapabilitySignal, Role
 from app.core.time import utcnow
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
 from app.identity.models import Person, RoleGrant, TrustedDevice, User, UserPersonLink
 from app.notices.models import OperationalNotice
 from app.notifications.models import NotificationPreference
-from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("ONTRACK_RUN_BROWSER_TESTS") != "1",
@@ -99,9 +99,13 @@ def browser_site():  # type: ignore[no-untyped-def]
             palette_slot=1,
         )
         position = BasePosition(name=f"Browser Position {suffix}", crew_group_id=group.id)
+        head_on = BasePosition(name=f"Head On {suffix}", crew_group_id=group.id)
+        director = BasePosition(name=f"Director {suffix}", crew_group_id=group.id)
+        duplicate_a = Person(display_name="John Smith", home_region_id=cross_region.id)
+        duplicate_b = Person(display_name="John Smith", home_region_id=cross_region.id)
         person.home_region_id = region.id
         manager_person.home_region_id = region.id
-        db.add_all([track, cross_track, position])
+        db.add_all([track, cross_track, position, head_on, director, duplicate_a, duplicate_b])
         db.flush()
         db.add_all(
             [
@@ -112,6 +116,18 @@ def browser_site():  # type: ignore[no-untyped-def]
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
                 NotificationPreference(user_id=employee.id, weekly_digest=True),
+                PositionCapability(
+                    person_id=other_person.id,
+                    base_position_id=head_on.id,
+                    signal=CapabilitySignal.MANAGER_ALLOW.value,
+                    changed_by_user_id=manager.id,
+                ),
+                PositionCapability(
+                    person_id=other_person.id,
+                    base_position_id=director.id,
+                    signal=CapabilitySignal.MANAGER_BLOCK.value,
+                    changed_by_user_id=manager.id,
+                ),
             ]
         )
         workday = Workday(region_id=region.id, created_by_user_id=manager.id)
@@ -453,6 +469,10 @@ def browser_site():  # type: ignore[no-untyped-def]
             "expired_notice_text": expired_notice_text,
             "external_event_id": str(external_event.id),
             "trial_workday_id": str(trial_workday.id),
+            "head_on_position_id": str(head_on.id),
+            "director_position_id": str(director.id),
+            "position_aware_person_id": str(other_person.id),
+            "duplicate_person_ids": [str(duplicate_a.id), str(duplicate_b.id)],
         }
 
     with socket.socket() as probe:
@@ -993,6 +1013,48 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     before_add = rows.count()
     page.get_by_role("button", name="Add position").click()
     assert rows.count() == before_add + 1
+    if width in {1280, 320}:
+        new_row = rows.last
+        new_position = new_row.locator('[data-picker-kind="position"] [data-picker-input]')
+        new_position.fill("Head On")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        new_person_picker = new_row.locator('[data-picker-kind="person"]')
+        new_person_input = new_person_picker.locator("[data-picker-input]")
+        new_person_input.click()
+        new_person_input.fill("")
+        position_aware_option = new_person_picker.locator(
+            f'[data-picker-option][data-value="{values["position_aware_person_id"]}"]'
+        )
+        position_aware_option.wait_for(state="visible")
+        assert "Preferred or approved" in position_aware_option.inner_text()
+        assert new_person_picker.get_by_text(
+            "No position history recorded; also rostered this date", exact=True
+        ).is_visible()
+        new_person_input.fill("John Smith")
+        duplicate_options = new_person_picker.locator(
+            '[data-picker-option][data-label="John Smith"]:visible'
+        )
+        assert duplicate_options.count() == 2
+        assert set(duplicate_options.evaluate_all("nodes => nodes.map(node => node.dataset.value)")) == set(
+            values["duplicate_person_ids"]
+        )
+        assert duplicate_options.locator("small").count() >= 2
+        page.keyboard.press("Escape")
+
+        new_position.click()
+        new_position.fill("Director")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        new_person_input.click()
+        new_person_input.fill("")
+        position_aware_option.wait_for(state="visible")
+        assert "Manager marked unavailable for this position" in position_aware_option.inner_text()
+        assert position_aware_option.locator(
+            "xpath=ancestor::div[contains(@class, 'search-picker-group')]/span"
+        ).inner_text().casefold() == "other crew"
+        _capture_page(page, f"new-position-picker-{width}.png")
+        page.keyboard.press("Escape")
     rows.last.locator("[data-toggle-advanced]").click()
     rows.last.locator("[data-remove-row]").click()
     assert rows.count() == before_add
@@ -1026,6 +1088,54 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             guarded_url = page.url
             page.keyboard.press("n")
             assert page.url == guarded_url
+    assert not errors
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
+def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900}, has_touch=width <= 760)
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    edit_url = base_url + f"/manage/workdays/{values['trial_workday_id']}"
+    page.goto(edit_url)
+    page.get_by_text("Timing and day notes", exact=True).click()
+    first_trial = page.locator('input[name="first_trial_time"]')
+    assert first_trial.is_visible()
+    assert first_trial.input_value()
+    assert page.locator('input[name="first_race_time"]').count() == 0
+    assert page.locator('input[name="last_race_time"]').count() == 0
+    assert page.locator('input[name="race_count"]').count() == 0
+    updated_time = "10:15" if width == 1280 else "10:30"
+    first_trial.fill(updated_time)
+    page.get_by_role("button", name="Add position").click()
+    blank_row = page.locator("[data-assignment-row]").last
+    assert blank_row.locator("[data-position-value]").input_value() == ""
+    _capture_page(page, f"trials-builder-{width}.png")
+    _assert_no_horizontal_overflow(page)
+    page.keyboard.press("Escape")
+    page.get_by_role("button", name="Save & Preview").click()
+    page.wait_for_url(f"**/manage/workdays/{values['trial_workday_id']}/preview")
+    assert page.get_by_text(updated_time, exact=True).first.is_visible()
+    _capture_page(page, f"trials-preview-{width}.png")
+    with SessionLocal() as db:
+        workday = db.get(Workday, uuid.UUID(values["trial_workday_id"]))
+        assert not db.scalars(
+            select(Assignment).where(
+                Assignment.revision_id == workday.current_draft_revision_id,
+                Assignment.base_position_id.is_(None),
+            )
+        ).all()
+    page.get_by_role("button", name="Publish roster").click()
+    page.wait_for_url(f"**/day/{values['trial_workday_id']}")
+    assert str((date.today() + timedelta(days=1)).year) in page.locator("h1").first.inner_text()
+    assert page.get_by_text("First trial", exact=True).is_visible()
+    assert page.get_by_text(updated_time, exact=True).is_visible()
+    assert page.get_by_text("First race", exact=True).count() == 0
+    _capture_page(page, f"published-trial-day-corrected-{width}.png")
+    _assert_no_horizontal_overflow(page)
     assert not errors
     context.close()
 

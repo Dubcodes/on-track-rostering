@@ -367,6 +367,21 @@ def save_draft(
     if details.race_count is not None and not 0 <= details.race_count <= 99:
         raise ValueError("Race count must be between 0 and 99.")
 
+    assignments = [
+        item
+        for item in assignments
+        if not (
+            item.assignment_id is None
+            and item.base_position_id is None
+            and item.person_id is None
+            and item.status == AssignmentStatus.TBC.value
+            and item.slot_index is None
+            and not item.note.strip()
+            and item.start_time is None
+            and item.end_time is None
+        )
+    ]
+
     active_positions = {
         row.id: row
         for row in db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE"))
@@ -390,6 +405,8 @@ def save_draft(
     }
     prepared: list[tuple[DraftAssignmentInput, BasePosition | None, Person | None]] = []
     for item in assignments:
+        if item.assignment_id is None and item.base_position_id is None:
+            raise ValueError("Select a position for each new assignment.")
         position = active_positions.get(item.base_position_id) if item.base_position_id else None
         person = active_people.get(item.person_id) if item.person_id else None
         if item.base_position_id and position is None:
