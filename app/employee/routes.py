@@ -38,8 +38,9 @@ from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_VALUES, normalize_theme
 from app.core.time import local_today, utcnow, worked_minutes
 from app.employee.read_models import day_assignments, month_items
-from app.external_calendar.models import CalendarDisplayPreference
+from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
 from app.external_calendar.read_models import calendar_preference, external_calendar_items
+from app.external_calendar.service import event_evidence
 from app.hours.service import fortnight_bounds
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notices.service import prominent_notice, recent_notices, relevant_notice_region_ids
@@ -240,6 +241,11 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     )
     if crew_history and not management:
         history = [row for row in history if not row.summary.startswith("Publication reason:")]
+    source_event = (
+        db.get(ExternalCalendarEvent, workday.external_event_id)
+        if workday.external_event_id
+        else None
+    )
     return templates.TemplateResponse(
         "day.html",
         context(
@@ -272,6 +278,12 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             history=history,
             holiday=holiday_info_for_date(
                 revision.work_date, region.statutory_holiday_region or "" if region else ""
+            ),
+            source_evidence=event_evidence(db, source_event) if source_event else None,
+            source_title=(
+                f"Raw {'Race' if source_event.event_kind == 'RACE' else 'Trial'} Day Data"
+                if source_event
+                else None
             ),
         ),
     )

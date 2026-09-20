@@ -80,24 +80,6 @@
   document.querySelectorAll("[data-auto-submit]").forEach((element) => {
     element.addEventListener("change", () => element.form?.submit());
   });
-  document.querySelectorAll("[data-crew-search]").forEach((search) => {
-    search.addEventListener("input", () => {
-      const query = search.value.trim().toLocaleLowerCase();
-      document.querySelectorAll("[data-crew-picker] option").forEach((option) => {
-        if (!option.value) return;
-        option.hidden = Boolean(query) && !option.textContent.toLocaleLowerCase().includes(query);
-      });
-    });
-  });
-  document.querySelectorAll("[data-position-search]").forEach((search) => {
-    search.addEventListener("input", () => {
-      const query = search.value.trim().toLocaleLowerCase();
-      document.querySelectorAll('select[name="base_position_id"] option').forEach((option) => {
-        if (!option.value) return;
-        option.hidden = Boolean(query) && !option.textContent.toLocaleLowerCase().includes(query);
-      });
-    });
-  });
   let touchStartX = 0;
   let touchStartY = 0;
   document.addEventListener("touchstart", (event) => {

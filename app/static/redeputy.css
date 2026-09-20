@@ -1071,3 +1071,99 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .compact-signout form { margin: 0; }
 .builder-add-slot { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
 @media (max-width: 560px) { .compact-signout { align-items: stretch; flex-direction: column; } }
+
+/* Direct workday-builder component vocabulary, adapted to stable On Track draft slots. */
+[hidden] { display: none !important; }
+.page-heading.compact-heading, .builder-assignment-heading, .workday-row-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.builder-form, .workday-assignment-list { display: grid; gap: 10px; }
+.builder-section > summary, .builder-inline-advanced > summary { display: flex; justify-content: space-between; gap: 10px; cursor: pointer; font-weight: 900; }
+.builder-section > summary span, .builder-inline-advanced > summary { color: var(--muted); font-size: .78rem; }
+.builder-section[open] > summary, .builder-inline-advanced[open] > summary { margin-bottom: 12px; }
+.builder-inline-advanced { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.builder-time-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 9px; }
+.builder-save-bar { position: sticky; z-index: 8; bottom: max(6px,env(safe-area-inset-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow); }
+.workday-assignment { padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+.workday-assignment.is-open { border-left: 4px solid var(--open-shift-border); background: var(--open-shift-bg); }
+.workday-assignment.is-tbc { border-left: 4px solid var(--muted); }
+.workday-assignment.needs-manager-action { border-left-color: var(--warn); background: var(--warn-bg); }
+.workday-assignment-primary { display: grid; grid-template-columns: minmax(150px,.8fr) minmax(220px,1.2fr) 34px; gap: 8px; align-items: end; }
+.workday-assignment-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
+.workday-assignment-note { grid-column: span 2; }
+.workday-assignment-advanced { margin-top: 7px; }
+.workday-assignment-advanced > summary { display: none; }
+.workday-assignment-advanced[open] { padding-top: 9px; border-top: 1px solid var(--line); }
+.picker-field, .search-picker { min-width: 0; }
+.search-picker { position: relative; }
+.search-picker > input { width: 100%; }
+.search-picker-menu { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; width: max(100%,260px); max-width: min(380px,calc(100vw - 32px)); max-height: min(360px,55vh); overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); box-shadow: var(--shadow); }
+.search-picker-group > span { display: block; padding: 8px 9px 4px; color: var(--muted); font-size: .72rem; font-weight: 800; text-transform: uppercase; }
+.search-picker-option { display: flex; width: 100%; min-height: 42px; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; padding: 7px 9px; border: 1px solid transparent; border-radius: 5px; color: var(--text); background: transparent; text-align: left; }
+.search-picker-option strong { font-size: .88rem; }
+.search-picker-option small { color: var(--muted); font-size: .72rem; }
+.search-picker-option:hover, .search-picker-option.is-active, .search-picker-option:focus-visible { border-color: var(--accent); background: color-mix(in srgb,var(--accent) 14%,var(--surface-raised)); outline: none; }
+.search-picker-option.is-open-position { border-bottom-color: var(--open-shift-border); color: var(--open-shift-text); }
+.search-picker-empty { margin: 0; padding: 12px 9px; color: var(--muted); }
+.compact-check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .78rem; font-weight: 800; }
+@media (max-width: 620px) {
+  .page-heading.compact-heading, .builder-assignment-heading { align-items: stretch; flex-direction: column; }
+  .workday-assignment { padding: 8px; }
+  .workday-assignment-primary { grid-template-columns: minmax(0,1fr) 34px; gap: 6px; }
+  .workday-role-field { grid-column: 1 / -1; }
+  .workday-assignment-grid { grid-template-columns: 1fr; }
+  .workday-assignment-note { grid-column: auto; }
+  .search-picker-menu { position: fixed; z-index: 100; top: max(64px,env(safe-area-inset-top)); left: 8px; right: 8px; width: auto; max-width: none; max-height: min(68vh,540px); }
+  .search-picker-option { min-height: 48px; }
+  .builder-save-bar span { display: none; }
+  .builder-save-bar button { width: 100%; }
+}
+
+/* Published Day: Re-Deputy manual-roster structure on authoritative snapshots. */
+.date-heading { margin-bottom: 12px; }
+.detail-list { display: grid; gap: 18px; }
+.detail-card { --shift-accent-colour: var(--track,var(--accent)); padding: clamp(14px,3vw,22px); border: 1px solid color-mix(in srgb,var(--shift-accent-colour) 42%,var(--line)); border-left: 7px solid var(--shift-accent-colour); border-radius: 8px; background: color-mix(in srgb,var(--shift-accent-colour) 10%,var(--surface)); }
+.detail-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.detail-card-heading h2 { margin: 0; font-size: 1.45rem; }
+.detail-subtitle { margin: 7px 0 0; color: var(--muted); font-weight: 750; }
+.race-day-panel { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.race-day-panel h3 { margin: 0; }
+.race-day-rows { display: grid; grid-template-columns: max-content minmax(0,max-content); column-gap: 16px; row-gap: 4px; width: fit-content; max-width: 100%; margin: 0; padding: 0; line-height: 1.3; }
+.race-day-rows div { display: contents; }
+.race-day-rows dt, .race-day-rows dd { min-width: 0; margin: 0; overflow-wrap: break-word; }
+.race-day-rows dt { color: var(--muted); font-weight: 650; }
+.race-day-rows dd { font-weight: 650; }
+.crew-roster { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+.crew-roster-row { display: grid; grid-template-columns: minmax(72px,.9fr) minmax(0,1.35fr) minmax(56px,.75fr); gap: 8px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--line); }
+.crew-roster-row:first-child { border-top: 0; }
+.crew-roster-row > * { min-width: 0; line-height: 1.25; overflow-wrap: break-word; }
+.crew-roster-row.is-placeholder { color: var(--muted); background: var(--surface-soft); }
+.crew-roster-row.own { box-shadow: inset 3px 0 var(--accent); }
+.crew-roster-head { background: var(--surface); color: var(--muted); font-size: .7rem; font-weight: 900; text-transform: uppercase; }
+.crew-name { display: flex; gap: 4px; flex-direction: column; align-items: flex-start; }
+.crew-name small, .crew-roster-row [role="cell"] small { color: var(--muted); font-weight: 500; }
+.description-block { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.description-block h3 { margin: 0 0 8px; }
+.description-block p { margin: 0; white-space: pre-wrap; }
+.change-panel, .maths-panel, .source-evidence { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.change-panel > summary, .maths-panel > summary, .source-evidence > summary { display: flex; justify-content: space-between; gap: 10px; cursor: pointer; font-weight: 900; }
+.change-lines { display: grid; gap: 6px; padding: 0; list-style: none; }
+.change-lines li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.change-lines small { color: var(--muted); }
+.source-evidence-canonical, .source-evidence-list { display: grid; gap: 8px; margin-top: 12px; }
+.source-evidence-canonical h3 { margin: 0; font-size: 1rem; }
+.source-evidence-list article { padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+.source-evidence-list header { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.source-evidence-list time, .source-evidence-list small, .source-marker { color: var(--muted); font-size: .75rem; }
+.source-marker { margin-left: 6px; }
+.builder-review-sections { display: grid; gap: 7px; margin-bottom: 12px; }
+.builder-review-sections details { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.builder-review-sections summary { display: flex; justify-content: space-between; gap: 10px; cursor: pointer; font-weight: 900; }
+.builder-review-sections summary span { color: var(--muted); font-size: .76rem; }
+.builder-review-crew p { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0; }
+.builder-change-list { display: grid; gap: 6px; margin-top: 8px; }
+@media (max-width: 560px) {
+  .detail-card { padding: 11px 9px; border-left-width: 5px; }
+  .detail-card-heading { gap: 8px; }
+  .crew-roster-row { grid-template-columns: minmax(68px,.85fr) minmax(0,1.35fr) minmax(44px,.6fr); gap: 5px; padding: 7px 6px; font-size: .78rem; }
+  .race-day-rows { grid-template-columns: minmax(78px,max-content) minmax(0,1fr); width: 100%; }
+  .change-lines li, .source-evidence-list header { flex-direction: column; }
+}

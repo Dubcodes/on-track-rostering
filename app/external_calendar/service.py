@@ -162,7 +162,9 @@ def event_evidence(db: Session, event: ExternalCalendarEvent) -> dict[str, objec
                 "provider": row.provider,
                 "retrieved_at": row.retrieved_at,
                 "facts": row.parsed_facts,
-                "raw": row.raw_payload,
+                # Diagnostics expose structure, not arbitrary provider values that may contain
+                # credentials or unrelated personal data.
+                "raw_keys": sorted((row.raw_payload or {}).keys()),
             }
             for row in observations
         ],

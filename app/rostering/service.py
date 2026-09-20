@@ -40,6 +40,9 @@ class DraftConflict(ValueError):
     pass
 
 
+_UNCHANGED = object()
+
+
 @dataclass(frozen=True)
 class AssignmentInput:
     base_position_id: uuid.UUID | None
@@ -50,6 +53,27 @@ class AssignmentInput:
     note_private: bool = True
     start_time: time | None = None
     end_time: time | None = None
+
+
+@dataclass(frozen=True)
+class DraftAssignmentInput(AssignmentInput):
+    assignment_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class DraftDetailsInput:
+    work_date: date
+    track_id: uuid.UUID | None
+    title: str
+    start_time: time | None
+    end_time: time | None
+    on_track_time: time | None
+    first_trial_time: time | None
+    first_race_time: time | None
+    last_race_time: time | None
+    race_count: int | None
+    day_note: str
+    change_reason: str
 
 
 def _validated_track(db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID) -> str:
@@ -274,6 +298,8 @@ def update_assignment(
     draft_id: uuid.UUID,
     expected_version: int,
     assignment_id: uuid.UUID,
+    base_position_id: uuid.UUID | None | object = _UNCHANGED,
+    slot_index: int | None | object = _UNCHANGED,
     person_id: uuid.UUID | None,
     status: str,
     note: str,
@@ -289,11 +315,30 @@ def update_assignment(
     )
     if assignment is None:
         raise ValueError("Assignment not found in this draft.")
+    position = (
+        db.get(BasePosition, base_position_id)
+        if isinstance(base_position_id, uuid.UUID)
+        else None
+    )
+    if base_position_id is not _UNCHANGED and base_position_id is not None and position is None:
+        raise ValueError("Select an active base position.")
+    if position and position.lifecycle != "ACTIVE":
+        raise ValueError("Select an active base position.")
     person = db.get(Person, person_id) if person_id else None
     if person and person.lifecycle != "ACTIVE":
         raise ValueError("Select an active person.")
     if status not in {item.value for item in AssignmentStatus}:
         raise ValueError("Invalid assignment status.")
+    if base_position_id is not _UNCHANGED:
+        assignment.base_position_id = base_position_id  # type: ignore[assignment]
+    if slot_index is not _UNCHANGED:
+        assignment.slot_index = slot_index  # type: ignore[assignment]
+    if base_position_id is not _UNCHANGED or slot_index is not _UNCHANGED:
+        position = db.get(BasePosition, assignment.base_position_id) if assignment.base_position_id else None
+        position_name = position.name if position else "Crew"
+        assignment.display_name_snapshot = (
+            f"{position_name} {assignment.slot_index}" if assignment.slot_index else position_name
+        )
     assignment.person_id = person_id
     assignment.person_name_snapshot = person.display_name if person else None
     assignment.status = AssignmentStatus.ASSIGNED.value if person else status
@@ -304,6 +349,109 @@ def update_assignment(
     workday.lock_version += 1
     db.commit()
     return assignment
+
+
+def save_draft(
+    db: Session,
+    *,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    expected_version: int,
+    details: DraftDetailsInput,
+    assignments: list[DraftAssignmentInput],
+) -> WorkdayRevision:
+    """Atomically replace the editable draft state while preserving stable slot identities."""
+    workday, draft = lock_current_draft(
+        db, workday_id=workday_id, draft_id=draft_id, expected_version=expected_version
+    )
+    if details.race_count is not None and not 0 <= details.race_count <= 99:
+        raise ValueError("Race count must be between 0 and 99.")
+
+    active_positions = {
+        row.id: row
+        for row in db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE"))
+    }
+    active_people = {
+        row.id: row for row in db.scalars(select(Person).where(Person.lifecycle == "ACTIVE"))
+    }
+    current = {
+        row.id: row
+        for row in db.scalars(select(Assignment).where(Assignment.revision_id == draft.id))
+    }
+    submitted_ids = [row.assignment_id for row in assignments if row.assignment_id is not None]
+    if len(submitted_ids) != len(set(submitted_ids)) or any(row_id not in current for row_id in submitted_ids):
+        raise ValueError("One or more assignment rows do not belong to this draft.")
+
+    track_name = _validated_track(db, details.track_id, workday.region_id)
+    normal_statuses = {
+        AssignmentStatus.ASSIGNED.value,
+        AssignmentStatus.OPEN.value,
+        AssignmentStatus.TBC.value,
+    }
+    prepared: list[tuple[DraftAssignmentInput, BasePosition | None, Person | None]] = []
+    for item in assignments:
+        position = active_positions.get(item.base_position_id) if item.base_position_id else None
+        person = active_people.get(item.person_id) if item.person_id else None
+        if item.base_position_id and position is None:
+            raise ValueError("Select an active base position.")
+        if item.person_id and person is None:
+            raise ValueError("Select an active person.")
+        prior = current.get(item.assignment_id) if item.assignment_id else None
+        preserved_manager_action = bool(
+            prior
+            and prior.status == AssignmentStatus.MANAGER_ACTION_REQUIRED.value
+            and item.status == AssignmentStatus.MANAGER_ACTION_REQUIRED.value
+            and item.person_id is None
+        )
+        if item.status not in normal_statuses and not preserved_manager_action:
+            raise ValueError("Invalid assignment status.")
+        if item.person_id is None and item.status == AssignmentStatus.ASSIGNED.value:
+            raise ValueError("Choose a person, Open position, or TBC / not offered.")
+        if item.slot_index is not None and item.slot_index < 1:
+            raise ValueError("Slot index must be at least 1.")
+        prepared.append((item, position, person))
+
+    draft.work_date = details.work_date
+    draft.track_id = details.track_id
+    draft.track_name_snapshot = track_name
+    draft.title = details.title.strip() or "Workday"
+    draft.start_time, draft.end_time, draft.on_track_time = (
+        details.start_time,
+        details.end_time,
+        details.on_track_time,
+    )
+    draft.first_trial_time = details.first_trial_time
+    draft.first_race_time = details.first_race_time
+    draft.last_race_time = details.last_race_time
+    draft.race_count = details.race_count
+    draft.day_note = details.day_note.strip()
+    draft.change_reason = details.change_reason.strip()
+
+    kept_ids = set(submitted_ids)
+    for assignment_id, assignment in current.items():
+        if assignment_id not in kept_ids:
+            db.delete(assignment)
+    for item, position, person in prepared:
+        assignment = current.get(item.assignment_id) if item.assignment_id else None
+        if assignment is None:
+            assignment = Assignment(revision_id=draft.id)
+            db.add(assignment)
+        position_name = position.name if position else "Crew"
+        assignment.base_position_id = item.base_position_id
+        assignment.slot_index = item.slot_index
+        assignment.display_name_snapshot = (
+            f"{position_name} {item.slot_index}" if item.slot_index else position_name
+        )
+        assignment.person_id = item.person_id
+        assignment.person_name_snapshot = person.display_name if person else None
+        assignment.status = AssignmentStatus.ASSIGNED.value if person else item.status
+        assignment.note = item.note.strip()
+        assignment.note_private = item.note_private
+        assignment.start_time = item.start_time
+        assignment.end_time = item.end_time
+    workday.lock_version += 1
+    db.commit()
+    return draft
 
 
 def remove_assignment(

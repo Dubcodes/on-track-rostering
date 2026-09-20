@@ -114,6 +114,11 @@ def day_assignments(
     rows = list(db.scalars(statement.order_by(Assignment.display_name_snapshot)))
     rows.sort(key=lambda row: (position_order(row.display_name_snapshot), str(row.slot_key)))
     result = []
+    empty_labels = {
+        "OPEN": "Open position",
+        "TBC": "TBC / not offered",
+        "MANAGER_ACTION_REQUIRED": "Needs Manager action",
+    }
     for row in rows:
         is_own = actor.person_id == row.person_id
         note = row.note if (not row.note_private or is_own or can_view_private_notes) else ""
@@ -122,7 +127,7 @@ def day_assignments(
                 "slot_key": str(row.slot_key),
                 "person_id": str(row.person_id) if row.person_id else None,
                 "role": row.display_name_snapshot,
-                "person": row.person_name_snapshot or row.status.replace("_", " ").title(),
+                "person": row.person_name_snapshot or empty_labels.get(row.status, "Unassigned"),
                 "status": row.status,
                 "start": row.start_time,
                 "end": row.end_time,

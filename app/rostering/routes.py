@@ -20,7 +20,9 @@ from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
+    DraftAssignmentInput,
     DraftConflict,
+    DraftDetailsInput,
     PublishConflict,
     add_assignment,
     create_workday,
@@ -28,6 +30,7 @@ from app.rostering.service import (
     preview_diff,
     publish,
     remove_assignment,
+    save_draft,
     update_assignment,
     update_draft_details,
 )
@@ -178,7 +181,7 @@ def _builder_context(
             (relevant if is_relevant else other).append(person)
         people_groups_by_assignment[assignment.id] = [
             ("Relevant crew", relevant),
-            ("Other active crew", other),
+            ("Other crew", other),
         ]
     regional_people = [person for person in people if person.home_region_id == workday.region_id]
     other_people = [person for person in people if person.home_region_id != workday.region_id]
@@ -214,7 +217,7 @@ def _builder_context(
         assignments=assignments,
         person_hints=person_hints,
         people_groups_by_assignment=people_groups_by_assignment,
-        new_slot_people_groups=[("Crew from this region", regional_people), ("Other active crew", other_people)],
+        new_slot_people_groups=[("Relevant crew", regional_people), ("Other crew", other_people)],
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
         **extra,
@@ -301,6 +304,99 @@ def edit_workday(workday_id: uuid.UUID, request: Request, db: Session = Depends(
     require_manage_region(request.state.actor, workday.region_id)
     draft = ensure_draft(db, workday, request.state.user.id)
     return templates.TemplateResponse("workday_builder.html", _builder_context(db, request, workday, draft))
+
+
+@router.post("/workdays/{workday_id}/draft")
+async def save_workday_draft(
+    workday_id: uuid.UUID, request: Request, db: Session = Depends(get_db)
+):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    workday = db.get(Workday, workday_id)
+    if not workday:
+        raise HTTPException(404)
+    require_manage_region(request.state.actor, workday.region_id)
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    if not draft:
+        raise HTTPException(409, "Open the editor again to create a draft")
+
+    def optional_uuid(value: object) -> uuid.UUID | None:
+        text = str(value or "").strip()
+        return uuid.UUID(text) if text else None
+
+    def optional_int(value: object) -> int | None:
+        text = str(value or "").strip()
+        return int(text) if text else None
+
+    try:
+        assignment_ids = form.getlist("assignment_id")
+        position_ids = form.getlist("base_position_id")
+        slot_indexes = form.getlist("slot_index")
+        person_ids = form.getlist("person_id")
+        statuses = form.getlist("status")
+        notes = form.getlist("note")
+        private_values = form.getlist("note_private")
+        starts = form.getlist("assignment_start_time")
+        ends = form.getlist("assignment_end_time")
+        lengths = {
+            len(values)
+            for values in (
+                assignment_ids,
+                position_ids,
+                slot_indexes,
+                person_ids,
+                statuses,
+                notes,
+                private_values,
+                starts,
+                ends,
+            )
+        }
+        if len(lengths) != 1:
+            raise ValueError("The assignment rows were incomplete. Refresh and try again.")
+        items = [
+            DraftAssignmentInput(
+                assignment_id=optional_uuid(assignment_ids[index]),
+                base_position_id=optional_uuid(position_ids[index]),
+                slot_index=optional_int(slot_indexes[index]),
+                person_id=optional_uuid(person_ids[index]),
+                status=str(statuses[index]),
+                note=str(notes[index]),
+                note_private=str(private_values[index]) == "1",
+                start_time=parse_time(str(starts[index])),
+                end_time=parse_time(str(ends[index])),
+            )
+            for index in range(len(assignment_ids))
+        ]
+        details = DraftDetailsInput(
+            work_date=date.fromisoformat(str(form["work_date"])),
+            track_id=optional_uuid(form.get("track_id")),
+            title=str(form.get("title", "")),
+            start_time=parse_time(str(form.get("start_time", ""))),
+            end_time=parse_time(str(form.get("end_time", ""))),
+            on_track_time=parse_time(str(form.get("on_track_time", ""))),
+            first_trial_time=parse_time(str(form.get("first_trial_time", ""))),
+            first_race_time=parse_time(str(form.get("first_race_time", ""))),
+            last_race_time=parse_time(str(form.get("last_race_time", ""))),
+            race_count=optional_int(form.get("race_count")),
+            day_note=str(form.get("day_note", "")),
+            change_reason=str(form.get("change_reason", "")),
+        )
+        save_draft(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=int(str(form["expected_version"])),
+            details=details,
+            assignments=items,
+        )
+    except DraftConflict as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return RedirectResponse(f"/manage/workdays/{workday_id}/preview", status_code=303)
 
 
 @router.post("/workdays/{workday_id}/details")

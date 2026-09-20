@@ -42,5 +42,6 @@
   <main class="page-shell">{% block content %}{% endblock %}</main>
   <footer class="app-footer">{{ branding.product_name }} {{ app_version }}{% if build_id %} · {{ build_id }}{% endif %}</footer>
   <script src="/static/app.js?v={{ asset_version|urlencode }}" defer></script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>
