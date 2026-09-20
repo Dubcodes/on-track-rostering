@@ -502,9 +502,21 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     marker = page.locator(".external-marker").first
     assert marker.count() == 1
     marker.locator("summary").click()
-    assert marker.locator(f'a[href="/external-events/{values["external_event_id"]}"]').is_visible()
+    assert marker.get_attribute("open") is not None
+    popover_box = marker.locator(".external-marker-popover").evaluate(
+        """element => { const rect = element.getBoundingClientRect(); return {x: rect.x, y: rect.y, width: rect.width, height: rect.height}; }"""
+    )
+    assert popover_box["width"] > 0
+    assert popover_box["height"] > 0
+    assert popover_box["x"] >= 0
+    assert popover_box["x"] + popover_box["width"] <= width
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"external-event-minimal-{width}.png")
+    page.mouse.click(
+        popover_box["x"] + popover_box["width"] / 2,
+        popover_box["y"] + popover_box["height"] / 2,
+    )
+    page.wait_for_url(f'**/external-events/{values["external_event_id"]}')
     context.close()
 
 

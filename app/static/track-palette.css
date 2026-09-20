@@ -612,10 +612,11 @@ html[data-theme="studio"] {
 .external-event.source-api { --source-accent: var(--source-api); }
 .external-marker { position: relative; display: inline-block; color: var(--track, var(--unconfirmed)); }
 .external-marker summary { cursor: pointer; list-style: none; font-size: 1.1rem; }
-.external-marker > a { position: absolute; top: calc(100% + 4px); z-index: 5; width: min(220px, 75vw); padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); text-decoration: none; }
-.external-marker:not([open]) > a { display: none; }
-.external-marker[open] > a { display: grid; }
-.external-marker-start > a { left: 0; }
-.external-marker-end > a { right: 0; }
+.external-marker-popover { position: absolute; top: calc(100% + 4px); z-index: 5; width: min(220px, 75vw); padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 24%, transparent); color: var(--text); }
+.external-marker-popover > a { display: grid; color: inherit; text-decoration: none; }
+.external-marker:not([open]) > .external-marker-popover { display: none; }
+.external-marker[open] > .external-marker-popover { display: block; }
+.external-marker-start > .external-marker-popover { left: 0; }
+.external-marker-end > .external-marker-popover { right: 0; }
 .calendar-grid:has(.external-marker[open]) { overflow: visible; }
 .source-metrics { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; }
