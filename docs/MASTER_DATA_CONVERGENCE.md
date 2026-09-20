@@ -169,4 +169,62 @@ Shared UI cleanup removed the three-dot menu and redundant Settings Roster
 shortcut, retained centralized header controls, added short-lived same-path POST
 scroll restoration, and placed the shared holiday marker before the date in
 Month/List/Crew/fortnight rows (including unworked days). The Builder and
-published Day transplant remain deliberately deferred.
+published Day transplant was deferred to the completed checkpoint below.
+
+## Direct Builder and published Day transplant — 2026-09-20
+
+Starting committed baseline: `657435af3554637f2bcc0218474c3358dea7c6c8`.
+This checkpoint completes the direct, read-only-reference adaptation of the
+Re-Deputy Builder and manual-roster Day interaction language onto On Track's
+authoritative draft/publication model. Re-Deputy was not modified and no
+Re-Deputy dependency, identifier, credential, data, or deployment asset was
+introduced.
+
+Builder now uses the compact Position | Person | More row, integrated
+keyboard/touch search pickers, Relevant/Other crew groups, capability and
+same-date hints, explicit Open and TBC choices, and deliberate resolution of
+Manager-action rows. Advanced controls contain only supported assignment
+timings, note privacy, slot index, and removal; Travel, accommodation, vehicle
+mutation, and arbitrary display-order controls are intentionally absent.
+Save & Preview submits the complete private draft to one service transaction:
+the current Workday row is locked, the exact version and draft are checked,
+every row is validated before mutation, existing slot keys survive edits,
+omitted rows are removed, display snapshots are regenerated server-side, new
+rows are created safely, and the lock version advances once. Existing
+per-assignment endpoints remain compatibility boundaries, not a competing UI.
+
+Preview retains On Track's explicit Edit → Save & Preview → Publish boundary,
+with a compact publication summary and Timing, Crew, Notes, and Changes review.
+Published Day now uses the Re-Deputy-derived page heading, detail card, Race/Trial
+timing rows, compact crew table, description, maths, and change panels. It reads
+only the existing policy-aware employee read models: Contractor own-only,
+Employee/Viewer regional scope, management detail, private-note filtering,
+history filtering, and self-decline rules remain authoritative. The offline
+personal Day fallback uses the same component vocabulary and remains personal
+and read-only.
+
+One provider-neutral source-evidence partial is shared by external-event and
+published-Day pages. Linked Race and Trial days expose canonical facts,
+field provenance, observations, parsed facts, and retrieval timestamps in a
+collapsed section; manual Workdays render no empty source panel. Raw payload
+values and secret-shaped data are not rendered. Live Love Racing, HRNZ, and
+future API adapters remain deliberately outside this checkpoint.
+
+Local qualification evidence:
+
+- Native Windows release gate passed Python compile, Ruff, PostgreSQL-dialect
+  Alembic SQL generation through `7e6a1c2d4f90`, 119 deterministic tests,
+  `pip check`, `pip-audit --local` (no known vulnerabilities), and syntax checks
+  for every JavaScript asset including the new Builder module.
+- 13 PostgreSQL-only tests were skipped because no disposable
+  `ONTRACK_TEST_DATABASE_URL` is configured. No SQLite result is represented as
+  PostgreSQL execution evidence; real migration and concurrency qualification
+  remains required from exact-head CI.
+- Native Playwright passed 16 tests. Builder and Day paths cover 1280, 430, 375,
+  and 320 pixels, Race Night and Daylight, picker keyboard/touch behavior,
+  hints, Manager-action resolution, advanced/add/remove controls, Preview,
+  Race and Trial timing, source evidence, privacy flows, and horizontal
+  overflow. Captures under `test-results/ui-fidelity/` were visually inspected.
+- No schema migration, local Docker execution, deployment, live source adapter,
+  Operations/Travel implementation, or staging-state claim is part of this
+  checkpoint.

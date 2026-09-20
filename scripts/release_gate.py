@@ -22,8 +22,13 @@ def main() -> int:
     python = sys.executable
     run(python, "-m", "compileall", "-q", "app", "migrations", "scripts", "tests")
     run(python, "-m", "ruff", "check", "app", "migrations", "scripts", "tests")
-    run_quiet(python, "-m", "alembic", "upgrade", "head", "--sql")
     postgres_url = os.environ.get("ONTRACK_TEST_DATABASE_URL", "")
+    sql_env = os.environ.copy()
+    sql_env["DATABASE_URL"] = (
+        postgres_url or "postgresql+psycopg://ontrack:ontrack@localhost:5432/ontrack"
+    )
+    sql_env.pop("ONTRACK_DATABASE_URL", None)
+    run_quiet(python, "-m", "alembic", "upgrade", "head", "--sql", env=sql_env)
     if postgres_url:
         migration_env = os.environ.copy()
         migration_env["DATABASE_URL"] = postgres_url
@@ -47,6 +52,7 @@ def main() -> int:
     run("node", "--check", "app/static/passkeys.js")
     run("node", "--check", "app/static/notifications.js")
     run("node", "--check", "app/static/service-worker.js")
+    run("node", "--check", "app/static/builder.js")
     if os.environ.get("ONTRACK_RUN_BROWSER_TESTS") == "1":
         run(python, "-m", "pytest", "tests/browser")
     else:

@@ -27,16 +27,38 @@ from app.positions.service import eligibility, set_signal
 from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
+    DraftAssignmentInput,
     DraftConflict,
+    DraftDetailsInput,
     add_assignment,
     create_workday,
     decline_published_assignment,
     ensure_draft,
     publish,
     remove_assignment,
+    save_draft,
     update_assignment,
     update_draft_details,
 )
+
+
+def draft_details(draft: WorkdayRevision, **changes) -> DraftDetailsInput:  # type: ignore[no-untyped-def]
+    values = {
+        "work_date": draft.work_date,
+        "track_id": draft.track_id,
+        "title": draft.title,
+        "start_time": draft.start_time,
+        "end_time": draft.end_time,
+        "on_track_time": draft.on_track_time,
+        "first_trial_time": draft.first_trial_time,
+        "first_race_time": draft.first_race_time,
+        "last_race_time": draft.last_race_time,
+        "race_count": draft.race_count,
+        "day_note": draft.day_note,
+        "change_reason": draft.change_reason,
+    }
+    values.update(changes)
+    return DraftDetailsInput(**values)
 
 
 def actor(user: User, person: Person | None, region: Region, role: Role) -> Actor:
@@ -424,6 +446,210 @@ def test_stale_shared_draft_mutations_never_overwrite_newer_work(db) -> None:  #
     db.refresh(assignment)
     assert assignment.note == "Manager A assignment"
 
+
+def test_atomic_builder_save_preserves_slot_and_published_snapshot(db) -> None:  # type: ignore[no-untyped-def]
+    region, track, position, person, manager, *_ = seed_vertical(db)
+    replacement = BasePosition(name="Director", crew_group_id=position.crew_group_id)
+    second_person = Person(display_name="Ben Crew", home_region_id=region.id)
+    db.add_all([replacement, second_person])
+    db.commit()
+    workday = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.RACE_DAY.value,
+        work_date=date(2026, 10, 10),
+        track_id=track.id,
+        title="Atomic builder",
+        actor_user_id=manager.id,
+    )
+    first_draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    original = add_current(
+        db,
+        workday,
+        first_draft,
+        AssignmentInput(
+            base_position_id=position.id,
+            slot_index=1,
+            person_id=person.id,
+            status=AssignmentStatus.ASSIGNED.value,
+            note="Published note",
+            note_private=True,
+        ),
+    )
+    original_slot = original.slot_key
+    removed = add_current(
+        db,
+        workday,
+        first_draft,
+        AssignmentInput(
+            base_position_id=position.id,
+            slot_index=2,
+            person_id=second_person.id,
+            status=AssignmentStatus.ASSIGNED.value,
+            note="Removed only from the next draft",
+            note_private=True,
+        ),
+    )
+    removed_slot = removed.slot_key
+    publish_current(db, workday, first_draft, manager.id)
+    published_id = first_draft.id
+    draft = ensure_draft(db, workday, manager.id)
+    current = db.scalar(
+        select(Assignment).where(
+            Assignment.revision_id == draft.id, Assignment.slot_key == original_slot
+        )
+    )
+    version = workday.lock_version
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=draft.id,
+        expected_version=version,
+        details=draft_details(
+            draft,
+            title="Atomic builder updated",
+            start_time=time(7, 30),
+            end_time=time(18, 0),
+            day_note="Private draft note",
+            change_reason="Crew plan changed",
+        ),
+        assignments=[
+            DraftAssignmentInput(
+                assignment_id=current.id,
+                base_position_id=replacement.id,
+                slot_index=2,
+                person_id=person.id,
+                status=AssignmentStatus.ASSIGNED.value,
+                note="Updated private note",
+                note_private=True,
+                start_time=time(8, 0),
+                end_time=time(17, 30),
+            ),
+            DraftAssignmentInput(
+                base_position_id=position.id,
+                slot_index=3,
+                person_id=None,
+                status=AssignmentStatus.OPEN.value,
+                note="Open slot",
+                note_private=False,
+            ),
+        ],
+    )
+    db.refresh(workday)
+    rows = list(db.scalars(select(Assignment).where(Assignment.revision_id == draft.id)))
+    changed = next(row for row in rows if row.person_id == person.id)
+    opened = next(row for row in rows if row.status == AssignmentStatus.OPEN.value)
+    assert workday.lock_version == version + 1
+    assert all(row.slot_key != removed_slot for row in rows)
+    assert changed.slot_key == original_slot
+    assert (changed.base_position_id, changed.slot_index, changed.display_name_snapshot) == (
+        replacement.id,
+        2,
+        "Director 2",
+    )
+    assert (changed.note, changed.note_private, changed.start_time, changed.end_time) == (
+        "Updated private note",
+        True,
+        time(8, 0),
+        time(17, 30),
+    )
+    assert opened.person_id is None and opened.display_name_snapshot == "CCU 3"
+    published = db.scalar(
+        select(Assignment).where(
+            Assignment.revision_id == published_id, Assignment.slot_key == original_slot
+        )
+    )
+    assert (published.base_position_id, published.display_name_snapshot, published.note) == (
+        position.id,
+        "CCU 1",
+        "Published note",
+    )
+    assert db.scalar(
+        select(Assignment).where(
+            Assignment.revision_id == published_id, Assignment.slot_key == removed_slot
+        )
+    )
+    with pytest.raises(DraftConflict):
+        save_draft(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=version,
+            details=draft_details(draft, title="Stale overwrite"),
+            assignments=[],
+        )
+
+
+def test_atomic_builder_rejects_inactive_position_before_mutation(db) -> None:  # type: ignore[no-untyped-def]
+    region, track, position, person, manager, *_ = seed_vertical(db)
+    inactive = BasePosition(name="Archived", crew_group_id=position.crew_group_id, lifecycle="ARCHIVED")
+    db.add(inactive)
+    db.commit()
+    workday = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.RACE_DAY.value,
+        work_date=date(2026, 10, 11),
+        track_id=track.id,
+        title="Validated builder",
+        actor_user_id=manager.id,
+    )
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    assignment = add_current(
+        db,
+        workday,
+        draft,
+        AssignmentInput(
+            base_position_id=position.id,
+            slot_index=1,
+            person_id=None,
+            status=AssignmentStatus.MANAGER_ACTION_REQUIRED.value,
+        ),
+    )
+    version = workday.lock_version
+    with pytest.raises(ValueError, match="active base position"):
+        save_draft(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=version,
+            details=draft_details(draft, title="Must not persist"),
+            assignments=[
+                DraftAssignmentInput(
+                    assignment_id=assignment.id,
+                    base_position_id=inactive.id,
+                    slot_index=1,
+                    person_id=person.id,
+                    status=AssignmentStatus.ASSIGNED.value,
+                )
+            ],
+        )
+    db.rollback()
+    db.refresh(workday)
+    db.refresh(draft)
+    db.refresh(assignment)
+    assert workday.lock_version == version
+    assert draft.title == "Validated builder"
+    assert assignment.status == AssignmentStatus.MANAGER_ACTION_REQUIRED.value
+
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=draft.id,
+        expected_version=version,
+        details=draft_details(draft),
+        assignments=[
+            DraftAssignmentInput(
+                assignment_id=assignment.id,
+                base_position_id=position.id,
+                slot_index=1,
+                person_id=person.id,
+                status=AssignmentStatus.ASSIGNED.value,
+            )
+        ],
+    )
+    db.refresh(assignment)
+    assert assignment.status == AssignmentStatus.ASSIGNED.value
 
 def test_cross_region_uses_person_home_region_not_role_scope(db) -> None:  # type: ignore[no-untyped-def]
     north, central = Region(name="North"), Region(name="Central")

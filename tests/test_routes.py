@@ -25,6 +25,7 @@ from app.core.database import Base
 from app.core.enums import Role
 from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
+from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
 from app.identity.models import (
     Invitation,
     LoginThrottle,
@@ -64,7 +65,7 @@ def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None: 
     }, follow_redirects=False)
     assert created.status_code == 303
     url = created.headers["location"]
-    assert 'name="change_reason"' not in client.get(url).text
+    assert "Reason for change" not in client.get(url).text
     with factory() as db:
         wd = db.get(Workday, uuid.UUID(url.rsplit("/", 1)[1]))
         version = wd.lock_version
@@ -838,6 +839,75 @@ def test_stale_builder_post_returns_409_and_preserves_newer_details(routed_db) -
         assert draft.title == "Manager A"
 
 
+def test_combined_builder_save_updates_rows_once_then_previews(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, position_id, person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "category": "RACE_DAY",
+            "work_date": "2026-10-19",
+            "track_id": str(track_id),
+            "title": "Combined save",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    workday_id = uuid.UUID(created.headers["location"].rsplit("/", 1)[1])
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft_id = workday.current_draft_revision_id
+        version = workday.lock_version
+    data = {
+        "expected_version": str(version),
+        "csrf_token": csrf,
+        "work_date": "2026-10-20",
+        "track_id": str(track_id),
+        "title": "Combined save updated",
+        "start_time": "0730",
+        "end_time": "18:00",
+        "on_track_time": "08:30",
+        "first_trial_time": "09:00",
+        "first_race_time": "10:00",
+        "last_race_time": "17:00",
+        "race_count": "8",
+        "day_note": "Operational note",
+        "assignment_id": "",
+        "base_position_id": str(position_id),
+        "slot_index": "2",
+        "person_id": str(person_id),
+        "status": "ASSIGNED",
+        "note": "Private row note",
+        "note_private": "1",
+        "assignment_start_time": "08:00",
+        "assignment_end_time": "17:30",
+    }
+    saved = manager.post(
+        f"/manage/workdays/{workday_id}/draft", data=data, follow_redirects=False
+    )
+    assert saved.status_code == 303
+    assert saved.headers["location"] == f"/manage/workdays/{workday_id}/preview"
+    preview = manager.get(saved.headers["location"])
+    assert "Publication preview" in preview.text
+    assert "Combined save updated" in preview.text
+    assert "CCU 2" in preview.text and "Amy Crew" in preview.text
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        row = db.scalar(select(Assignment).where(Assignment.revision_id == draft_id))
+        assert workday.lock_version == version + 1
+        assert (row.display_name_snapshot, row.person_id, row.note_private) == (
+            "CCU 2",
+            person_id,
+            True,
+        )
+    stale = manager.post(
+        f"/manage/workdays/{workday_id}/draft", data=data, follow_redirects=False
+    )
+    assert stale.status_code == 409
+
+
 def test_office_day_builder_uses_category_appropriate_fields_and_warnings(routed_db) -> None:  # type: ignore[no-untyped-def]
     _factory, (region_id, _track_id, _position_id, _person_id) = routed_db
     manager = TestClient(app)
@@ -856,7 +926,7 @@ def test_office_day_builder_uses_category_appropriate_fields_and_warnings(routed
     )
     edit_url = created.headers["location"]
     builder = manager.get(edit_url)
-    assert "Office Day details" in builder.text
+    assert "Office planning" in builder.text
     assert "First race" not in builder.text and "Race count" not in builder.text
     preview = manager.get(edit_url + "/preview")
     assert "Race Day timing is incomplete" not in preview.text
@@ -900,10 +970,10 @@ def test_builder_groups_relevant_crew_before_other_active_people(routed_db) -> N
     )
     assert added.status_code == 303
     html = manager.get(edit_url).text
-    assert '<optgroup label="Relevant crew">' in html
-    assert '<optgroup label="Other active crew">' in html
-    assert html.index('<optgroup label="Relevant crew">') < html.index("Amy Crew")
-    assert html.index("Amy Crew") < html.index('<optgroup label="Other active crew">')
+    assert '<div class="search-picker-group"><span>Relevant crew</span>' in html
+    assert '<div class="search-picker-group"><span>Other crew</span>' in html
+    assert html.index("Relevant crew") < html.index("Amy Crew")
+    assert html.index("Amy Crew") < html.index("Other crew")
     assert "No position history recorded" in html
     assert "Move up" not in html and "Move down" not in html
 
@@ -1011,6 +1081,67 @@ def test_contractor_online_and_offline_day_rows_are_personal(routed_db) -> None:
     manager_api = manager.get(f"/api/day/{workday_id}").json()
     assert manager_api["offline_cacheable"] is False
     assert manager_api["workday"]["assignments"] == []
+
+
+def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, position_id, person_id) = routed_db
+    manual_workday_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 10, 24),
+        rows=[(person_id, "Amy Crew", "", True)],
+    )
+    workday_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 10, 25),
+        rows=[(person_id, "Amy Crew", "", True)],
+    )
+    with factory() as db:
+        event_row = ExternalCalendarEvent(
+            event_date=date(2026, 10, 25),
+            track_id=track_id,
+            external_track_name="Ellerslie",
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            status="SCHEDULED",
+            first_race_time=time(12, 30),
+            race_count=8,
+            field_provenance={"first_race_time": ["LOVE_RACING"]},
+            presentation_provider="LOVE_RACING",
+        )
+        db.add(event_row)
+        db.flush()
+        db.add(
+            ExternalEventObservation(
+                event_id=event_row.id,
+                provider="LOVE_RACING",
+                provider_event_id="safe-source-1",
+                payload_hash="safe-source-hash",
+                source_track_name="Ellerslie",
+                parsed_facts={"first_race_time": "12:30", "race_count": 8},
+                raw_payload={"access_token": "SECRET-SENTINEL", "meeting": "Ellerslie"},
+                mapping_state="MAPPED",
+                reconciliation_state="MATCHED",
+            )
+        )
+        db.get(Workday, workday_id).external_event_id = event_row.id
+        db.commit()
+        event_id = event_row.id
+
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    day = employee.get(f"/day/{workday_id}")
+    external = employee.get(f"/external-events/{event_id}")
+    for response in (day, external):
+        assert response.status_code == 200
+        assert "Raw Race Day Data" in response.text
+        assert "Canonical facts" in response.text
+        assert "Love Racing" in response.text
+        assert "SECRET-SENTINEL" not in response.text
+    assert "Raw Race Day Data" not in employee.get(f"/day/{manual_workday_id}").text
 
 
 def test_upcoming_feed_is_today_when_rostered_plus_three_across_months(

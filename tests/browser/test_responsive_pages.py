@@ -173,6 +173,12 @@ def browser_site():  # type: ignore[no-untyped-def]
                 base_position_id=position.id,
                 display_name_snapshot="Reserve camera",
                 status="TBC",
+            ),
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position.id,
+                display_name_snapshot="Declined camera",
+                status="MANAGER_ACTION_REQUIRED",
             )]
         )
         workday.current_published_revision_id = revision.id
@@ -319,6 +325,68 @@ def browser_site():  # type: ignore[no-untyped-def]
         )
         db.add(external_event)
         db.flush()
+        linked_race_event = ExternalCalendarEvent(
+            event_date=date.today(),
+            track_id=track.id,
+            external_track_name=track.name,
+            discipline="HARNESS",
+            event_kind="RACE",
+            first_race_time=clock_time(11),
+            race_count=10,
+            presentation_provider="API",
+            field_provenance={"first_race_time": ["API"]},
+        )
+        db.add(linked_race_event)
+        db.flush()
+        workday.external_event_id = linked_race_event.id
+        trial_event = ExternalCalendarEvent(
+            event_date=date.today() + timedelta(days=1),
+            track_id=track.id,
+            external_track_name=track.name,
+            discipline="THOROUGHBRED",
+            event_kind="TRIAL",
+            first_trial_time=clock_time(10),
+            presentation_provider="LOVE_RACING",
+            field_provenance={"first_trial_time": ["LOVE_RACING"]},
+        )
+        db.add(trial_event)
+        db.flush()
+        trial_workday = Workday(
+            region_id=region.id,
+            category="TRIALS",
+            created_by_user_id=manager.id,
+            external_event_id=trial_event.id,
+        )
+        db.add(trial_workday)
+        db.flush()
+        trial_revision = WorkdayRevision(
+            workday_id=trial_workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=trial_event.event_date,
+            track_id=track.id,
+            track_name_snapshot=track.name,
+            title="Browser trial day",
+            start_time=clock_time(8),
+            on_track_time=clock_time(9),
+            first_trial_time=clock_time(10),
+            end_time=clock_time(14),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add(trial_revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=trial_revision.id,
+                base_position_id=position.id,
+                display_name_snapshot=position.name,
+                person_id=person.id,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        trial_workday.current_published_revision_id = trial_revision.id
         db.add_all(
             [
                 ExternalEventObservation(
@@ -345,6 +413,28 @@ def browser_site():  # type: ignore[no-untyped-def]
                     mapping_state="MAPPED",
                     reconciliation_state="CONFLICT",
                 ),
+                ExternalEventObservation(
+                    event_id=linked_race_event.id,
+                    provider="API",
+                    provider_event_id=f"linked-race-{suffix}",
+                    source_track_name=track.name,
+                    payload_hash=uuid.uuid4().hex,
+                    parsed_facts={"first_race_time": "11:00", "race_count": 10},
+                    raw_payload={"first_race_time": "11:00", "race_count": 10},
+                    mapping_state="MAPPED",
+                    reconciliation_state="MATCHED",
+                ),
+                ExternalEventObservation(
+                    event_id=trial_event.id,
+                    provider="LOVE_RACING",
+                    provider_event_id=f"trial-{suffix}",
+                    source_track_name=track.name,
+                    payload_hash=uuid.uuid4().hex,
+                    parsed_facts={"first_trial_time": "10:00"},
+                    raw_payload={"first_trial_time": "10:00"},
+                    mapping_state="MAPPED",
+                    reconciliation_state="MATCHED",
+                ),
             ]
         )
         db.commit()
@@ -362,6 +452,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             "active_notice_text": active_notice_text,
             "expired_notice_text": expired_notice_text,
             "external_event_id": str(external_event.id),
+            "trial_workday_id": str(trial_workday.id),
         }
 
     with socket.socket() as probe:
@@ -422,6 +513,7 @@ def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> No
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"region-track-filter-{width}.png")
     page.goto(base_url + f'/manage/workdays/{values["workday_id"]}')
+    page.locator(".builder-inline-advanced > summary").click()
     start = page.locator('input[name="start_time"]')
     assert start.get_attribute("type") == "text"
     assert start.get_attribute("inputmode") == "numeric"
@@ -658,7 +750,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         if width <= 760:
             assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + f"/day/{values['workday_id']}")
-    assert page.locator(".hero-card").evaluate(
+    assert page.locator(".published-roster-card").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
     )
     page.goto(base_url + "/month")
@@ -823,6 +915,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page = context.new_page()
     errors = _watch_browser_errors(page)
     _login(page, base_url, values["manager"])
+    manager_theme = "daylight" if width == 375 else "race-night"
+    _select_theme(page, base_url, manager_theme)
+    assert page.locator("html").get_attribute("data-theme") == manager_theme
     for path in (
         "/month",
         "/crew",
@@ -846,24 +941,86 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.locator(".available-shift-dot", has_text="Open").count() == 1
     _capture_page(page, f"month-{width}.png")
     if width == 1280:
-        _select_theme(page, base_url, "race-night")
         page.goto(base_url + "/month")
         _capture_page(page, "month-race-night-1280.png")
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
-    if width in {1280, 320}:
-        _capture_page(page, f"builder-{width}.png")
-    if width == 320:
-        assert page.locator("main .panel").first.is_visible()
-        preview = page.locator('a.button[href$="/preview"]')
-        assert preview.is_visible()
-        editor = page.locator("details.assignment-editor").first
-        editor.locator("summary").click()
-        assert editor.locator('select[name="person_id"]').is_visible()
-        assert editor.get_by_role("button", name="Update slot").is_visible()
-        _assert_no_horizontal_overflow(page)
-    page.locator("[data-crew-search]").fill("Browser Crew")
-    assert page.locator("[data-crew-picker] option", has_text="Browser Crew Member").count() >= 1
+    _capture_page(page, f"builder-{width}.png")
+    assert page.locator('script[src*="/static/builder.js?v="]').count() == 1
+    assert page.get_by_role("button", name="Save & Preview").is_visible()
+    rows = page.locator("[data-assignment-row]")
+    assert rows.count() >= 5
+    manager_action = rows.filter(
+        has=page.locator('[data-assignment-state][value="MANAGER_ACTION_REQUIRED"]')
+    ).first
+    assert manager_action.count() == 1
+    manager_action_index = manager_action.evaluate(
+        "element => [...element.parentElement.children].indexOf(element)"
+    )
+    manager_action = rows.nth(manager_action_index)
+    assert "Needs Manager action" in manager_action.locator(
+        '[data-picker-kind="person"] [data-picker-input]'
+    ).input_value()
+    person_input = rows.first.locator('[data-picker-kind="person"] [data-picker-input]')
+    person_input.click()
+    person_input.fill("")
+    person_picker = rows.first.locator('[data-picker-kind="person"]')
+    assert person_picker.get_by_text("Open position", exact=True).is_visible()
+    assert person_picker.get_by_text("TBC / not offered", exact=True).is_visible()
+    assert person_picker.get_by_text("Relevant crew", exact=True).is_visible()
+    assert person_picker.get_by_text("Other crew", exact=True).is_visible()
+    assert person_picker.get_by_text(
+        "No position history recorded; also rostered this date", exact=True
+    ).is_visible()
+    person_input.fill("Browser Crew")
+    assert person_picker.get_by_text("Browser Crew Member", exact=True).is_visible()
+    page.keyboard.press("Escape")
+    manager_person_input = manager_action.locator(
+        '[data-picker-kind="person"] [data-picker-input]'
+    )
+    manager_person_input.click()
+    manager_person_input.fill("TBC / not offered")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    assert manager_action.locator("[data-assignment-state]").input_value() == "TBC"
+    position_input = rows.first.locator('[data-picker-kind="position"] [data-picker-input]')
+    position_input.click()
+    position_input.fill("Browser Position")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    rows.first.locator("[data-toggle-advanced]").click()
+    assert rows.first.locator('[name="assignment_start_time"]').is_visible()
+    assert rows.first.locator("[data-private-check]").is_visible()
+    before_add = rows.count()
+    page.get_by_role("button", name="Add position").click()
+    assert rows.count() == before_add + 1
+    rows.last.locator("[data-toggle-advanced]").click()
+    rows.last.locator("[data-remove-row]").click()
+    assert rows.count() == before_add
+    _assert_no_horizontal_overflow(page)
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}/preview")
+    assert page.get_by_text("Publication preview", exact=True).is_visible()
+    assert page.get_by_text("TBC / action", exact=True).is_visible()
+    _capture_page(page, f"preview-{width}.png")
+    page.goto(base_url + f"/day/{values['workday_id']}")
+    assert page.locator(".detail-card.published-roster-card").is_visible()
+    assert page.locator(".crew-roster-head").is_visible()
+    assert page.locator(".hero-card").count() == 0
+    assert page.locator(".timing-strip").count() == 0
+    evidence = page.get_by_text("Raw Race Day Data", exact=False)
+    assert evidence.is_visible()
+    evidence.click()
+    assert page.get_by_text("Canonical facts", exact=True).is_visible()
+    _capture_page(page, f"published-day-{width}.png")
+    _assert_no_horizontal_overflow(page)
+    page.goto(base_url + f"/day/{values['trial_workday_id']}")
+    assert page.get_by_text("Trial Day", exact=True).is_visible()
+    assert page.get_by_text("First trial", exact=True).is_visible()
+    assert page.get_by_text("First race", exact=True).count() == 0
+    assert page.get_by_text("Raw Trial Day Data", exact=False).is_visible()
+    _capture_page(page, f"published-trial-day-{width}.png")
+    _assert_no_horizontal_overflow(page)
     if width > 760:
+        page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
         for selector in ('input[name="title"]', 'textarea[name="day_note"]', 'select[name="track_id"]'):
             page.locator(selector).focus()
             guarded_url = page.url
