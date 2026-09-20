@@ -617,4 +617,5 @@ html[data-theme="studio"] {
 .external-marker[open] > a { display: grid; }
 .external-marker-start > a { left: 0; }
 .external-marker-end > a { right: 0; }
+.calendar-grid:has(.external-marker[open]) { overflow: visible; }
 .source-metrics { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; }
