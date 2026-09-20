@@ -228,3 +228,16 @@ Local qualification evidence:
 - No schema migration, local Docker execution, deployment, live source adapter,
   Operations/Travel implementation, or staging-state claim is part of this
   checkpoint.
+# Public racing calendar refresh
+
+Admins enable and refresh Love Racing or HRNZ in **Administration → Online Sources**. Unknown provider venue names remain unmatched observations. On Track offers cautious, display-only Track suggestions; an Admin must confirm every authoritative `ExternalTrackMapping`. Confirming a mapping replays pending observations through the canonical event model and never creates a Track.
+
+The same refresh can be invoked for deployment scheduling without embedding a scheduler in the web process:
+
+```text
+python -m app.external_calendar.refresh LOVE_RACING
+python -m app.external_calendar.refresh HRNZ
+python -m app.external_calendar.refresh ALL
+```
+
+Providers must be enabled first. `OK`, `PARTIAL`, and `ERROR` reflect real component outcomes. Manual rostering remains available in every state. See `docs/RACING_SOURCE_DISCOVERY.md` for live-source limitations.

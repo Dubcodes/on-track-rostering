@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, time
+from datetime import date, time, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -18,7 +18,7 @@ from app.core.enums import (
     WorkdayCategory,
 )
 from app.core.holidays import holiday_for_date
-from app.core.time import worked_minutes
+from app.core.time import local_today, worked_minutes
 from app.employee.read_models import day_assignments, month_items
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.notifications.models import NotificationEvent
@@ -284,7 +284,7 @@ def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-
         db,
         region_id=region.id,
         category=WorkdayCategory.RACE_DAY.value,
-        work_date=date(2026, 9, 20),
+        work_date=local_today() + timedelta(days=7),
         track_id=track.id,
         title="Open roster",
         actor_user_id=manager.id,

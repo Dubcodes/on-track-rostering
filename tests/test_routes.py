@@ -26,6 +26,7 @@ from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
+from app.external_calendar.refresh import RefreshResult
 from app.identity.models import (
     Invitation,
     LoginThrottle,
@@ -1260,6 +1261,51 @@ def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> 
     manual_day = employee.get(f"/day/{manual_workday_id}")
     assert "Raw Race Day Data" not in manual_day.text
     assert "Saturday 24 October 2026" in manual_day.text
+
+
+def test_online_source_controls_are_admin_only_and_render_refresh_feedback(
+    routed_db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    assert manager.get("/admin/online-sources").status_code == 403
+    assert manager.post(
+        "/admin/online-sources/LOVE_RACING/toggle",
+        data={"csrf_token": manager_csrf},
+    ).status_code == 403
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    enabled = admin.post(
+        "/admin/online-sources/LOVE_RACING/toggle",
+        data={"csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert enabled.status_code == 303
+
+    def fixture_refresh(_db, provider, *, actor_user_id):  # type: ignore[no-untyped-def]
+        assert actor_user_id is not None
+        return RefreshResult(
+            provider,
+            "PARTIAL",
+            observations=5,
+            created=2,
+            matched=1,
+            enriched=1,
+            unresolved=1,
+            warnings=["One venue needs mapping."],
+            components={"calendar": "OK", "trials": "PARTIAL"},
+        )
+
+    monkeypatch.setattr("app.external_calendar.routes.refresh_provider", fixture_refresh)
+    refreshed = admin.post(
+        "/admin/online-sources/LOVE_RACING/refresh",
+        data={"csrf_token": admin_csrf},
+    )
+    assert refreshed.status_code == 200
+    assert "Love Racing partial" in refreshed.text
+    assert "5 observations" in refreshed.text
+    assert "One venue needs mapping." in refreshed.text
 
 
 def test_upcoming_feed_is_today_when_rostered_plus_three_across_months(

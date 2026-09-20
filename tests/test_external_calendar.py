@@ -5,13 +5,16 @@ from sqlalchemy import func, select
 
 from app.auth.policy import Actor
 from app.catalog.models import CrewGroup, Region, Track
+from app.external_calendar.adapters import NormalizedProviderResult
 from app.external_calendar.importer import apply_bundle, parse_bundle, preview_bundle
 from app.external_calendar.models import (
     CalendarDisplayPreference,
     ExternalCalendarEvent,
     ExternalEventObservation,
+    ExternalProviderState,
 )
 from app.external_calendar.read_models import external_calendar_items
+from app.external_calendar.refresh import refresh_provider
 from app.external_calendar.service import (
     ProviderObservation,
     adopt_external_event,
@@ -81,6 +84,18 @@ def test_conflict_and_unresolved_track_require_review(db):  # type: ignore[no-un
     assert unresolved is None and state == "CREATED"
     row = db.scalar(select(ExternalEventObservation).where(ExternalEventObservation.provider == "HRNZ"))
     assert row.mapping_state == "UNMATCHED" and row.reconciliation_state == "REVIEW"
+
+
+def test_stable_provider_identity_date_change_is_review_evidence_not_a_move(db):  # type: ignore[no-untyped-def]
+    foundation(db)
+    event, _state = reconcile_observation(db, observation("LOVE_RACING", "Te Rapa"))
+    changed = observation("LOVE_RACING", "Te Rapa")
+    changed = ProviderObservation(
+        **{**changed.__dict__, "event_date": date(2026, 9, 21), "raw_payload": {"date": "2026-09-21"}}
+    )
+    same, state = reconcile_observation(db, changed)
+    assert same.id == event.id and state == "CONFLICT"
+    assert same.event_date == date(2026, 9, 20)
 
 
 def test_import_preview_is_read_only_idempotent_and_allocates_palette(db):  # type: ignore[no-untyped-def]
@@ -220,3 +235,85 @@ def test_typed_import_rejects_malformed_and_literal_colour() -> None:
         parse_bundle('{"tracks":[{"name":"Te Rapa","region":"Northern","colour":"#fff"}]}')
     with pytest.raises(ValueError, match="forbidden field"):
         parse_bundle('{"people":[],"accessToken":"nope"}')
+
+
+class FixtureAdapter:
+    provider = "LOVE_RACING"
+
+    def __init__(self, observations=None, *, warnings=None, failure: Exception | None = None):
+        self.observations = observations or []
+        self.warnings = warnings or []
+        self.failure = failure
+        self.fetches = 0
+
+    def fetch(self, start, end):  # type: ignore[no-untyped-def]
+        self.fetches += 1
+        if self.failure:
+            raise self.failure
+        return {"fixture": True}
+
+    def normalize(self, payload, start, end):  # type: ignore[no-untyped-def]
+        return NormalizedProviderResult(
+            self.observations,
+            self.warnings,
+            {"calendar": "PARTIAL" if self.warnings else "OK"},
+        )
+
+
+def test_refresh_is_idempotent_and_records_provider_metrics(db):  # type: ignore[no-untyped-def]
+    user, _region, _track = foundation(db)
+    state = ExternalProviderState(provider="LOVE_RACING", enabled=True, status="READY")
+    db.add(state)
+    db.commit()
+    adapter = FixtureAdapter([observation("LOVE_RACING", "Te Rapa")])
+    first = refresh_provider(db, "LOVE_RACING", actor_user_id=user.id, adapter=adapter)
+    assert first.status == "OK" and first.created == 1
+    second = refresh_provider(db, "LOVE_RACING", actor_user_id=user.id, adapter=adapter)
+    assert second.status == "OK" and second.duplicates == 1
+    assert db.scalar(select(func.count()).select_from(ExternalCalendarEvent)) == 1
+    state = db.get(ExternalProviderState, "LOVE_RACING")
+    assert state.last_success_at is not None and state.observations_found == 1
+
+
+def test_partial_refresh_keeps_valid_observations_and_fetch_failure_keeps_good_data(db):  # type: ignore[no-untyped-def]
+    user, _region, _track = foundation(db)
+    db.add(ExternalProviderState(provider="LOVE_RACING", enabled=True, status="READY"))
+    db.commit()
+    partial = refresh_provider(
+        db,
+        "LOVE_RACING",
+        actor_user_id=user.id,
+        adapter=FixtureAdapter([observation("LOVE_RACING", "Te Rapa")], warnings=["one bad row"]),
+    )
+    assert partial.status == "PARTIAL" and partial.created == 1
+    failed = refresh_provider(
+        db,
+        "LOVE_RACING",
+        actor_user_id=user.id,
+        adapter=FixtureAdapter(failure=RuntimeError("upstream unavailable")),
+    )
+    assert failed.status == "ERROR"
+    assert db.scalar(select(func.count()).select_from(ExternalCalendarEvent)) == 1
+    assert db.get(ExternalProviderState, "LOVE_RACING").status == "ERROR"
+
+
+def test_disabled_provider_does_not_fetch(db):  # type: ignore[no-untyped-def]
+    db.add(ExternalProviderState(provider="LOVE_RACING", enabled=False, status="DISABLED"))
+    db.commit()
+    adapter = FixtureAdapter()
+    result = refresh_provider(db, "LOVE_RACING", adapter=adapter)
+    assert result.status == "DISABLED"
+    assert adapter.fetches == 0
+
+
+def test_unmapped_refresh_counts_unresolved_not_created_events(db):  # type: ignore[no-untyped-def]
+    db.add(ExternalProviderState(provider="LOVE_RACING", enabled=True, status="READY"))
+    db.commit()
+    result = refresh_provider(
+        db,
+        "LOVE_RACING",
+        adapter=FixtureAdapter([observation("LOVE_RACING", "Unknown Venue")]),
+    )
+    assert result.status == "PARTIAL"
+    assert result.unresolved == 1 and result.created == 0
+    assert db.scalar(select(func.count()).select_from(ExternalCalendarEvent)) == 0

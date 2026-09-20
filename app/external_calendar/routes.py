@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.policy import (
     can_manage_region,
@@ -22,13 +23,14 @@ from app.external_calendar.importer import apply_bundle, parse_bundle, preview_b
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
-    ExternalProviderState,
 )
+from app.external_calendar.refresh import ensure_provider_states, refresh_provider
 from app.external_calendar.service import (
     adopt_external_event,
     confirm_track_mapping,
     event_evidence,
     normalized_key,
+    suggested_track,
 )
 from app.rostering.models import Workday
 from app.web import context, templates
@@ -105,7 +107,11 @@ def import_apply(
 @router.get("/admin/online-sources", response_class=HTMLResponse)
 def sources_page(request: Request, db: Session = Depends(get_db)):
     require_admin(request.state.actor)
-    states = {row.provider: row for row in db.scalars(select(ExternalProviderState))}
+    return _sources_response(request, db)
+
+
+def _sources_response(request: Request, db: Session, *, refresh_result=None):
+    states = ensure_provider_states(db)
     unmatched = list(
         db.scalars(
             select(ExternalEventObservation)
@@ -126,6 +132,18 @@ def sources_page(request: Request, db: Session = Depends(get_db)):
         for row in conflict_observations
     ]
     tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE").order_by(Track.name)))
+    suggestions = {
+        str(row.id): suggested_track(db, row.source_track_name)
+        for row in unmatched
+    }
+    recent_refreshes = list(
+        db.scalars(
+            select(AuditEvent)
+            .where(AuditEvent.action.in_(("external_provider.refreshed", "external_provider.refresh_failed")))
+            .order_by(AuditEvent.occurred_at.desc())
+            .limit(5)
+        )
+    )
     return templates.TemplateResponse(
         "online_sources.html",
         context(
@@ -135,8 +153,57 @@ def sources_page(request: Request, db: Session = Depends(get_db)):
             unmatched=unmatched,
             conflicts=conflicts,
             tracks=tracks,
+            suggestions=suggestions,
+            recent_refreshes=recent_refreshes,
+            refresh_result=refresh_result,
         ),
     )
+
+
+@router.post("/admin/online-sources/{provider}/toggle", response_class=HTMLResponse)
+def toggle_provider(
+    provider: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    provider = provider.upper()
+    if provider not in {"LOVE_RACING", "HRNZ"}:
+        raise HTTPException(404, "Provider is not configurable.")
+    state = ensure_provider_states(db)[provider]
+    state.enabled = not state.enabled
+    state.status = "READY" if state.enabled else "DISABLED"
+    record_audit(
+        db,
+        "external_provider.toggled",
+        "external_provider",
+        provider,
+        request.state.user.id,
+        detail={"enabled": state.enabled},
+    )
+    db.commit()
+    return RedirectResponse("/admin/online-sources", status_code=303)
+
+
+@router.post("/admin/online-sources/{provider}/refresh", response_class=HTMLResponse)
+def refresh_source(
+    provider: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    provider = provider.upper()
+    if provider not in {"LOVE_RACING", "HRNZ"}:
+        raise HTTPException(404, "Provider is not configured.")
+    try:
+        result = refresh_provider(db, provider, actor_user_id=request.state.user.id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _sources_response(request, db, refresh_result=result)
 
 
 @router.post("/admin/online-sources/map")

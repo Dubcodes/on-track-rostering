@@ -21,7 +21,11 @@ from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base, SessionLocal, engine
 from app.core.enums import CapabilitySignal, Role
 from app.core.time import utcnow
-from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
+from app.external_calendar.models import (
+    ExternalCalendarEvent,
+    ExternalEventObservation,
+    ExternalProviderState,
+)
 from app.identity.models import Person, RoleGrant, TrustedDevice, User, UserPersonLink
 from app.notices.models import OperationalNotice
 from app.notifications.models import NotificationPreference
@@ -405,9 +409,9 @@ def browser_site():  # type: ignore[no-untyped-def]
         trial_workday.current_published_revision_id = trial_revision.id
         db.add_all(
             [
-                ExternalEventObservation(
-                    provider="HRNZ",
-                    source_track_name="Unmatched Browser Track",
+                    ExternalEventObservation(
+                        provider="HRNZ",
+                        source_track_name="Unmatched Browser Track",
                     payload_hash=uuid.uuid4().hex,
                     parsed_facts={
                         "event_date": date.today().isoformat(),
@@ -416,8 +420,21 @@ def browser_site():  # type: ignore[no-untyped-def]
                     },
                     raw_payload={"meeting": "Unmatched Browser Track"},
                     mapping_state="UNMATCHED",
-                    reconciliation_state="REVIEW",
-                ),
+                        reconciliation_state="REVIEW",
+                    ),
+                    ExternalEventObservation(
+                        provider="HRNZ",
+                        source_track_name=track.name,
+                        payload_hash=uuid.uuid4().hex,
+                        parsed_facts={
+                            "event_date": (date.today() + timedelta(days=2)).isoformat(),
+                            "discipline": "HARNESS",
+                            "event_kind": "TRIAL",
+                        },
+                        raw_payload={"meeting": track.name},
+                        mapping_state="UNMATCHED",
+                        reconciliation_state="REVIEW",
+                    ),
                 ExternalEventObservation(
                     event_id=external_event.id,
                     provider="API",
@@ -453,6 +470,20 @@ def browser_site():  # type: ignore[no-untyped-def]
                 ),
             ]
         )
+        for provider, status, observations, created, enriched, warnings in (
+            ("LOVE_RACING", "OK", 42, 4, 3, 0),
+            ("HRNZ", "PARTIAL", 18, 2, 1, 1),
+        ):
+            provider_state = db.get(ExternalProviderState, provider)
+            if provider_state is None:
+                provider_state = ExternalProviderState(provider=provider)
+                db.add(provider_state)
+            provider_state.enabled = True
+            provider_state.status = status
+            provider_state.observations_found = observations
+            provider_state.events_created = created
+            provider_state.events_enriched = enriched
+            provider_state.warning_count = warnings
         db.commit()
         values = {
             "manager": (manager.email, "123456"),
@@ -464,6 +495,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             "region_id": str(region.id),
             "cross_region_id": str(cross_region.id),
             "track_id": str(track.id),
+            "track_name": track.name,
             "cross_track_id": str(cross_track.id),
             "active_notice_text": active_notice_text,
             "expired_notice_text": expired_notice_text,
@@ -590,6 +622,19 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     page.goto(base_url + "/admin/online-sources")
     assert page.get_by_text("Unmatched Browser Track").count() >= 1
     assert page.get_by_text("Conflicting observations").count() == 1
+    assert page.get_by_role("button", name="Refresh now").count() == 2
+    assert page.get_by_text("PARTIAL", exact=True).count() == 1
+    suggested = page.locator(
+        f'form:has(input[name="external_track_name"][value="{values["track_name"]}"])'
+    )
+    assert suggested.get_by_text(f"Suggested: {values['track_name']}", exact=False).count() == 1
+    if width == 320:
+        suggested.locator('select[name="track_id"]').select_option(values["track_id"])
+        suggested.get_by_role("button", name="Confirm mapping").click()
+        page.wait_for_url("**/admin/online-sources?mapped=1")
+        assert page.locator(
+            f'form:has(input[name="external_track_name"][value="{values["track_name"]}"])'
+        ).count() == 0
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"online-sources-{width}.png")
 

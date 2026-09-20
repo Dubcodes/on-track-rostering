@@ -5,6 +5,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
+from difflib import SequenceMatcher
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,6 +37,23 @@ class ProviderObservation:
 
 def normalized_key(value: str) -> str:
     return " ".join(value.strip().casefold().split())
+
+
+def suggested_track(db: Session, source_name: str) -> Track | None:
+    """Return a display-only suggestion; it never creates an authoritative mapping."""
+    source = normalized_key(source_name)
+    tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE")))
+    exact = [track for track in tracks if normalized_key(track.name) == source]
+    if len(exact) == 1:
+        return exact[0]
+    ranked = sorted(
+        ((SequenceMatcher(None, source, normalized_key(track.name)).ratio(), track) for track in tracks),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    if len(ranked) == 1 or (ranked and ranked[0][0] >= 0.90 and ranked[0][0] - ranked[1][0] >= 0.08):
+        return ranked[0][1]
+    return None
 
 
 def _payload_hash(observation: ProviderObservation) -> str:
@@ -71,6 +89,7 @@ def reconcile_observation(
         return db.get(ExternalCalendarEvent, existing_observation.event_id), "DUPLICATE"
     track = mapped_track(db, provider, value.source_track_name)
     event = None
+    identity_conflict = False
     if value.provider_event_id:
         event = db.scalar(
             select(ExternalCalendarEvent)
@@ -90,6 +109,12 @@ def reconcile_observation(
                 ExternalCalendarEvent.event_kind == value.event_kind,
             )
         )
+    elif event is not None and (
+        event.event_date != value.event_date or (track is not None and event.track_id != track.id)
+    ):
+        # Stable provider identity proves continuity, but date/Track changes remain
+        # review evidence and never move an operational Workday silently.
+        identity_conflict = True
     state = "CREATED"
     if event is None and track:
         event = ExternalCalendarEvent(
@@ -126,7 +151,7 @@ def reconcile_observation(
     if event:
         provenance = {key: list(sources) for key, sources in (event.field_provenance or {}).items()}
         enriched = False
-        conflict = False
+        conflict = identity_conflict
         for field in CANONICAL_FIELDS:
             raw = value.facts.get(field)
             incoming = parse_time(str(raw)) if raw and field.endswith("_time") else raw

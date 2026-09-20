@@ -56,3 +56,8 @@ Global operational policy is kept separate from branding in the persisted single
 ## Delivery worker
 
 Authoritative transactions add deterministic `NotificationEvent` keys but never call a push provider. `python -m app.cli deliver-notifications` generates deterministic two-day, night-before, and one-hour events from current published person/day starts, then claims due rows with PostgreSQL `FOR UPDATE SKIP LOCKED`. Five-minute leases recover abandoned claims. Publication audience is the union of prior and new assignees. A unique event/subscription delivery row makes completed delivery idempotent. HTTP 404/410 deactivates an endpoint; transient failures back off and stop at the configured attempt limit.
+# Live racing source boundary
+
+Provider adapters under `app/external_calendar/providers/` fetch and normalize public planning evidence without database access. `app.external_calendar.refresh.refresh_provider()` is the single orchestration path for Admin and CLI refreshes. It updates `ExternalProviderState`, calls the existing field-aware reconciler, and records a redacted audit summary. A provider component may be partial; a fatal refresh never deletes previous canonical data.
+
+The shared HTTP boundary has fixed provider URLs, bounded time/response size, and no startup fetch. Provider-specific names and parsing do not leak into Month, Day, or Workday templates.
