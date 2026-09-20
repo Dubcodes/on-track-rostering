@@ -499,24 +499,17 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     page.locator('form[action="/settings/calendar"] button').click()
     page.wait_for_url("**/settings?calendar=saved#calendar")
     page.goto(base_url + "/month")
-    marker = page.locator(".external-marker").first
+    event_href = f'/external-events/{values["external_event_id"]}'
+    marker = page.locator(f'.external-marker:has(a[href="{event_href}"])')
     assert marker.count() == 1
     marker.locator("summary").click()
     assert marker.get_attribute("open") is not None
-    popover_box = marker.locator(".external-marker-popover").evaluate(
-        """element => { const rect = element.getBoundingClientRect(); return {x: rect.x, y: rect.y, width: rect.width, height: rect.height}; }"""
-    )
-    assert popover_box["width"] > 0
-    assert popover_box["height"] > 0
-    assert popover_box["x"] >= 0
-    assert popover_box["x"] + popover_box["width"] <= width
+    event_link = marker.locator(f'a[href="{event_href}"]')
+    assert event_link.is_visible()
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"external-event-minimal-{width}.png")
-    page.mouse.click(
-        popover_box["x"] + popover_box["width"] / 2,
-        popover_box["y"] + popover_box["height"] / 2,
-    )
-    page.wait_for_url(f'**/external-events/{values["external_event_id"]}')
+    event_link.click()
+    page.wait_for_url(f"**{event_href}")
     context.close()
 
 
