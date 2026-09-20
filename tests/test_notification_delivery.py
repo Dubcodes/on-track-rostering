@@ -8,11 +8,13 @@ from zoneinfo import ZoneInfo
 from pywebpush import WebPushException
 from sqlalchemy import select
 
+from app.auth.policy import Actor
 from app.auth.security import hash_credential
 from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, Region
 from app.core.enums import CapabilitySignal, Role
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
+from app.notices.service import relevant_notice_region_ids
 from app.notifications.models import (
     NotificationDelivery,
     NotificationEvent,
@@ -52,6 +54,152 @@ def _subscription(db, user: User) -> PushSubscription:  # type: ignore[no-untype
         },
         label="Test browser",
     )
+
+
+def test_manager_action_respects_notification_preferences(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Manager alert region")
+    user = User(
+        email="manager-alert@example.test",
+        display_name="Manager alert",
+        credential_hash=hash_credential("123456"),
+    )
+    db.add_all([region, user])
+    db.flush()
+    db.add_all(
+        [
+            RoleGrant(user_id=user.id, role=Role.MANAGER.value, region_id=region.id),
+            NotificationPreference(
+                user_id=user.id,
+                notifications_enabled=False,
+                admin_alerts=True,
+            ),
+        ]
+    )
+    event = NotificationEvent(
+        event_key="manager-action:preference",
+        event_type="MANAGER_ACTION_REQUIRED",
+        region_id=region.id,
+    )
+    db.add(event)
+    db.flush()
+    assert audience_user_ids(db, event) == set()
+    preference = db.get(NotificationPreference, user.id)
+    preference.notifications_enabled = True
+    preference.admin_alerts = False
+    db.flush()
+    assert audience_user_ids(db, event) == set()
+
+
+def test_contractor_notice_relevance_requires_published_assignment(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Contractor notice region")
+    rostered_user = User(
+        email="rostered-contractor@example.test",
+        display_name="Rostered contractor",
+        credential_hash=hash_credential("123456"),
+    )
+    other_user = User(
+        email="other-contractor@example.test",
+        display_name="Other contractor",
+        credential_hash=hash_credential("123456"),
+    )
+    rostered = Person(display_name="Rostered contractor")
+    other = Person(display_name="Other contractor")
+    db.add_all([region, rostered_user, other_user, rostered, other])
+    db.flush()
+    db.add_all(
+        [
+            UserPersonLink(user_id=rostered_user.id, person_id=rostered.id),
+            UserPersonLink(user_id=other_user.id, person_id=other.id),
+            RoleGrant(
+                user_id=rostered_user.id, role=Role.CONTRACTOR.value, region_id=region.id
+            ),
+            RoleGrant(user_id=other_user.id, role=Role.CONTRACTOR.value, region_id=region.id),
+        ]
+    )
+    workday = Workday(region_id=region.id, created_by_user_id=rostered_user.id)
+    db.add(workday)
+    db.flush()
+    revision = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=1,
+        state="PUBLISHED",
+        work_date=date.today(),
+        created_by_user_id=rostered_user.id,
+    )
+    db.add(revision)
+    db.flush()
+    db.add(
+        Assignment(
+            revision_id=revision.id,
+            person_id=rostered.id,
+            display_name_snapshot="Camera",
+            status="ASSIGNED",
+        )
+    )
+    workday.current_published_revision_id = revision.id
+    event = NotificationEvent(
+        event_key="notice:contractor",
+        event_type="OPERATIONAL_NOTICE",
+        region_id=region.id,
+    )
+    db.add(event)
+    db.flush()
+    assert audience_user_ids(db, event) == {rostered_user.id}
+    actor = Actor(
+        rostered_user.id,
+        rostered.id,
+        frozenset(),
+        {region.id: frozenset({Role.CONTRACTOR.value})},
+    )
+    assert relevant_notice_region_ids(db, actor) == {region.id}
+
+
+def test_open_position_digest_does_not_treat_manager_grant_as_employee(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Digest manager region")
+    user = User(
+        email="digest-manager@example.test",
+        display_name="Digest manager",
+        credential_hash=hash_credential("123456"),
+    )
+    person = Person(display_name="Digest manager")
+    position = BasePosition(name="Digest camera")
+    db.add_all([region, user, person, position])
+    db.flush()
+    db.add_all(
+        [
+            UserPersonLink(user_id=user.id, person_id=person.id),
+            RoleGrant(user_id=user.id, role=Role.MANAGER.value, region_id=region.id),
+            NotificationPreference(user_id=user.id, open_positions_digest=True),
+            PositionCapability(
+                person_id=person.id,
+                base_position_id=position.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
+            ),
+        ]
+    )
+    workday = Workday(region_id=region.id, created_by_user_id=user.id)
+    db.add(workday)
+    db.flush()
+    revision = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=1,
+        state="PUBLISHED",
+        work_date=date(2026, 10, 8),
+        created_by_user_id=user.id,
+    )
+    db.add(revision)
+    db.flush()
+    db.add(
+        Assignment(
+            revision_id=revision.id,
+            base_position_id=position.id,
+            display_name_snapshot="Camera",
+            status="OPEN",
+        )
+    )
+    workday.current_published_revision_id = revision.id
+    db.flush()
+    assert generate_periodic_digests(db, now=datetime(2026, 10, 5, tzinfo=UTC)) == 0
 
 
 def test_delivery_is_encrypted_and_idempotent(db) -> None:  # type: ignore[no-untyped-def]

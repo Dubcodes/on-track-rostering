@@ -70,6 +70,7 @@ def create_workday(
     track_id: uuid.UUID | None,
     title: str,
     actor_user_id: uuid.UUID,
+    commit: bool = True,
 ) -> Workday:
     region = db.get(Region, region_id)
     if not region or region.lifecycle != "ACTIVE":
@@ -92,7 +93,8 @@ def create_workday(
     db.flush()
     workday.current_draft_revision_id = draft.id
     record_audit(db, "workday.created", "workday", workday.id, actor_user_id, region_id=region_id)
-    db.commit()
+    if commit:
+        db.commit()
     return workday
 
 

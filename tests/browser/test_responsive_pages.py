@@ -21,6 +21,7 @@ from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.core.database import Base, SessionLocal, engine
 from app.core.enums import Role
 from app.core.time import utcnow
+from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
 from app.identity.models import Person, RoleGrant, TrustedDevice, User, UserPersonLink
 from app.notices.models import OperationalNotice
 from app.notifications.models import NotificationPreference
@@ -305,6 +306,47 @@ def browser_site():  # type: ignore[no-untyped-def]
                 ),
             ]
         )
+        external_event = ExternalCalendarEvent(
+            event_date=date.today(),
+            track_id=track.id,
+            external_track_name=track.name,
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            first_race_time=clock_time(12, 30),
+            race_count=8,
+            presentation_provider="LOVE_RACING",
+            field_provenance={"race_count": ["LOVE_RACING"]},
+        )
+        db.add(external_event)
+        db.flush()
+        db.add_all(
+            [
+                ExternalEventObservation(
+                    provider="HRNZ",
+                    source_track_name="Unmatched Browser Track",
+                    payload_hash=uuid.uuid4().hex,
+                    parsed_facts={
+                        "event_date": date.today().isoformat(),
+                        "discipline": "HARNESS",
+                        "event_kind": "TRIAL",
+                    },
+                    raw_payload={"meeting": "Unmatched Browser Track"},
+                    mapping_state="UNMATCHED",
+                    reconciliation_state="REVIEW",
+                ),
+                ExternalEventObservation(
+                    event_id=external_event.id,
+                    provider="API",
+                    provider_event_id=f"conflict-{suffix}",
+                    source_track_name=track.name,
+                    payload_hash=uuid.uuid4().hex,
+                    parsed_facts={"race_count": 9},
+                    raw_payload={"race_count": 9},
+                    mapping_state="MAPPED",
+                    reconciliation_state="CONFLICT",
+                ),
+            ]
+        )
         db.commit()
         values = {
             "manager": (manager.email, "123456"),
@@ -319,6 +361,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             "cross_track_id": str(cross_track.id),
             "active_notice_text": active_notice_text,
             "expired_notice_text": expired_notice_text,
+            "external_event_id": str(external_event.id),
         }
 
     with socket.socket() as probe:
@@ -408,6 +451,60 @@ def test_master_data_palette_changes_with_theme(browser_site, width: int) -> Non
         _assert_no_horizontal_overflow(page)
         _capture_page(page, f"master-data-palette-{theme}-{width}.png")
     assert len(set(colours)) == 4
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
+def test_external_source_import_preferences_and_detail(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["admin"])
+    page.goto(base_url + "/settings#calendar")
+    minimal = page.locator('input[name="minimal_external_detail"]')
+    if minimal.is_checked():
+        minimal.uncheck()
+        page.locator('form[action="/settings/calendar"] button').click()
+        page.wait_for_url("**/settings?calendar=saved#calendar")
+    page.goto(base_url + "/month")
+    event_card = page.locator(f'a[href="/external-events/{values["external_event_id"]}"]')
+    assert event_card.count() == 1
+    _capture_page(page, f"external-event-normal-{width}.png")
+    event_card.click()
+    assert page.get_by_text("Raw Race Day Data").count() == 1
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"external-event-detail-{width}.png")
+
+    page.goto(base_url + "/admin/online-sources")
+    assert page.get_by_text("Unmatched Browser Track").count() >= 1
+    assert page.get_by_text("Conflicting observations").count() == 1
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"online-sources-{width}.png")
+
+    page.goto(base_url + "/admin/data-import")
+    unique_region = f"Preview Browser {uuid.uuid4().hex[:8]}"
+    page.locator('textarea[name="pasted_json"]').fill(
+        '{"version":"1","regions":[{"name":"' + unique_region + '"}]}'
+    )
+    page.get_by_role("button", name="Parse and preview").click()
+    assert page.get_by_text("Preview", exact=True).count() == 1
+    assert page.get_by_text("create 1", exact=False).count() >= 1
+    assert page.get_by_role("button", name="Import these records").count() == 1
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"data-import-preview-{width}.png")
+
+    page.goto(base_url + "/settings#calendar")
+    minimal = page.locator('input[name="minimal_external_detail"]')
+    minimal.check()
+    page.locator('form[action="/settings/calendar"] button').click()
+    page.wait_for_url("**/settings?calendar=saved#calendar")
+    page.goto(base_url + "/month")
+    marker = page.locator(".external-marker").first
+    assert marker.count() == 1
+    marker.locator("summary").click()
+    assert marker.locator(f'a[href="/external-events/{values["external_event_id"]}"]').is_visible()
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"external-event-minimal-{width}.png")
     context.close()
 
 

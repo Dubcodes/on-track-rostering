@@ -102,6 +102,31 @@ def can_crew_view(actor: Actor, region_id: uuid.UUID) -> bool:
     return actor.is_admin or bool(actor.roles_for(region_id) & allowed)
 
 
+def external_calendar_region_ids(db: Session, actor: Actor) -> set[uuid.UUID] | None:
+    """Regions whose planning calendar the actor may see; ``None`` means global."""
+    if actor.is_admin:
+        return None
+    planning_roles = {
+        Role.EMPLOYEE.value,
+        Role.SUB_MANAGER.value,
+        Role.MANAGER.value,
+        Role.VIEWER.value,
+    }
+    region_ids = {
+        region_id
+        for region_id, roles in actor.regional_roles.items()
+        if roles & planning_roles
+    }
+    has_employee_role = Role.EMPLOYEE.value in actor.global_roles or any(
+        Role.EMPLOYEE.value in roles for roles in actor.regional_roles.values()
+    )
+    if actor.person_id and has_employee_role:
+        home_region_id = db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
+        if home_region_id:
+            region_ids.add(home_region_id)
+    return region_ids
+
+
 def can_view_management_detail(actor: Actor, region_id: uuid.UUID) -> bool:
     """Read-only operational/HR detail, independent from roster write authority."""
     allowed = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}

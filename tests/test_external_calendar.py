@@ -3,6 +3,7 @@ from datetime import date, time
 import pytest
 from sqlalchemy import func, select
 
+from app.auth.policy import Actor
 from app.catalog.models import CrewGroup, Region, Track
 from app.external_calendar.importer import apply_bundle, parse_bundle, preview_bundle
 from app.external_calendar.models import (
@@ -11,8 +12,14 @@ from app.external_calendar.models import (
     ExternalEventObservation,
 )
 from app.external_calendar.read_models import external_calendar_items
-from app.external_calendar.service import ProviderObservation, confirm_track_mapping, reconcile_observation
+from app.external_calendar.service import (
+    ProviderObservation,
+    adopt_external_event,
+    confirm_track_mapping,
+    reconcile_observation,
+)
 from app.identity.models import Person, User
+from app.rostering.models import Workday, WorkdayRevision
 
 
 def foundation(db):  # type: ignore[no-untyped-def]
@@ -26,6 +33,10 @@ def foundation(db):  # type: ignore[no-untyped-def]
     confirm_track_mapping(db, "LOVE_RACING", "Te Rapa", track.id, user.id)
     confirm_track_mapping(db, "API", "Te Rapa Racecourse", track.id, user.id)
     return user, region, track
+
+
+def actor(user, region, role="EMPLOYEE", person_id=None):  # type: ignore[no-untyped-def]
+    return Actor(user.id, person_id, frozenset(), {region.id: frozenset({role})})
 
 
 def observation(
@@ -126,7 +137,9 @@ def test_preferences_filter_external_only_with_expected_defaults(db):  # type: i
             )
         )
     db.flush()
-    items = external_calendar_items(db, user.id, date(2026, 9, 1), date(2026, 10, 1))
+    items = external_calendar_items(
+        db, actor(user, _region), date(2026, 9, 1), date(2026, 10, 1)
+    )
     assert len(items) == 2 and all(item["kind"] == "RACE" for item in items)
     preference = CalendarDisplayPreference(
         user_id=user.id,
@@ -137,5 +150,73 @@ def test_preferences_filter_external_only_with_expected_defaults(db):  # type: i
     )
     db.add(preference)
     db.flush()
-    items = external_calendar_items(db, user.id, date(2026, 9, 1), date(2026, 10, 1))
+    items = external_calendar_items(
+        db, actor(user, _region), date(2026, 9, 1), date(2026, 10, 1)
+    )
     assert len(items) == 1 and items[0]["discipline"] == "HARNESS" and items[0]["minimal"] is True
+
+
+def test_external_items_are_region_scoped_and_contractors_get_no_planning_feed(db):  # type: ignore[no-untyped-def]
+    user, northern, track = foundation(db)
+    central = Region(name="Central")
+    db.add(central)
+    db.flush()
+    central_track = Track(name="Awapuni", region_id=central.id, palette_slot=1)
+    db.add_all(
+        [
+            central_track,
+            ExternalCalendarEvent(
+                event_date=date(2026, 9, 20),
+                track_id=track.id,
+                discipline="THOROUGHBRED",
+                event_kind="RACE",
+            ),
+            ExternalCalendarEvent(
+                event_date=date(2026, 9, 21),
+                track_id=central_track.id,
+                discipline="THOROUGHBRED",
+                event_kind="RACE",
+            ),
+        ]
+    )
+    db.flush()
+    rows = external_calendar_items(db, actor(user, northern), date(2026, 9, 1), date(2026, 10, 1))
+    assert [row["track"] for row in rows] == ["Te Rapa"]
+    contractor = actor(user, northern, "CONTRACTOR")
+    assert external_calendar_items(db, contractor, date(2026, 9, 1), date(2026, 10, 1)) == []
+
+
+def test_private_adoption_remains_visible_then_published_link_suppresses(db):  # type: ignore[no-untyped-def]
+    user, region, track = foundation(db)
+    event = ExternalCalendarEvent(
+        event_date=date(2026, 9, 20),
+        track_id=track.id,
+        discipline="THOROUGHBRED",
+        event_kind="RACE",
+        first_race_time=time(12, 30),
+        race_count=8,
+    )
+    db.add(event)
+    db.flush()
+    manager = actor(user, region, "MANAGER")
+    workday, created = adopt_external_event(db, event.id, manager)
+    assert created and workday.current_published_revision_id is None
+    same, created = adopt_external_event(db, event.id, manager)
+    assert not created and same.id == workday.id
+    assert len(external_calendar_items(db, manager, date(2026, 9, 1), date(2026, 10, 1))) == 1
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    workday.current_published_revision_id = draft.id
+    workday.current_draft_revision_id = None
+    draft.state = "PUBLISHED"
+    db.flush()
+    assert external_calendar_items(db, manager, date(2026, 9, 1), date(2026, 10, 1)) == []
+    assert db.scalar(select(func.count()).select_from(Workday)) == 1
+
+
+def test_typed_import_rejects_malformed_and_literal_colour() -> None:
+    with pytest.raises(ValueError, match="Invalid import field"):
+        parse_bundle('{"version":"2"}')
+    with pytest.raises(ValueError, match="Invalid import field"):
+        parse_bundle('{"tracks":[{"name":"Te Rapa","region":"Northern","colour":"#fff"}]}')
+    with pytest.raises(ValueError, match="forbidden field"):
+        parse_bundle('{"people":[],"accessToken":"nope"}')

@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import local_today, utcnow
 from app.identity.models import RoleGrant, User, UserPersonLink
+from app.notices.service import relevant_notice_user_ids
 from app.notifications.models import (
     NotificationDelivery,
     NotificationEvent,
@@ -188,8 +189,9 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
             if _roster_change_allows(db, user_id, event)
         }
     if event.event_type == "MANAGER_ACTION_REQUIRED" and event.region_id:
-        return set(
-            db.scalars(
+        return {
+            user_id
+            for user_id in db.scalars(
                 select(RoleGrant.user_id)
                 .join(User, User.id == RoleGrant.user_id)
                 .where(
@@ -199,19 +201,11 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
                     User.status == "ACTIVE",
                 )
             )
-        )
+            if _preference_allows(db, user_id, event.event_type)
+        }
     if event.event_type == "OPERATIONAL_NOTICE":
         if event.region_id:
-            candidate_ids = db.scalars(
-                select(RoleGrant.user_id)
-                .join(User, User.id == RoleGrant.user_id)
-                .where(
-                    RoleGrant.region_id == event.region_id,
-                    RoleGrant.status == "ACTIVE",
-                    RoleGrant.role != Role.CONTRACTOR.value,
-                    User.status == "ACTIVE",
-                )
-            )
+            candidate_ids = relevant_notice_user_ids(db, event.region_id)
         else:
             candidate_ids = db.scalars(select(User.id).where(User.status == "ACTIVE"))
         return {user_id for user_id in candidate_ids if _preference_allows(db, user_id, event.event_type)}
@@ -657,6 +651,11 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
             if any(role == Role.ADMIN.value for role, _region_id in grants)
             else {region_id for _role, region_id in grants if region_id is not None}
         )
+        employee_regions = {
+            region_id
+            for role, region_id in grants
+            if role == Role.EMPLOYEE.value and region_id is not None
+        }
         if preference.weekly_digest:
             rows = db.execute(
                 select(Workday, WorkdayRevision, Assignment)
@@ -699,7 +698,7 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
                 .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
                 .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
                 .where(
-                    Workday.region_id.in_(authorised_regions),
+                    Workday.region_id.in_(employee_regions),
                     WorkdayRevision.work_date >= local_date,
                     WorkdayRevision.work_date <= month_end,
                     Assignment.status == "OPEN",

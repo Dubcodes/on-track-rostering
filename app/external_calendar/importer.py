@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, time
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region, Track
 from app.catalog.service import allocate_palette_slot
 from app.core.enums import CapabilitySignal
+from app.core.time import parse_time
+from app.external_calendar.models import ExternalCalendarEvent
+from app.external_calendar.schemas import ImportBundle
 from app.external_calendar.service import (
     ProviderObservation,
     confirm_track_mapping,
@@ -20,7 +25,15 @@ from app.external_calendar.service import (
 from app.identity.models import Person
 from app.rostering.models import PositionCapability
 
-FORBIDDEN_KEYS = {"password", "pin", "token", "secret", "credential", "bank", "payroll"}
+FORBIDDEN_KEY_PARTS = {
+    "password",
+    "pin",
+    "credential",
+    "secret",
+    "token",
+    "bank",
+    "payroll",
+}
 
 
 @dataclass
@@ -48,7 +61,12 @@ def parse_bundle(raw: str) -> dict[str, object]:
     def inspect(value: object) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
-                if normalized_key(str(key)).replace(" ", "_") in FORBIDDEN_KEYS:
+                words = {
+                    word
+                    for word in re.split(r"[^a-z0-9]+", re.sub(r"([a-z])([A-Z])", r"\1_\2", str(key)).casefold())
+                    if word
+                }
+                if words & FORBIDDEN_KEY_PARTS:
                     raise ValueError(f"Import bundle contains forbidden field: {key}.")
                 inspect(child)
         elif isinstance(value, list):
@@ -56,10 +74,13 @@ def parse_bundle(raw: str) -> dict[str, object]:
                 inspect(child)
 
     inspect(bundle)
-    for section in ("regions", "tracks", "crew_groups", "positions", "people", "external_events"):
-        if section in bundle and not isinstance(bundle[section], list):
-            raise ValueError(f"{section} must be an array.")
-    return bundle
+    try:
+        typed = ImportBundle.model_validate(bundle)
+    except ValidationError as exc:
+        first = exc.errors(include_url=False)[0]
+        location = ".".join(str(part) for part in first["loc"])
+        raise ValueError(f"Invalid import field {location}: {first['msg']}.") from exc
+    return typed.model_dump(mode="json", exclude_none=True)
 
 
 def _named(rows: list[object], name: str):  # type: ignore[no-untyped-def]
@@ -76,6 +97,10 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
     people = list(db.scalars(select(Person)))
     bundle_regions = {normalized_key(str(row.get("name", ""))) for row in bundle.get("regions", [])}
     bundle_groups = {normalized_key(str(row.get("name", ""))) for row in bundle.get("crew_groups", [])}
+    bundle_positions = {
+        (normalized_key(str(row.get("crew_group", ""))), normalized_key(str(row.get("name", ""))))
+        for row in bundle.get("positions", [])
+    }
     for row in bundle.get("regions", []):
         matches = _named(regions, str(row.get("name", "")))
         plan.bump("regions", "match" if len(matches) == 1 else "conflict" if matches else "create")
@@ -104,6 +129,41 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
         group_known = len(group) == 1 or normalized_key(str(row.get("crew_group", ""))) in bundle_groups
         plan.bump("positions", "match" if matches else "conflict" if not group_known else "create")
     for row in bundle.get("people", []):
+        referenced_regions = [str(row["home_region"])] if row.get("home_region") else []
+        referenced_groups = [str(value) for value in row.get("crew_groups", [])]
+        referenced_groups.extend(
+            str(value["crew_group"]) for value in row.get("capabilities", [])
+        )
+        missing_region = any(
+            not _named(regions, name) and normalized_key(name) not in bundle_regions
+            for name in referenced_regions
+        )
+        missing_group = any(
+            not _named(groups, name) and normalized_key(name) not in bundle_groups
+            for name in referenced_groups
+        )
+        missing_position = False
+        for capability in row.get("capabilities", []):
+            group_name = str(capability["crew_group"])
+            position_name = str(capability["position"])
+            matched_groups = _named(groups, group_name)
+            existing_position = any(
+                matched_groups
+                and item.crew_group_id == matched_groups[0].id
+                and normalized_key(item.name) == normalized_key(position_name)
+                for item in positions
+            )
+            bundled_position = (
+                normalized_key(group_name),
+                normalized_key(position_name),
+            ) in bundle_positions
+            missing_position = missing_position or not (existing_position or bundled_position)
+        if missing_region or missing_group or missing_position:
+            plan.bump("people", "conflict")
+            plan.warnings.append(
+                f"Unknown Region, Crew Group, or Position reference for: {row.get('display_name', '')}"
+            )
+            continue
         email = normalized_key(str(row.get("email", "")))
         matches = [item for item in people if email and normalized_key(item.email or "") == email]
         same_names = [
@@ -121,10 +181,61 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
         plan.bump("people", result)
         if result == "ambiguous":
             plan.warnings.append(f"Ambiguous person: {row.get('display_name', '')}")
+    seen_external: set[tuple[str, str, str]] = set()
     for row in bundle.get("external_events", []):
-        plan.bump("external_events", "unresolved" if not row.get("track") else "review")
+        provider = str(row["provider"]).upper()
+        duplicate_key = (
+            provider,
+            str(row.get("provider_event_id", "")),
+            json.dumps(row, sort_keys=True),
+        )
+        if duplicate_key in seen_external:
+            plan.bump("external_events", "duplicate")
+            continue
+        seen_external.add(duplicate_key)
+        track = mapped_track(db, provider, str(row["track"]))
+        if track is None:
+            track_matches = [
+                item
+                for item in tracks
+                if normalized_key(item.name) == normalized_key(str(row["track"]))
+            ]
+            if len(track_matches) == 1:
+                track = track_matches[0]
+        if track is None:
+            plan.bump("external_events", "unresolved")
+            continue
+        existing = db.scalar(
+            select(ExternalCalendarEvent).where(
+                ExternalCalendarEvent.event_date == date.fromisoformat(str(row["date"])),
+                ExternalCalendarEvent.track_id == track.id,
+                ExternalCalendarEvent.discipline == row["discipline"],
+                ExternalCalendarEvent.event_kind == row["event_kind"],
+            )
+        )
+        if existing is None:
+            plan.bump("external_events", "create")
+            continue
+        conflict = False
+        enrich = False
+        for fact_name in (
+            "first_trial_time",
+            "first_race_time",
+            "last_race_time",
+            "race_count",
+            "status",
+        ):
+            incoming = dict(row.get("facts", {})).get(fact_name)
+            if fact_name.endswith("_time") and incoming is not None and not isinstance(incoming, time):
+                incoming = parse_time(str(incoming))
+            current = getattr(existing, fact_name)
+            enrich = enrich or (incoming is not None and current is None)
+            conflict = conflict or (incoming is not None and current is not None and incoming != current)
+        plan.bump("external_events", "conflict" if conflict else "enrich" if enrich else "match")
     plan.valid = not any(
-        values.get("conflict", 0) or values.get("ambiguous", 0) for values in plan.counts.values()
+        (section != "external_events" and values.get("conflict", 0))
+        or values.get("ambiguous", 0)
+        for section, values in plan.counts.items()
     )
     return plan
 
@@ -262,4 +373,4 @@ def apply_bundle(db: Session, bundle: dict[str, object], actor_user_id) -> Impor
                 raw_payload=dict(row.get("raw", row)),
             ),
         )
-    return preview_bundle(db, bundle)
+    return initial

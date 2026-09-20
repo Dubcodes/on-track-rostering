@@ -9,9 +9,12 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.policy import Actor, require_manage_region
 from app.catalog.models import Track
 from app.core.time import parse_time, utcnow
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation, ExternalTrackMapping
+from app.rostering.models import Workday, WorkdayRevision
+from app.rostering.service import create_workday
 
 DISCIPLINES = {"THOROUGHBRED", "HARNESS"}
 EVENT_KINDS = {"RACE", "TRIAL"}
@@ -219,12 +222,63 @@ def confirm_track_mapping(
         observation.mapping_state = "MAPPED"
         observation.reconciliation_state = "MATCHED"
         provenance = dict(event.field_provenance or {})
+        enriched = False
+        conflict = False
         for field in CANONICAL_FIELDS:
             raw = facts.get(field)
             incoming = parse_time(str(raw)) if raw and field.endswith("_time") else raw
             if incoming is not None and getattr(event, field) is None:
                 setattr(event, field, incoming)
+                enriched = True
+            elif incoming is not None and incoming != getattr(event, field):
+                conflict = True
             if incoming is not None and incoming == getattr(event, field):
                 provenance[field] = sorted(set(provenance.get(field, [])) | {provider})
         event.field_provenance = provenance
+        if enriched:
+            observation.reconciliation_state = "ENRICHED"
+        if conflict:
+            observation.reconciliation_state = "CONFLICT"
     return mapping
+
+
+def adopt_external_event(
+    db: Session,
+    event_id: uuid.UUID,
+    actor: Actor,
+) -> tuple[Workday, bool]:
+    """Create and link one private Workday draft inside the caller's transaction."""
+    event = db.scalar(
+        select(ExternalCalendarEvent)
+        .where(ExternalCalendarEvent.id == event_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if event is None or event.track_id is None:
+        raise ValueError("Map this event to a Track first.")
+    track = db.get(Track, event.track_id)
+    if track is None or track.lifecycle != "ACTIVE":
+        raise ValueError("The mapped Track is not active.")
+    require_manage_region(actor, track.region_id)
+    existing = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
+    if existing:
+        return existing, False
+    workday = create_workday(
+        db,
+        region_id=track.region_id,
+        category="RACE_DAY" if event.event_kind == "RACE" else "TRIALS",
+        work_date=event.event_date,
+        track_id=track.id,
+        title="Race Day" if event.event_kind == "RACE" else "Trials",
+        actor_user_id=actor.user_id,
+        commit=False,
+    )
+    workday.external_event_id = event.id
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    assert draft is not None
+    draft.first_trial_time = event.first_trial_time
+    draft.first_race_time = event.first_race_time
+    draft.last_race_time = event.last_race_time
+    draft.race_count = event.race_count
+    db.flush()
+    return workday, True

@@ -10,11 +10,14 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+from app.auth.policy import Actor
 from app.auth.security import hash_credential
 from app.auth.service import activate_pending_grants
 from app.catalog.models import BasePosition, Region, Track
 from app.catalog.service import allocate_palette_slot
 from app.core.time import local_today, utcnow
+from app.external_calendar.models import ExternalCalendarEvent
+from app.external_calendar.service import adopt_external_event
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
 from app.notifications.service import encrypt_subscription, generate_reminders, process_pending
@@ -88,6 +91,58 @@ def test_simultaneous_track_creation_allocates_distinct_palette_slots(pg_factory
     assert not any(thread.is_alive() for thread in threads)
     assert not errors
     assert sorted(results) == [1, 2]
+
+
+def test_concurrent_external_event_adoption_creates_one_linked_draft(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    suffix = uuid.uuid4().hex[:10]
+    with pg_factory() as db:
+        track = Track(name=f"Adoption Track {suffix}", region_id=region_id, palette_slot=1)
+        db.add(track)
+        db.flush()
+        event = ExternalCalendarEvent(
+            event_date=date.today(),
+            track_id=track.id,
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            first_race_time=time(12, 30),
+            race_count=8,
+        )
+        db.add(event)
+        db.commit()
+        event_id = event.id
+    barrier = threading.Barrier(2)
+    workday_ids: list[uuid.UUID] = []
+    errors: list[Exception] = []
+
+    def adopt() -> None:
+        try:
+            with pg_factory() as db:
+                actor = Actor(
+                    user_id,
+                    None,
+                    frozenset(),
+                    {region_id: frozenset({"MANAGER"})},
+                )
+                barrier.wait(timeout=10)
+                workday, _created = adopt_external_event(db, event_id, actor)
+                db.commit()
+                workday_ids.append(workday.id)
+        except Exception as exc:  # pragma: no cover - assertion reports thread failures
+            errors.append(exc)
+
+    threads = [threading.Thread(target=adopt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(workday_ids) == 2 and len(set(workday_ids)) == 1
+    with pg_factory() as db:
+        assert db.scalar(
+            select(func.count()).select_from(Workday).where(Workday.external_event_id == event_id)
+        ) == 1
 
 
 def test_concurrent_publish_preserves_one_authoritative_winner(pg_factory) -> None:  # type: ignore[no-untyped-def]

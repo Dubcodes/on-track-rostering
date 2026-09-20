@@ -42,7 +42,7 @@ from app.external_calendar.models import CalendarDisplayPreference
 from app.external_calendar.read_models import calendar_preference, external_calendar_items
 from app.hours.service import fortnight_bounds
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
-from app.notices.service import prominent_notice, recent_notices
+from app.notices.service import prominent_notice, recent_notices, relevant_notice_region_ids
 from app.notifications.models import NotificationPreference, PushSubscription
 from app.positions.service import set_preference_signal
 from app.rostering.models import (
@@ -88,18 +88,6 @@ def _month_bounds(year: int, month: int) -> tuple[date, date]:
     return start, date(year + (month == 12), 1 if month == 12 else month + 1, 1)
 
 
-def _notice_region_ids(actor, items: list[dict[str, object]]) -> set[uuid.UUID]:
-    visible = {
-        region_id for region_id, roles in actor.regional_roles.items() if set(roles) - {Role.CONTRACTOR.value}
-    }
-    visible.update(
-        item["region_id"]
-        for item in items
-        if item.get("own") and isinstance(item.get("region_id"), uuid.UUID)
-    )
-    return visible
-
-
 @router.get("/", include_in_schema=False)
 def root():
     from fastapi.responses import RedirectResponse
@@ -119,7 +107,7 @@ def month_view(
     year, month = year or today.year, month or today.month
     start, end = _month_bounds(year, month)
     items = month_items(db, request.state.actor, start, end)
-    external_items = external_calendar_items(db, request.state.user.id, start, end)
+    external_items = external_calendar_items(db, request.state.actor, start, end)
     by_date: dict[date, list[dict[str, object]]] = {}
     for item in items:
         by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
@@ -162,7 +150,7 @@ def month_view(
     ][:5]
     previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
     following = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
-    notice_regions = _notice_region_ids(request.state.actor, items)
+    notice_regions = relevant_notice_region_ids(db, request.state.actor)
     fortnight_markers: dict[date, str] = {}
     if request.state.actor.person_id:
         current_start, _ = fortnight_bounds(today=today)
@@ -552,7 +540,7 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
     manageable_regions = [
         region for region in manageable_regions if can_manage_region(request.state.actor, region.id)
     ]
-    history_regions = _notice_region_ids(request.state.actor, [])
+    history_regions = relevant_notice_region_ids(db, request.state.actor)
     return templates.TemplateResponse(
         "settings.html",
         context(

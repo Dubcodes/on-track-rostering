@@ -9,7 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
-from app.auth.policy import can_manage_region, require_admin, require_manage_region
+from app.auth.policy import (
+    can_manage_region,
+    external_calendar_region_ids,
+    require_admin,
+)
 from app.auth.security import verify_csrf
 from app.catalog.models import Track
 from app.catalog.presentation import track_token
@@ -20,9 +24,13 @@ from app.external_calendar.models import (
     ExternalEventObservation,
     ExternalProviderState,
 )
-from app.external_calendar.service import confirm_track_mapping, event_evidence, normalized_key
-from app.rostering.models import Workday, WorkdayRevision
-from app.rostering.service import create_workday
+from app.external_calendar.service import (
+    adopt_external_event,
+    confirm_track_mapping,
+    event_evidence,
+    normalized_key,
+)
+from app.rostering.models import Workday
 from app.web import context, templates
 
 router = APIRouter()
@@ -105,10 +113,29 @@ def sources_page(request: Request, db: Session = Depends(get_db)):
             .order_by(ExternalEventObservation.retrieved_at.desc())
         )
     )
+    conflict_observations = list(
+        db.scalars(
+            select(ExternalEventObservation)
+            .where(ExternalEventObservation.reconciliation_state == "CONFLICT")
+            .order_by(ExternalEventObservation.retrieved_at.desc())
+            .limit(100)
+        )
+    )
+    conflicts = [
+        {"observation": row, "event": db.get(ExternalCalendarEvent, row.event_id)}
+        for row in conflict_observations
+    ]
     tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE").order_by(Track.name)))
     return templates.TemplateResponse(
         "online_sources.html",
-        context(request, providers=PROVIDERS, provider_states=states, unmatched=unmatched, tracks=tracks),
+        context(
+            request,
+            providers=PROVIDERS,
+            provider_states=states,
+            unmatched=unmatched,
+            conflicts=conflicts,
+            tracks=tracks,
+        ),
     )
 
 
@@ -145,6 +172,9 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
     if not event:
         raise HTTPException(404)
     track = db.get(Track, event.track_id) if event.track_id else None
+    visible_regions = external_calendar_region_ids(db, request.state.actor)
+    if track is None or (visible_regions is not None and track.region_id not in visible_regions):
+        raise HTTPException(404, "External event not found")
     workday = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
     return templates.TemplateResponse(
         "external_event.html",
@@ -153,7 +183,7 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
             event=event,
             track=track,
             workday=workday,
-            evidence=event_evidence(db, event) if request.state.actor.is_admin else None,
+            evidence=event_evidence(db, event),
             can_build=bool(track and can_manage_region(request.state.actor, track.region_id)),
             presentation=track_token(track.palette_slot if track else None),
         ),
@@ -165,32 +195,10 @@ def build_event(
     event_id: uuid.UUID, request: Request, csrf_token: str = Form(...), db: Session = Depends(get_db)
 ):
     verify_csrf(request, csrf_token)
-    event = db.scalar(
-        select(ExternalCalendarEvent).where(ExternalCalendarEvent.id == event_id).with_for_update()
-    )
-    if not event or not event.track_id:
-        raise HTTPException(409, "Map this event to a Track first.")
-    track = db.get(Track, event.track_id)
-    require_manage_region(request.state.actor, track.region_id)
-    existing = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
-    if existing:
-        return RedirectResponse(f"/manage/workdays/{existing.id}", status_code=303)
-    workday = create_workday(
-        db,
-        region_id=track.region_id,
-        category="RACE_DAY" if event.event_kind == "RACE" else "TRIALS",
-        work_date=event.event_date,
-        track_id=track.id,
-        title="Race Day" if event.event_kind == "RACE" else "Trials",
-        actor_user_id=request.state.user.id,
-    )
-    workday.external_event_id = event.id
-    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
-    draft.first_trial_time, draft.first_race_time, draft.last_race_time, draft.race_count = (
-        event.first_trial_time,
-        event.first_race_time,
-        event.last_race_time,
-        event.race_count,
-    )
-    db.commit()
+    try:
+        workday, _created = adopt_external_event(db, event_id, request.state.actor)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
     return RedirectResponse(f"/manage/workdays/{workday.id}", status_code=303)
