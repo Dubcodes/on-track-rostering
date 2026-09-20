@@ -837,12 +837,6 @@ a { color: inherit; }
 .site-header.no-month-nav .site-nav { grid-column: 2; }
 .header-view-toggle { display: flex; gap: 4px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
 .site-nav .icon-button { color: var(--accent); }
-.app-menu { position: relative; }
-.app-menu > summary { list-style: none; }
-.app-menu > summary::-webkit-details-marker { display: none; }
-.app-menu > nav { position: absolute; right: 0; top: calc(100% + 7px); display: grid; width: max-content; min-width: 170px; gap: 2px; padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); box-shadow: var(--shadow); }
-.app-menu > nav a { padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; }
-.app-menu > nav a:hover, .app-menu > nav a:focus-visible { background: var(--surface-soft); color: var(--accent); }
 .page-shell { width: min(1500px, 100%); margin: 0 auto; padding: 24px clamp(12px, 3vw, 28px) 48px; }
 
 .panel, .hero-card, .notice-card, .auth-card, .assignment, .assignment-editor, .record-list > span,
@@ -873,6 +867,8 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .outside-month { display: block; background: var(--surface-raised); color: var(--muted); opacity: 0.62; }
 .today { box-shadow: inset 0 0 0 2px var(--accent); }
 .calendar-date-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px; margin-bottom: 6px; }
+.date-with-holiday { display: flex; min-width: 0; align-items: flex-start; gap: 4px; }
+.date-with-holiday:not(:has(.holiday-marker))::before { width: 25px; content: ""; flex: 0 0 25px; }
 .day-link { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; text-decoration: none; }
 .day-link span { color: var(--muted); font-size: 0.78rem; font-weight: 800; }
 .day-link strong { font-size: 1.2rem; }
@@ -975,9 +971,18 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .timesheet-list-card svg { width: 20px; height: 20px; fill: none; stroke: currentColor; }
 .review-summary { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 1px; margin-bottom: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
 .review-summary span { display: grid; gap: 3px; padding: 10px; background: var(--surface); }
-.review-summary small,.review-summary strong { overflow-wrap: anywhere; }
+.review-summary small { overflow-wrap: anywhere; }
+.review-summary strong { white-space: nowrap; }
 @media (max-width: 560px) { .builder-status-strip { align-items: flex-start; flex-direction: column; } .builder-search-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .review-summary { grid-template-columns: repeat(3,minmax(0,1fr)); } }
+@media (max-width: 760px) {
+  .shift-card.external-event { max-height: 48px; overflow: hidden; }
+  .shift-card.external-event > strong,
+  .shift-card.external-event > span { display: block; min-width: 0; overflow: hidden; text-overflow: clip; white-space: nowrap; }
+  .shift-card.external-event > strong { font-size: .62rem; line-height: 1.05; }
+  .shift-card.external-event > span { font-size: .56rem; line-height: 1.1; }
+  .review-summary strong { font-size: .86rem; }
+}
 @media (max-width: 560px) { .crew-toolbar { align-items: stretch; flex-direction: column; } .crew-toolbar label { justify-content: space-between; } }
 @media (max-width: 560px) { .compact-preferences { grid-template-columns: 1fr; } .crew-notice-strip { gap: 4px; padding: 3px 4px; font-size: .62rem; } }
 
@@ -1006,6 +1011,10 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
   .day-cell { min-height: 72px; padding: 4px; border: 0; border-radius: 0; }
   .outside-month { display: block; opacity: 0.44; }
   .calendar-date-heading { gap: 2px; margin-bottom: 3px; }
+  .date-with-holiday { gap: 1px; }
+  .date-with-holiday:not(:has(.holiday-marker))::before { width: 18px; flex-basis: 18px; }
+  .date-with-holiday .holiday-marker summary { width: 18px; height: 18px; }
+  .date-with-holiday .holiday-marker summary svg { width: 12px; height: 12px; }
   .day-link { margin-bottom: 3px; }
   .day-link span { display: none; }
   .day-link strong { font-size: 0.78rem; }
@@ -1035,7 +1044,6 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
   .site-header.has-month-nav .site-nav { grid-column: 3; grid-row: 1; gap: 2px; flex-wrap: nowrap; }
   .site-header.has-month-nav .header-view-toggle { gap: 1px; padding: 1px; }
   .site-header.has-month-nav .site-nav .icon-button { width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 4px; }
-  .app-menu > nav { position: fixed; top: 48px; right: 4px; }
 }
 
 @media (max-width: 360px) {

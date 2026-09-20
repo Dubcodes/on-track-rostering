@@ -35,17 +35,6 @@
         {% else %}<a class="icon-button" href="/month" aria-label="Calendar">{{ ui_icon("calendar") }}</a>{% endif %}
         <a class="icon-button" href="/settings" aria-label="Settings">{{ ui_icon("settings") }}</a>
         <a class="icon-button" href="/help?context_key={{ help_context|default('general') }}" aria-label="Help">{{ ui_icon("help") }}</a>
-        {% if not header_context and (actor.person_id or show_manage or show_regional_admin or show_hours_management or show_accounts or actor.is_admin) %}
-          <details class="app-menu"><summary class="icon-button" aria-label="More navigation">•••</summary><nav aria-label="Management navigation">
-            {% if actor.person_id %}<a href="/hours">Hours</a>{% endif %}
-            {% if show_open_positions %}<a href="/open-positions">Open positions</a>{% endif %}
-            {% if show_manage %}<a href="/manage/workdays/new">Build</a>{% endif %}
-            {% if show_regional_admin %}<a href="/manage/crew">Manage crew</a><a href="/manage/catalog">Masters</a>{% endif %}
-            {% if show_hours_management %}<a href="/manage/hours">Team hours</a>{% endif %}
-            {% if show_accounts %}<a href="/manage/accounts">Accounts</a>{% endif %}
-            {% if actor.is_admin %}<a href="/admin">Admin</a>{% endif %}
-          </nav></details>
-        {% endif %}
       </nav>
     {% endif %}
   </header>

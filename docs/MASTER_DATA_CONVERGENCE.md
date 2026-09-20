@@ -41,18 +41,16 @@ Evidence:
 No new migration exists in this checkpoint. No Docker execution, push, CI run,
 staging/production deployment, or Re-Deputy modification occurred.
 
-## Required continuation — not yet implemented
+## Required continuation
 
 1. Track palette implementation is delivered in the second checkpoint below;
    actual PostgreSQL migration/concurrency qualification remains pending.
-2. Fixed shared header controls, three-dot removal, measured Month centering,
-   global POST scroll restoration, and holiday-star alignment.
-3. Canonical calendar event/observations, reconciliation/provenance, Online
-   Sources, safe preview/import, separate display preferences, source markers,
-   and source-event adoption into a private draft.
-4. Substantial read-only-reference Builder/Day transplant, integrated pickers,
+2. Direct read-only-reference Builder/Day transplant, integrated pickers,
    and neutral expandable Race/Trial source evidence.
-5. New-model/domain/browser regressions, full final cleanup/qualification,
+3. Live provider adapters for Love Racing, HRNZ, and any supplied API. Manual
+   import remains the only configured ingestion boundary until those adapters
+   are implemented and deployment-qualified.
+4. Realistic data import, final cleanup/qualification,
    origin recheck, authorized normal push only after completion, and exact-head
    GitHub release-gate evidence. Compose/image checks belong in CI, never local
    Docker execution.
@@ -119,7 +117,56 @@ Qualification:
   SQL generation and SQLite unit/browser fixtures are not PostgreSQL execution
   or migration-preservation qualification.
 
-No push, exact-head GitHub workflow, Compose/image qualification for this new
-checkpoint, Docker execution, or deployment occurred. Sources/import/preferences,
-header/scroll/Month/holiday refinements, and Builder/Day transplantation remain
-unimplemented. The continuation work list above remains authoritative.
+At that second checkpoint, no push, exact-head GitHub workflow, Compose/image
+qualification, Docker execution, or deployment occurred. Its then-pending
+source/import/shared-UI items are superseded by the hardening checkpoint below;
+the Builder/Day transplant remains outstanding.
+
+## External-calendar hardening checkpoint — 2026-09-20
+
+Baseline `HEAD == origin/main` was
+`13bab9e12149f8edd5f85ce85a58629fbab14eee`. That commit introduced migration
+`7e6a1c2d4f90_external_calendar_foundation.py`, following `26a91f48b3d0`, and
+the provider-neutral event, observation, Track mapping, provider-state, and
+calendar-preference tables. This continuation does not rewrite that committed
+migration.
+
+The canonical event is identified across providers by mapped Track, date,
+discipline, and event kind. Provider identity first deduplicates observations.
+Missing canonical facts may be enriched and receive field provenance; a
+conflicting non-null fact is retained as review evidence and never overwrites
+the canonical value. Unresolved Track spellings remain observations until an
+Admin confirms a reusable provider-to-Track mapping. No live adapter or fake
+sync success is present.
+
+The version-1 neutral import contract is now typed with bounded Pydantic models
+for Regions, Tracks, Crew Groups, Positions, People/memberships/capabilities,
+and external events. Unknown fields—including literal Track colours—and secret,
+credential, token, bank, or payroll-shaped fields are rejected. Preview is
+read-only and classifies create/match/enrich/conflict/unresolved/duplicate work;
+ambiguous people and broken master-data references block the atomic Apply.
+Apply uses the regional palette allocator and does not import accounts or
+credentials.
+
+Planning-event reads now use the central Actor model: Admin is global;
+Manager/SubManager/Viewer and Employee reads are regional; an Employee's home
+Region is included when they hold Employee authority; Contractor grants do not
+open the planning feed. A private linked draft remains invisible and does not
+suppress the source event. A visible current publication suppresses the
+duplicate planning card. Adoption locks and rechecks the canonical event,
+creates and links exactly one private draft in the caller's transaction, seeds
+known facts, and never publishes or later overwrites operational edits.
+
+The Online Sources workspace reports honest manual-only provider state,
+unmatched Track mappings, and conflicting incoming/canonical evidence. Calendar
+preferences remain separate from notification and authoritative-roster
+visibility. Manager-action push now respects notification preferences;
+open-position digests require Employee authority in the event Region; and
+regional notice banner/push relevance shares grant-or-published-assignment
+logic for Contractors.
+
+Shared UI cleanup removed the three-dot menu and redundant Settings Roster
+shortcut, retained centralized header controls, added short-lived same-path POST
+scroll restoration, and placed the shared holiday marker before the date in
+Month/List/Crew/fortnight rows (including unworked days). The Builder and
+published Day transplant remain deliberately deferred.

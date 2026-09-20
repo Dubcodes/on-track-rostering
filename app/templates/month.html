@@ -11,7 +11,7 @@
   <section class="roster-list" aria-label="Roster list">
     {% for week in grid %}{% for day in week if day.in_month and (items_by_date.get(day.date) or external_by_date.get(day.date) or fortnight_markers.get(day.date) or day.holiday) %}
       <article class="list-day{% if day.today %} today-list-day{% endif %}">
-        <div class="list-day-heading">{% if items_by_date.get(day.date) %}<a class="list-day-date" href="/day/{{ items_by_date[day.date][0].id }}">{% else %}<span class="list-day-date">{% endif %}<strong>{{ day.date.strftime('%a') }}</strong><span>{{ day.date.day }}</span>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}{{ holiday_marker(day.holiday, 'start') }}</div>
+        <div class="list-day-heading"><span class="date-with-holiday">{{ holiday_marker(day.holiday, 'start') }}{% if items_by_date.get(day.date) %}<a class="list-day-date" href="/day/{{ items_by_date[day.date][0].id }}">{% else %}<span class="list-day-date">{% endif %}<strong>{{ day.date.strftime('%a') }}</strong><span>{{ day.date.day }}</span>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}</span></div>
         <div class="list-day-shifts">{% for item in items_by_date[day.date] %}
           <a class="list-shift{% if item.cross_region %} cross-region{% endif %}" href="/day/{{ item.id }}" data-work-date="{{ item.date.isoformat() }}" data-presentation="{{ item.presentation }}" data-category="{{ item.category }}">
             <span class="list-shift-main"><strong>{{ item.track or item.title }}</strong><span>{{ item.role }}</span></span>
@@ -28,8 +28,7 @@
       {% for day in week %}
         <article class="day-cell{% if not day.in_month %} outside-month{% endif %}{% if day.today %} today{% endif %}">
           <div class="calendar-date-heading">
-            {% if items_by_date.get(day.date) %}<a class="day-link" href="/day/{{ items_by_date[day.date][0].id }}">{% else %}<span class="day-link">{% endif %}<span>{{ day.date.strftime('%a') }}</span><strong>{{ day.date.day }}</strong>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}
-            {{ holiday_marker(day.holiday, "start" if loop.index0 < 2 else "end") }}
+            <span class="date-with-holiday">{{ holiday_marker(day.holiday, "start" if loop.index0 < 2 else "end") }}{% if items_by_date.get(day.date) %}<a class="day-link" href="/day/{{ items_by_date[day.date][0].id }}">{% else %}<span class="day-link">{% endif %}<span>{{ day.date.strftime('%a') }}</span><strong>{{ day.date.day }}</strong>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}</span>
             {% if fortnight_markers.get(day.date) %}<a class="timesheet-dot" href="{{ fortnight_markers[day.date] }}" aria-label="Open fortnight hours ending {{ day.date.strftime('%d %B') }}" title="Fortnight hours">{{ ui_icon("timesheet") }}</a>{% endif %}
           </div>
           <div class="shift-list">{% for item in items_by_date.get(day.date, []) %}
@@ -40,7 +39,7 @@
               {% if item.has_open %}<span class="available-shift-dot">Open</span>{% endif %}
               {% if item.status != 'ASSIGNED' and item.status != 'PUBLISHED' %}<span class="badge-row"><span class="badge badge-warn">{{ item.status|replace('_', ' ')|title }}</span></span>{% endif %}
             </a>
-          {% endfor %}{% for external in external_by_date.get(day.date, []) %}{{ external_event_card(external) }}{% endfor %}</div>
+          {% endfor %}{% for external in external_by_date.get(day.date, []) %}{{ external_event_card(external, false, 'start' if day.date.weekday() < 4 else 'end') }}{% endfor %}</div>
         </article>
       {% endfor %}
       <aside class="week-total"><span>Week</span><strong>{{ week_minutes[loop.index0] // 60 }}h {{ week_minutes[loop.index0] % 60 }}m</strong></aside>

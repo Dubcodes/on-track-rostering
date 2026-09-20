@@ -1,5 +1,24 @@
 (() => {
   "use strict";
+  const scrollKey = "ontrack-post-scroll";
+  if (!window.location.hash) {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(scrollKey) || "null");
+      if (saved && saved.path === window.location.pathname && Date.now() - saved.at < 15000) {
+        window.requestAnimationFrame(() => window.scrollTo({top: saved.y, behavior: "instant"}));
+      }
+      sessionStorage.removeItem(scrollKey);
+    } catch (_) { sessionStorage.removeItem(scrollKey); }
+  }
+  document.querySelectorAll('form[method="post" i]').forEach((form) => {
+    form.addEventListener("submit", () => {
+      sessionStorage.setItem(scrollKey, JSON.stringify({
+        path: window.location.pathname,
+        y: window.scrollY,
+        at: Date.now(),
+      }));
+    });
+  });
   document.querySelectorAll("[data-region-track-form]").forEach((form) => {
     const region = form.querySelector("[data-track-region]");
     const track = form.querySelector("[data-region-track]");

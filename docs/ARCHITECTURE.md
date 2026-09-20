@@ -17,6 +17,11 @@ One FastAPI application renders Jinja pages and serves small JSON read models. S
 - `app/crew`: scoped regional crew search, creation, archive lifecycle, group membership, and Manager capability decisions.
 - `app/positions`: effective capability resolution with explicit provenance and precedence.
 - `app/employee`: intentionally small Month/Day read models and Settings views.
+- `app/external_calendar`: provider-neutral racing observations, canonical
+  field-aware reconciliation/provenance, Admin Track mapping and typed neutral
+  import, per-user planning display preferences, and transaction-safe adoption
+  into a private Workday draft. Provider adapters remain boundaries; published
+  roster reads never query provider-specific data.
 - `app/hours`: employee and region-scoped management fortnight totals from current published spans.
 - `app/audit`: redacted security audit and human publication history.
 - `app/notifications`: encrypted device subscriptions, preferences, idempotent authoritative-event outbox, recipient expansion, and per-subscription Web Push delivery/retry state.

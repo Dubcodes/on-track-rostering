@@ -10,6 +10,13 @@ PostgreSQL 17 is the production database from the first migration. Alembic is th
 
 GitHub `main` may already be a Portainer deployment source, so committed migrations are append-only production artifacts. Do not rewrite an existing migration unless deployment history has first been established and the correction is explicitly safe. New schema changes receive a new revision, support blank-database upgrades, and preserve existing data. Downgrades are documented recovery tools, not an automatic production rollback strategy.
 
+External racing data is planning evidence, not roster authority. Provider
+observations reconcile into one canonical event with field provenance; they may
+fill missing facts but cannot overwrite a conflicting known value. Creating a
+roster from an event produces one private Workday draft transactionally. Only
+Preview → Publish changes the authoritative employee roster, and later source
+updates never rewrite an operational draft or publication.
+
 ## Windows local development excludes Docker
 
 FastAPI, Alembic, tests, and tooling run directly under Windows/Python. The required database engine is a native/local PostgreSQL installation or an explicitly configured remote development PostgreSQL instance supplied through `DATABASE_URL`. Docker and Docker Desktop are not run, started, repaired, installed, or configured on the development machine. Production and isolated-staging Compose files remain deployment artifacts for the separate Docker/Portainer server. Narrow SQLite unit tests never count as PostgreSQL integration qualification; unavailable PostgreSQL checks are reported as pending.

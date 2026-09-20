@@ -4,15 +4,19 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.catalog.models import Region
 from app.core.database import get_db
+from app.core.holidays import holiday_info_for_date
 from app.hours.service import (
     format_minutes,
     fortnight_bounds,
     group_people,
     published_hours,
 )
+from app.identity.models import Person
 from app.web import context, templates
 
 router = APIRouter()
@@ -30,9 +34,25 @@ def employee_hours(request: Request, offset: int = Query(0), db: Session = Depen
     start, end = fortnight_bounds(offset)
     rows = published_hours(db, actor=request.state.actor, start=start, end=end, management=False)
     rows_by_date = {row["date"]: row for row in rows}
+    holiday_region = (
+        db.scalar(
+            select(Region.statutory_holiday_region)
+            .join(Person, Person.home_region_id == Region.id)
+            .where(Person.id == request.state.actor.person_id)
+        )
+        if request.state.actor.person_id
+        else ""
+    ) or ""
     days = [
         rows_by_date.get(start + timedelta(days=index))
-        or {"date": start + timedelta(days=index), "minutes": 0, "duration": "0h"}
+        or {
+            "date": start + timedelta(days=index),
+            "minutes": 0,
+            "duration": "0h",
+            "holiday_info": holiday_info_for_date(
+                start + timedelta(days=index), holiday_region
+            ),
+        }
         for index in range(14)
     ]
     return templates.TemplateResponse(
