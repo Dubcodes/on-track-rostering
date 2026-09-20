@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     lunch_allowance_hours: float = Field(default=12.0, ge=0)
     app_version: str = "0.3.0"
     build_id: str = ""
+    racing_source_timeout_seconds: float = Field(default=15.0, ge=2.0, le=60.0)
+    racing_source_max_bytes: int = Field(default=2_000_000, ge=100_000, le=10_000_000)
+    racing_source_lookback_days: int = Field(default=14, ge=0, le=90)
+    racing_source_horizon_days: int = Field(default=366, ge=30, le=730)
+    racing_sources_enabled_default: bool = False
 
     @field_validator("allowed_hosts", "trusted_proxy_cidrs", mode="before")
     @classmethod
