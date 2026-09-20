@@ -618,5 +618,4 @@ html[data-theme="studio"] {
 .external-marker[open] > .external-marker-popover { display: block; }
 .external-marker-start > .external-marker-popover { left: 0; }
 .external-marker-end > .external-marker-popover { right: 0; }
-.calendar-grid:has(.external-marker[open]) { overflow: visible; }
 .source-metrics { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; }
