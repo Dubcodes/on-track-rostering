@@ -8,6 +8,27 @@ from sqlalchemy.orm import Session
 from app.catalog.models import Region, Track
 
 
+def normalized_name(value: str) -> str:
+    return " ".join(value.strip().casefold().split())
+
+
+def normalized_track_match(
+    db: Session,
+    region_id: uuid.UUID,
+    name: str,
+    *,
+    exclude_track_id: uuid.UUID | None = None,
+) -> Track | None:
+    key = normalized_name(name)
+    statement = select(Track).where(Track.region_id == region_id)
+    if exclude_track_id is not None:
+        statement = statement.where(Track.id != exclude_track_id)
+    return next(
+        (track for track in db.scalars(statement) if normalized_name(track.name) == key),
+        None,
+    )
+
+
 def allocate_palette_slot(
     db: Session,
     region_id: uuid.UUID,

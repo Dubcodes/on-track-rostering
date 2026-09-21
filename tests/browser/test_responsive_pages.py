@@ -435,6 +435,51 @@ def browser_site():  # type: ignore[no-untyped-def]
                         mapping_state="UNMATCHED",
                         reconciliation_state="REVIEW",
                     ),
+                    *[
+                        ExternalEventObservation(
+                            provider="HRNZ",
+                            source_track_name="Unmatched Browser Track",
+                            payload_hash=uuid.uuid4().hex,
+                            parsed_facts={
+                                "event_date": (date.today() + timedelta(days=index + 1)).isoformat(),
+                                "discipline": "HARNESS",
+                                "event_kind": "RACE" if index % 2 else "TRIAL",
+                                "venue_confidence": "EXPLICIT",
+                            },
+                            raw_payload={},
+                            mapping_state="UNMATCHED",
+                            reconciliation_state="REVIEW",
+                        )
+                        for index in range(5)
+                    ],
+                    ExternalEventObservation(
+                        provider="HRNZ",
+                        source_track_name="Auckland Trotting Club Browser",
+                        payload_hash=uuid.uuid4().hex,
+                        parsed_facts={
+                            "event_date": date.today().isoformat(),
+                            "discipline": "HARNESS",
+                            "event_kind": "RACE",
+                            "venue_confidence": "CLUB_ONLY",
+                        },
+                        raw_payload={},
+                        mapping_state="UNMATCHED",
+                        reconciliation_state="REVIEW",
+                    ),
+                    ExternalEventObservation(
+                        provider="LOVE_RACING",
+                        source_track_name="Create Browser Venue",
+                        payload_hash=uuid.uuid4().hex,
+                        parsed_facts={
+                            "event_date": date.today().isoformat(),
+                            "discipline": "THOROUGHBRED",
+                            "event_kind": "RACE",
+                            "venue_confidence": "EXPLICIT",
+                        },
+                        raw_payload={},
+                        mapping_state="UNMATCHED",
+                        reconciliation_state="REVIEW",
+                    ),
                 ExternalEventObservation(
                     event_id=external_event.id,
                     provider="API",
@@ -492,7 +537,8 @@ def browser_site():  # type: ignore[no-untyped-def]
             "viewer": (viewer.email, "112233"),
             "workday_id": str(workday.id),
             "cross_workday_id": str(cross_workday.id),
-            "region_id": str(region.id),
+                "region_id": str(region.id),
+                "region_name": region.name,
             "cross_region_id": str(cross_region.id),
             "track_id": str(track.id),
             "track_name": track.name,
@@ -621,13 +667,19 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
 
     page.goto(base_url + "/admin/online-sources")
     assert page.get_by_text("Unmatched Browser Track").count() >= 1
+    assert page.get_by_text("6 observations", exact=False).count() == 1
+    assert page.get_by_text("Source identifies a club", exact=False).count() == 1
     assert page.get_by_text("Conflicting observations").count() == 1
     assert page.get_by_role("button", name="Refresh now").count() == 2
     assert page.get_by_text("PARTIAL", exact=True).count() == 1
-    suggested = page.locator(
-        f'form:has(input[name="external_track_name"][value="{values["track_name"]}"])'
-    )
-    assert suggested.get_by_text(f"Suggested: {values['track_name']}", exact=False).count() == 1
+    suggested_record = page.locator(
+        f'details.control-record:has(input[name="external_track_name"][value="{values["track_name"]}"])'
+    ).first
+    assert suggested_record.get_by_text(
+        f"Suggested: {values['track_name']}", exact=False
+    ).count() == 1
+    suggested_record.locator(":scope > summary").click()
+    suggested = suggested_record.locator('form[action="/admin/online-sources/map"]')
     if width == 320:
         suggested.locator('select[name="track_id"]').select_option(values["track_id"])
         suggested.get_by_role("button", name="Confirm mapping").click()
@@ -635,20 +687,78 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
         assert page.locator(
             f'form:has(input[name="external_track_name"][value="{values["track_name"]}"])'
         ).count() == 0
+    create_record = page.locator(
+        'details.control-record:has(input[name="external_track_name"][value="Create Browser Venue"])'
+    ).first
+    create_record.locator(":scope > summary").click()
+    create_record.get_by_text("Create Track & Map", exact=True).first.click()
+    create_form = create_record.locator('form[action="/admin/online-sources/create-track-map"]')
+    assert create_form.locator('select[name="region_id"]').count() == 1
+    if width == 320:
+        create_form.locator('select[name="region_id"]').select_option(values["region_id"])
+        create_form.get_by_role("button", name="Create Track & Map").click()
+        page.wait_for_url("**/admin/online-sources?created_mapped=1")
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"online-sources-{width}.png")
 
+    structural = page.request.get(base_url + "/admin/structural-master-data.json")
+    assert structural.ok
+    structural_text = structural.text().lower()
+    assert "credential_hash" not in structural_text
+    assert "trusted_device" not in structural_text
+
     page.goto(base_url + "/admin/data-import")
-    unique_region = f"Preview Browser {uuid.uuid4().hex[:8]}"
+    unique_track = f"Preview Browser {uuid.uuid4().hex[:8]}"
+    unique_source = f"Preview Source {uuid.uuid4().hex[:8]}"
     page.locator('textarea[name="pasted_json"]').fill(
-        '{"version":"1","regions":[{"name":"' + unique_region + '"}]}'
+        '{"version":"1","tracks":[{"name":"'
+        + unique_track
+        + '","region":"'
+        + values["region_name"]
+        + '"}],"external_track_mappings":[{"provider":"LOVE_RACING",'
+        + '"external_track_name":"'
+        + unique_source
+        + '","track":"'
+        + unique_track
+        + '","region":"'
+        + values["region_name"]
+        + '"}]}'
     )
     page.get_by_role("button", name="Parse and preview").click()
-    assert page.get_by_text("Preview", exact=True).count() == 1
+    assert page.get_by_text("Preview summary", exact=True).count() == 1
     assert page.get_by_text("create 1", exact=False).count() >= 1
     assert page.get_by_role("button", name="Import these records").count() == 1
+    mapping_details = page.locator("details.control-record").filter(
+        has_text="External Track Mappings"
+    )
+    assert mapping_details.count() == 1
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"data-import-preview-{width}.png")
+    page.get_by_role("button", name="Import these records").click()
+    page.wait_for_url("**/admin/data-import?imported=1")
+    assert page.get_by_text("Import completed atomically.").count() == 1
+
+    page.goto(base_url + "/admin/data-import")
+    page.locator('textarea[name="pasted_json"]').fill(
+        '{"version":"1","external_track_mappings":[{"provider":"LOVE_RACING",'
+        + '"external_track_name":"'
+        + unique_source
+        + '","track":"'
+        + values["track_name"]
+        + '","region":"'
+        + values["region_name"]
+        + '"}]}'
+    )
+    page.get_by_role("button", name="Parse and preview").click()
+    conflict_details = page.locator("details.control-record").filter(
+        has_text="External Track Mappings"
+    )
+    assert conflict_details.get_by_text("conflict 1", exact=False).count() == 1
+    conflict_details.locator("summary").click()
+    assert conflict_details.get_by_text("Conflict", exact=True).count() == 1
+    assert page.get_by_role("button", name="Import these records").count() == 0
+    assert page.get_by_text("Resolve conflicts", exact=False).count() == 1
+    _assert_no_horizontal_overflow(page)
 
     page.goto(base_url + "/settings#calendar")
     minimal = page.locator('input[name="minimal_external_detail"]')

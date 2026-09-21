@@ -1,17 +1,20 @@
+import json
 from datetime import date, time
 
 import pytest
 from sqlalchemy import func, select
 
 from app.auth.policy import Actor
-from app.catalog.models import CrewGroup, Region, Track
+from app.catalog.models import BasePosition, CrewGroup, Region, Track
 from app.external_calendar.adapters import NormalizedProviderResult
 from app.external_calendar.importer import apply_bundle, parse_bundle, preview_bundle
+from app.external_calendar.inventory import source_inventory, structural_master_data_bundle
 from app.external_calendar.models import (
     CalendarDisplayPreference,
     ExternalCalendarEvent,
     ExternalEventObservation,
     ExternalProviderState,
+    ExternalTrackMapping,
 )
 from app.external_calendar.read_models import external_calendar_items
 from app.external_calendar.refresh import refresh_provider
@@ -19,6 +22,7 @@ from app.external_calendar.service import (
     ProviderObservation,
     adopt_external_event,
     confirm_track_mapping,
+    mapped_track,
     reconcile_observation,
 )
 from app.identity.models import Person, User
@@ -317,3 +321,193 @@ def test_unmapped_refresh_counts_unresolved_not_created_events(db):  # type: ign
     assert result.status == "PARTIAL"
     assert result.unresolved == 1 and result.created == 0
     assert db.scalar(select(func.count()).select_from(ExternalCalendarEvent)) == 0
+
+
+def test_source_inventory_groups_unique_provider_identity_and_suppresses_club_suggestion(db):  # type: ignore[no-untyped-def]
+    user = User(email="inventory@example.test", display_name="Inventory Admin", credential_hash="x")
+    region = Region(name="Northern")
+    db.add_all([user, region])
+    db.flush()
+    track = Track(name="Te Rapa", region_id=region.id, palette_slot=1)
+    db.add(track)
+    for index in range(20):
+        db.add(
+            ExternalEventObservation(
+                provider="LOVE_RACING",
+                provider_event_id=f"love-{index}",
+                payload_hash=f"love-{index:02d}",
+                source_track_name="Te Rapa",
+                parsed_facts={
+                    "event_date": f"2026-09-{index % 9 + 1:02d}",
+                    "discipline": "THOROUGHBRED",
+                    "event_kind": "RACE" if index < 10 else "TRIAL",
+                },
+                raw_payload={},
+            )
+        )
+    db.add(
+        ExternalEventObservation(
+            provider="HRNZ",
+            provider_event_id="club-1",
+            payload_hash="club-1",
+            source_track_name="Te Rapa",
+            parsed_facts={
+                "event_date": "2026-10-01",
+                "discipline": "HARNESS",
+                "event_kind": "RACE",
+                "venue_confidence": "CLUB_ONLY",
+            },
+            raw_payload={},
+        )
+    )
+    db.flush()
+    rows = source_inventory(db)
+    assert len(rows) == 2
+    love = next(row for row in rows if row.provider == "LOVE_RACING")
+    assert love.observation_count == 20
+    assert love.event_kinds == ("RACE", "TRIAL")
+    assert love.suggested_track_name == "Te Rapa"
+    club = next(row for row in rows if row.provider == "HRNZ")
+    assert club.club_only is True
+    assert club.suggested_track_name is None
+    confirm_track_mapping(db, "LOVE_RACING", "  TE   RAPA ", track.id, user.id)
+    mapped = next(
+        row
+        for row in source_inventory(db, unmatched_only=False)
+        if row.provider == "LOVE_RACING"
+    )
+    assert mapped.current_track_name == "Te Rapa"
+    assert mapped.current_region_name == "Northern"
+
+
+def test_mapping_import_is_previewable_idempotent_and_reconciles_pending(db):  # type: ignore[no-untyped-def]
+    user = User(email="mapping@example.test", display_name="Mapping Admin", credential_hash="x")
+    region = Region(name="Northern")
+    db.add_all([user, region])
+    db.flush()
+    track = Track(name="Cambridge", region_id=region.id, palette_slot=1)
+    db.add(track)
+    db.add(
+        ExternalEventObservation(
+            provider="HRNZ",
+            provider_event_id="pending-cambridge",
+            payload_hash="pending-cambridge",
+            source_track_name="Cambridge Raceway",
+            parsed_facts={
+                "event_date": "2026-10-01",
+                "discipline": "HARNESS",
+                "event_kind": "RACE",
+                "status": "SCHEDULED",
+            },
+            raw_payload={},
+        )
+    )
+    db.flush()
+    bundle = parse_bundle(
+        json.dumps(
+            {
+                "version": "1",
+                "external_track_mappings": [
+                    {
+                        "provider": "HRNZ",
+                        "external_track_name": "Cambridge Raceway",
+                        "track": "Cambridge",
+                        "region": "Northern",
+                    }
+                ],
+            }
+        )
+    )
+    before = db.scalar(select(func.count()).select_from(ExternalTrackMapping))
+    preview = preview_bundle(db, bundle)
+    assert preview.valid and preview.counts["external_track_mappings"] == {"create": 1}
+    assert db.scalar(select(func.count()).select_from(ExternalTrackMapping)) == before
+    apply_bundle(db, bundle, user.id)
+    db.flush()
+    observation_row = db.scalar(
+        select(ExternalEventObservation).where(
+            ExternalEventObservation.provider_event_id == "pending-cambridge"
+        )
+    )
+    assert observation_row.event_id is not None and observation_row.mapping_state == "MAPPED"
+    assert db.scalar(select(func.count()).select_from(Workday)) == 0
+    assert preview_bundle(db, bundle).counts["external_track_mappings"] == {"match": 1}
+    mapping_count = db.scalar(select(func.count()).select_from(ExternalTrackMapping))
+    apply_bundle(db, bundle, user.id)
+    db.flush()
+    assert db.scalar(select(func.count()).select_from(ExternalTrackMapping)) == mapping_count
+
+
+def test_mapping_import_supports_bundle_track_and_blocks_conflict_missing_or_invalid(db):  # type: ignore[no-untyped-def]
+    user = User(email="bundle-map@example.test", display_name="Bundle Admin", credential_hash="x")
+    north = Region(name="Northern")
+    central = Region(name="Central")
+    db.add_all([user, north, central])
+    db.flush()
+    other = Track(name="Other", region_id=central.id, palette_slot=1)
+    db.add(other)
+    db.flush()
+    confirm_track_mapping(db, "LOVE_RACING", "Te Rapa", other.id, user.id)
+    bundle = parse_bundle(
+        '{"tracks":[{"name":"Te Rapa","region":"Northern"}],'
+        '"external_track_mappings":[{"provider":"HRNZ","external_track_name":"Te Rapa",'
+        '"track":"Te Rapa","region":"Northern"}]}'
+    )
+    assert preview_bundle(db, bundle).valid
+    apply_bundle(db, bundle, user.id)
+    db.flush()
+    assert mapped_track(db, "HRNZ", "Te Rapa").region_id == north.id
+
+    conflict = parse_bundle(
+        '{"external_track_mappings":[{"provider":"LOVE_RACING",'
+        '"external_track_name":"Te Rapa","track":"Te Rapa","region":"Northern"}]}'
+    )
+    conflict_plan = preview_bundle(db, conflict)
+    assert not conflict_plan.valid
+    assert conflict_plan.counts["external_track_mappings"]["conflict"] == 1
+    late_conflict = parse_bundle(
+        '{"tracks":[{"name":"Late Conflict Track","region":"Northern"}],'
+        '"external_track_mappings":[{"provider":"LOVE_RACING",'
+        '"external_track_name":"Te Rapa","track":"Late Conflict Track",'
+        '"region":"Northern"}]}'
+    )
+    with pytest.raises(ValueError, match="Resolve import conflicts"):
+        apply_bundle(db, late_conflict, user.id)
+    assert db.scalar(select(Track).where(Track.name == "Late Conflict Track")) is None
+    missing = parse_bundle(
+        '{"external_track_mappings":[{"provider":"HRNZ","external_track_name":"Missing",'
+        '"track":"Missing","region":"Northern"}]}'
+    )
+    assert preview_bundle(db, missing).counts["external_track_mappings"]["missing_track"] == 1
+    invalid = parse_bundle(
+        '{"external_track_mappings":[{"provider":"UNKNOWN","external_track_name":"Te Rapa",'
+        '"track":"Te Rapa","region":"Northern"}]}'
+    )
+    assert preview_bundle(db, invalid).counts["external_track_mappings"]["invalid_provider"] == 1
+
+
+def test_structural_export_is_safe_strict_and_round_trips_to_matches(db):  # type: ignore[no-untyped-def]
+    user, _region, _track = foundation(db)
+    group = CrewGroup(name="Camera Crew")
+    db.add(group)
+    db.flush()
+    db.add(BasePosition(name="Side 1", crew_group_id=group.id))
+    db.flush()
+    exported = structural_master_data_bundle(db)
+    raw = json.dumps(exported)
+    for forbidden in (
+        "credential_hash",
+        "password",
+        "passkey",
+        "session",
+        "trusted_device",
+        "push_subscription",
+        "private",
+    ):
+        assert forbidden not in raw.casefold()
+    assert "people" not in exported
+    parsed = parse_bundle(raw)
+    plan = preview_bundle(db, parsed)
+    assert plan.valid
+    assert all(values.get("create", 0) == 0 for values in plan.counts.values())
+    assert user.email not in raw

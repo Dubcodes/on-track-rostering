@@ -1,0 +1,56 @@
+{
+  "version": "1",
+  "regions": [
+    {"name": "Northern"},
+    {"name": "Central"},
+    {"name": "Christchurch"},
+    {"name": "Dunedin"},
+    {"name": "Office"}
+  ],
+  "tracks": [
+    {"name": "Example Raceway", "region": "Northern", "map_reference": "https://example.invalid/map"}
+  ],
+  "crew_groups": [
+    {"name": "OB Crew"},
+    {"name": "Camera Crew"},
+    {"name": "Engineers"},
+    {"name": "Presenters"}
+  ],
+  "positions": [
+    {"crew_group": "Camera Crew", "name": "Side 1"},
+    {"crew_group": "Camera Crew", "name": "Side 2"},
+    {"crew_group": "Camera Crew", "name": "Head On"},
+    {"crew_group": "Camera Crew", "name": "Back"},
+    {"crew_group": "Camera Crew", "name": "Turn"},
+    {"crew_group": "Camera Crew", "name": "RTS"},
+    {"crew_group": "Camera Crew", "name": "Gimbal"},
+    {"crew_group": "Camera Crew", "name": "Gimbal Assist"},
+    {"crew_group": "Camera Crew", "name": "Steady"},
+    {"crew_group": "Camera Crew", "name": "Steady Assist"},
+    {"crew_group": "OB Crew", "name": "Director"},
+    {"crew_group": "OB Crew", "name": "VT"},
+    {"crew_group": "OB Crew", "name": "Sound"},
+    {"crew_group": "OB Crew", "name": "Sound/VT"},
+    {"crew_group": "Engineers", "name": "CCU"},
+    {"crew_group": "Engineers", "name": "Engineer"}
+  ],
+  "people": [
+    {
+      "display_name": "Example Crew Member",
+      "email": "crew.member@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "Side 1", "signal": "MANAGER_ALLOW"}
+      ]
+    }
+  ],
+  "external_track_mappings": [
+    {
+      "provider": "LOVE_RACING",
+      "external_track_name": "Example Source Venue",
+      "track": "Example Raceway",
+      "region": "Northern"
+    }
+  ]
+}

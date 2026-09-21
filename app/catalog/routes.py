@@ -11,7 +11,7 @@ from app.audit.service import record_audit
 from app.auth.policy import can_administer_region, require_admin
 from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
-from app.catalog.service import allocate_palette_slot
+from app.catalog.service import allocate_palette_slot, normalized_track_match
 from app.core.database import get_db
 from app.core.enums import DeclinePolicy, Lifecycle
 from app.core.forms import controlled_integrity, optional_uuid
@@ -74,11 +74,14 @@ def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str =
         raise HTTPException(400, "Select an active region.")
     if not can_administer_region(request.state.actor, region_id):
         raise HTTPException(403, "Regional administration authority required.")
+    clean_name = _name(name, 120)
+    if normalized_track_match(db, region_id, clean_name):
+        raise HTTPException(409, "A track in that region already uses that normalized name.")
     try:
         slot = allocate_palette_slot(db, region_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    row = Track(region_id=region_id, name=_name(name, 120), palette_slot=slot, map_reference=map_reference.strip()[:500] or None)
+    row = Track(region_id=region_id, name=clean_name, palette_slot=slot, map_reference=map_reference.strip()[:500] or None)
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.add(row)
         db.flush()
@@ -100,12 +103,15 @@ def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), r
         raise HTTPException(400, "Select an active destination region.")
     previous_region, previous_slot = row.region_id, row.palette_slot
     clean_lifecycle = _lifecycle(lifecycle)
+    clean_name = _name(name, 120)
+    if normalized_track_match(db, region_id, clean_name, exclude_track_id=row.id):
+        raise HTTPException(409, "A track in that region already uses that normalized name.")
     if region_id != row.region_id or (clean_lifecycle == "ACTIVE" and row.lifecycle != "ACTIVE"):
         try:
             row.palette_slot = allocate_palette_slot(db, region_id, preferred=row.palette_slot, exclude_track_id=row.id)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
-    row.name, row.region_id = _name(name, 120), region_id
+    row.name, row.region_id = clean_name, region_id
     row.map_reference, row.lifecycle = map_reference.strip()[:500] or None, clean_lifecycle
     record_audit(db, "track.updated", "track", row.id, request.state.user.id, region_id=row.region_id,
                  detail={"previous_region_id": str(previous_region), "region_id": str(row.region_id),

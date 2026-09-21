@@ -25,7 +25,11 @@ from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
-from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
+from app.external_calendar.models import (
+    ExternalCalendarEvent,
+    ExternalEventObservation,
+    ExternalTrackMapping,
+)
 from app.external_calendar.refresh import RefreshResult
 from app.identity.models import (
     Invitation,
@@ -1306,6 +1310,203 @@ def test_online_source_controls_are_admin_only_and_render_refresh_feedback(
     assert "Love Racing partial" in refreshed.text
     assert "5 observations" in refreshed.text
     assert "One venue needs mapping." in refreshed.text
+
+
+def test_grouped_source_setup_create_track_map_and_safe_exports(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        for index in range(3):
+            db.add(
+                ExternalEventObservation(
+                    provider="LOVE_RACING",
+                    provider_event_id=f"tau-{index}",
+                    payload_hash=f"tau-{index}",
+                    source_track_name="Tauherenikau",
+                    parsed_facts={
+                        "event_date": f"2026-10-{index + 1:02d}",
+                        "discipline": "THOROUGHBRED",
+                        "event_kind": "RACE" if index < 2 else "TRIAL",
+                    },
+                    raw_payload={},
+                )
+            )
+        db.add(
+            ExternalEventObservation(
+                provider="HRNZ",
+                provider_event_id="club-only",
+                payload_hash="club-only",
+                source_track_name="Auckland Trotting Club Inc",
+                parsed_facts={
+                    "event_date": "2026-10-04",
+                    "discipline": "HARNESS",
+                    "event_kind": "RACE",
+                    "venue_confidence": "CLUB_ONLY",
+                },
+                raw_payload={},
+            )
+        )
+        db.commit()
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    assert manager.post(
+        "/admin/online-sources/create-track-map",
+        data={
+            "provider": "LOVE_RACING",
+            "external_track_name": "Tauherenikau",
+            "region_id": str(region_id),
+            "track_name": "Tauherenikau",
+            "csrf_token": manager_csrf,
+        },
+    ).status_code == 403
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    page = admin.get("/admin/online-sources")
+    assert page.status_code == 200
+    assert page.text.count("Tauherenikau") >= 1
+    assert "3 observations" in page.text
+    assert "Race + Trial" in page.text
+    assert "Source identifies a club" in page.text
+    assert admin.post(
+        "/admin/online-sources/create-track-map",
+        data={
+            "provider": "LOVE_RACING",
+            "external_track_name": "Tauherenikau",
+            "region_id": str(region_id),
+            "track_name": "Tauherenikau",
+            "csrf_token": "invalid",
+        },
+    ).status_code == 403
+    created = admin.post(
+        "/admin/online-sources/create-track-map",
+        data={
+            "provider": "LOVE_RACING",
+            "external_track_name": "Tauherenikau",
+            "region_id": str(region_id),
+            "track_name": "Tauherenikau",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+    with factory() as db:
+        track = db.scalar(select(Track).where(Track.name == "Tauherenikau"))
+        assert track is not None and 1 <= track.palette_slot <= 20
+        mapping = db.scalar(
+            select(ExternalTrackMapping).where(
+                ExternalTrackMapping.external_track_name == "Tauherenikau"
+            )
+        )
+        assert mapping.track_id == track.id
+        assert all(
+            row.event_id is not None
+            for row in db.scalars(
+                select(ExternalEventObservation).where(
+                    ExternalEventObservation.source_track_name == "Tauherenikau"
+                )
+            )
+        )
+    blocked_club = admin.post(
+        "/admin/online-sources/create-track-map",
+        data={
+            "provider": "HRNZ",
+            "external_track_name": "Auckland Trotting Club Inc",
+            "region_id": str(region_id),
+            "track_name": "Auckland Trotting Club",
+            "csrf_token": admin_csrf,
+        },
+    )
+    assert blocked_club.status_code == 409
+
+    structural = admin.get("/admin/structural-master-data.json")
+    assert structural.status_code == 200
+    payload = structural.json()
+    assert set(payload) == {
+        "version",
+        "regions",
+        "tracks",
+        "crew_groups",
+        "positions",
+        "external_track_mappings",
+    }
+    serialized = structural.text.casefold()
+    assert "credential_hash" not in serialized and "password" not in serialized
+    template = admin.get("/admin/online-sources/source-inventory.json")
+    assert template.status_code == 200
+    assert template.json()["format"] == "ontrack-source-mapping-template"
+    assert "raw_payload" not in template.text
+
+
+def test_create_track_and_map_rolls_back_when_mapping_fails(routed_db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        db.add(
+            ExternalEventObservation(
+                provider="LOVE_RACING",
+                provider_event_id="rollback-venue",
+                payload_hash="rollback-venue",
+                source_track_name="Rollback Raceway",
+                parsed_facts={
+                    "event_date": "2026-10-09",
+                    "discipline": "THOROUGHBRED",
+                    "event_kind": "RACE",
+                },
+                raw_payload={},
+            )
+        )
+        db.commit()
+
+    def fail_mapping(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise ValueError("Deliberate reconciliation failure.")
+
+    monkeypatch.setattr("app.external_calendar.routes.confirm_track_mapping", fail_mapping)
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    response = admin.post(
+        "/admin/online-sources/create-track-map",
+        data={
+            "provider": "LOVE_RACING",
+            "external_track_name": "Rollback Raceway",
+            "region_id": str(region_id),
+            "track_name": "Rollback Raceway",
+            "csrf_token": csrf,
+        },
+    )
+    assert response.status_code == 409
+    with factory() as db:
+        assert db.scalar(select(Track).where(Track.name == "Rollback Raceway")) is None
+
+
+def test_catalog_track_creation_rejects_normalized_duplicate(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    response = manager.post(
+        "/manage/catalog/tracks",
+        data={"region_id": str(region_id), "name": "  ELLERSLIE  ", "csrf_token": csrf},
+    )
+    assert response.status_code == 409
+    with factory() as db:
+        other_region = db.scalar(select(Region).where(Region.id != region_id))
+        other_region_id = other_region.id
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    allowed = admin.post(
+        "/manage/catalog/tracks",
+        data={
+            "region_id": str(other_region_id),
+            "name": "  ELLERSLIE  ",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert allowed.status_code == 303
+    with factory() as db:
+        created = db.scalar(
+            select(Track).where(Track.region_id == other_region_id, Track.name == "ELLERSLIE")
+        )
+        assert created is not None and 1 <= created.palette_slot <= 20
 
 
 def test_upcoming_feed_is_today_when_rostered_plus_three_across_months(

@@ -13,7 +13,7 @@ from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region,
 from app.catalog.service import allocate_palette_slot
 from app.core.enums import CapabilitySignal
 from app.core.time import parse_time
-from app.external_calendar.models import ExternalCalendarEvent
+from app.external_calendar.models import ExternalCalendarEvent, ExternalTrackMapping
 from app.external_calendar.schemas import ImportBundle
 from app.external_calendar.service import (
     ProviderObservation,
@@ -34,17 +34,21 @@ FORBIDDEN_KEY_PARTS = {
     "bank",
     "payroll",
 }
+SUPPORTED_MAPPING_PROVIDERS = {"LOVE_RACING", "HRNZ", "API"}
 
 
 @dataclass
 class ImportPlan:
     counts: dict[str, dict[str, int]] = field(default_factory=dict)
+    details: dict[str, list[dict[str, str]]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     valid: bool = True
 
-    def bump(self, section: str, result: str) -> None:
+    def bump(self, section: str, result: str, label: str | None = None) -> None:
         values = self.counts.setdefault(section, {})
         values[result] = values.get(result, 0) + 1
+        if label is not None:
+            self.details.setdefault(section, []).append({"label": label, "result": result})
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -103,7 +107,11 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
     }
     for row in bundle.get("regions", []):
         matches = _named(regions, str(row.get("name", "")))
-        plan.bump("regions", "match" if len(matches) == 1 else "conflict" if matches else "create")
+        plan.bump(
+            "regions",
+            "match" if len(matches) == 1 else "conflict" if matches else "create",
+            str(row.get("name", "")),
+        )
     for row in bundle.get("tracks", []):
         region = _named(regions, str(row.get("region", "")))
         matches = [
@@ -114,9 +122,17 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             and normalized_key(item.name) == normalized_key(str(row.get("name", "")))
         ]
         region_known = len(region) == 1 or normalized_key(str(row.get("region", ""))) in bundle_regions
-        plan.bump("tracks", "match" if len(matches) == 1 else "conflict" if not region_known else "create")
+        plan.bump(
+            "tracks",
+            "match" if len(matches) == 1 else "conflict" if not region_known else "create",
+            f"{row.get('region', '')} / {row.get('name', '')}",
+        )
     for row in bundle.get("crew_groups", []):
-        plan.bump("crew_groups", "match" if _named(groups, str(row.get("name", ""))) else "create")
+        plan.bump(
+            "crew_groups",
+            "match" if _named(groups, str(row.get("name", ""))) else "create",
+            str(row.get("name", "")),
+        )
     for row in bundle.get("positions", []):
         group = _named(groups, str(row.get("crew_group", "")))
         matches = [
@@ -127,7 +143,11 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             and normalized_key(item.name) == normalized_key(str(row.get("name", "")))
         ]
         group_known = len(group) == 1 or normalized_key(str(row.get("crew_group", ""))) in bundle_groups
-        plan.bump("positions", "match" if matches else "conflict" if not group_known else "create")
+        plan.bump(
+            "positions",
+            "match" if matches else "conflict" if not group_known else "create",
+            f"{row.get('crew_group', '')} / {row.get('name', '')}",
+        )
     for row in bundle.get("people", []):
         referenced_regions = [str(row["home_region"])] if row.get("home_region") else []
         referenced_groups = [str(value) for value in row.get("crew_groups", [])]
@@ -159,7 +179,7 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             ) in bundle_positions
             missing_position = missing_position or not (existing_position or bundled_position)
         if missing_region or missing_group or missing_position:
-            plan.bump("people", "conflict")
+            plan.bump("people", "conflict", str(row.get("display_name", "")))
             plan.warnings.append(
                 f"Unknown Region, Crew Group, or Position reference for: {row.get('display_name', '')}"
             )
@@ -178,9 +198,53 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             if len(matches) > 1 or (not email and same_names)
             else "create"
         )
-        plan.bump("people", result)
+        plan.bump("people", result, str(row.get("display_name", "")))
         if result == "ambiguous":
             plan.warnings.append(f"Ambiguous person: {row.get('display_name', '')}")
+    existing_mappings = list(db.scalars(select(ExternalTrackMapping)))
+    bundle_track_keys = {
+        (normalized_key(str(row.get("region", ""))), normalized_key(str(row.get("name", ""))))
+        for row in bundle.get("tracks", [])
+    }
+    for row in bundle.get("external_track_mappings", []):
+        provider = str(row.get("provider", "")).upper()
+        external_name = str(row.get("external_track_name", ""))
+        label = f"{provider} / {external_name} → {row.get('region', '')} / {row.get('track', '')}"
+        if provider not in SUPPORTED_MAPPING_PROVIDERS:
+            plan.bump("external_track_mappings", "invalid_provider", label)
+            continue
+        region_matches = _named(regions, str(row.get("region", "")))
+        target_matches = [
+            item
+            for item in tracks
+            if len(region_matches) == 1
+            and item.region_id == region_matches[0].id
+            and normalized_key(item.name) == normalized_key(str(row.get("track", "")))
+        ]
+        target_in_bundle = (
+            normalized_key(str(row.get("region", ""))),
+            normalized_key(str(row.get("track", ""))),
+        ) in bundle_track_keys
+        if len(target_matches) != 1 and not target_in_bundle:
+            plan.bump("external_track_mappings", "missing_track", label)
+            continue
+        current = next(
+            (
+                item
+                for item in existing_mappings
+                if item.provider == provider
+                and item.external_track_key == normalized_key(external_name)
+            ),
+            None,
+        )
+        if current is None:
+            result = "create"
+        elif len(target_matches) == 1 and current.track_id == target_matches[0].id:
+            result = "match"
+        else:
+            result = "conflict"
+        plan.bump("external_track_mappings", result, label)
+
     seen_external: set[tuple[str, str, str]] = set()
     for row in bundle.get("external_events", []):
         provider = str(row["provider"]).upper()
@@ -190,7 +254,7 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             json.dumps(row, sort_keys=True),
         )
         if duplicate_key in seen_external:
-            plan.bump("external_events", "duplicate")
+            plan.bump("external_events", "duplicate", str(row.get("provider_event_id", "")))
             continue
         seen_external.add(duplicate_key)
         track = mapped_track(db, provider, str(row["track"]))
@@ -203,7 +267,7 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             if len(track_matches) == 1:
                 track = track_matches[0]
         if track is None:
-            plan.bump("external_events", "unresolved")
+            plan.bump("external_events", "unresolved", str(row.get("track", "")))
             continue
         existing = db.scalar(
             select(ExternalCalendarEvent).where(
@@ -214,7 +278,7 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             )
         )
         if existing is None:
-            plan.bump("external_events", "create")
+            plan.bump("external_events", "create", str(row.get("provider_event_id", "")))
             continue
         conflict = False
         enrich = False
@@ -231,10 +295,16 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             current = getattr(existing, fact_name)
             enrich = enrich or (incoming is not None and current is None)
             conflict = conflict or (incoming is not None and current is not None and incoming != current)
-        plan.bump("external_events", "conflict" if conflict else "enrich" if enrich else "match")
+        plan.bump(
+            "external_events",
+            "conflict" if conflict else "enrich" if enrich else "match",
+            str(row.get("provider_event_id", "")),
+        )
     plan.valid = not any(
         (section != "external_events" and values.get("conflict", 0))
         or values.get("ambiguous", 0)
+        or values.get("missing_track", 0)
+        or values.get("invalid_provider", 0)
         for section, values in plan.counts.items()
     )
     return plan
@@ -349,6 +419,28 @@ def apply_bundle(db: Session, bundle: dict[str, object], actor_user_id) -> Impor
                         changed_by_user_id=actor_user_id,
                     )
                 )
+    db.flush()
+    for row in bundle.get("external_track_mappings", []):
+        provider = str(row["provider"]).upper()
+        if provider not in SUPPORTED_MAPPING_PROVIDERS:
+            raise ValueError(f"Unsupported external mapping provider: {provider}.")
+        region_matches = _named(list(db.scalars(select(Region))), str(row["region"]))
+        if len(region_matches) != 1:
+            raise ValueError("External Track mapping Region could not be resolved uniquely.")
+        track_matches = [
+            track
+            for track in db.scalars(select(Track).where(Track.region_id == region_matches[0].id))
+            if normalized_key(track.name) == normalized_key(str(row["track"]))
+        ]
+        if len(track_matches) != 1:
+            raise ValueError("External Track mapping target could not be resolved uniquely.")
+        confirm_track_mapping(
+            db,
+            provider,
+            str(row["external_track_name"]),
+            track_matches[0].id,
+            actor_user_id,
+        )
     db.flush()
     for row in bundle.get("external_events", []):
         facts = dict(row.get("facts", {}))

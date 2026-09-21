@@ -241,3 +241,30 @@ python -m app.external_calendar.refresh ALL
 ```
 
 Providers must be enabled first. `OK`, `PARTIAL`, and `ERROR` reflect real component outcomes. Manual rostering remains available in every state. See `docs/RACING_SOURCE_DISCOVERY.md` for live-source limitations.
+
+## Real master-data and Track-mapping readiness
+
+The system is ready to onboard real organisational master data and explicit
+provider-to-Track decisions; this does not mean real staff data or every real
+venue mapping is loaded. Online Sources groups unmatched observations by
+provider plus normalized source name, keeps similarity suggestions advisory,
+and disables suggestions and quick Track creation for HRNZ `CLUB_ONLY`
+evidence.
+
+The strict version-1 neutral import contract now accepts optional
+`external_track_mappings` identified by provider, external source name, and
+canonical Region/Track names. Preview reports create, match, conflict, missing
+Track, and invalid-provider outcomes without writing. Apply processes master
+data before mappings in one transaction, reuses the canonical reconciliation
+service for pending observations, and never silently repoints an existing
+mapping.
+
+Admins can download a dedicated grouped source-review template or a
+non-sensitive structural master-data export. The latter contains Regions,
+Tracks, Crew Groups, Base Positions, and confirmed mappings only; it excludes
+People, authentication data, sessions, notification endpoints, private roster
+data, and publications, and is not a system backup. Confirmed mappings are
+read-only until safe remap semantics are designed. The detailed staging
+workflow and fictional starter bundle are documented in
+`docs/REAL_DATA_ONBOARDING.md` and
+`docs/examples/ontrack-master-data.example.json`.

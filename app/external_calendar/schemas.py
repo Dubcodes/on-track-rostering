@@ -83,6 +83,13 @@ class ExternalEventImport(ImportRow):
     raw: dict[str, object] | None = None
 
 
+class ExternalTrackMappingImport(ImportRow):
+    provider: str = Field(min_length=1, max_length=40)
+    external_track_name: str = Field(min_length=1, max_length=160)
+    track: str = Field(min_length=1, max_length=120)
+    region: str = Field(min_length=1, max_length=100)
+
+
 class ImportBundle(ImportRow):
     version: Literal["1"] = "1"
     regions: list[RegionImport] = Field(default_factory=list, max_length=500)
@@ -90,4 +97,7 @@ class ImportBundle(ImportRow):
     crew_groups: list[CrewGroupImport] = Field(default_factory=list, max_length=500)
     positions: list[PositionImport] = Field(default_factory=list, max_length=2000)
     people: list[PersonImport] = Field(default_factory=list, max_length=10000)
+    external_track_mappings: list[ExternalTrackMappingImport] = Field(
+        default_factory=list, max_length=5000
+    )
     external_events: list[ExternalEventImport] = Field(default_factory=list, max_length=10000)

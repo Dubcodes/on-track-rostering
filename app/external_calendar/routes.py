@@ -4,7 +4,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,10 +16,17 @@ from app.auth.policy import (
     require_admin,
 )
 from app.auth.security import verify_csrf
-from app.catalog.models import Track
+from app.catalog.models import Region, Track
 from app.catalog.presentation import track_token
+from app.catalog.service import allocate_palette_slot, normalized_track_match
 from app.core.database import get_db
 from app.external_calendar.importer import apply_bundle, parse_bundle, preview_bundle
+from app.external_calendar.inventory import (
+    confirmed_mapping_rows,
+    inventory_template,
+    source_inventory,
+    structural_master_data_bundle,
+)
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
@@ -30,7 +37,6 @@ from app.external_calendar.service import (
     confirm_track_mapping,
     event_evidence,
     normalized_key,
-    suggested_track,
 )
 from app.rostering.models import Workday
 from app.web import context, templates
@@ -112,13 +118,7 @@ def sources_page(request: Request, db: Session = Depends(get_db)):
 
 def _sources_response(request: Request, db: Session, *, refresh_result=None):
     states = ensure_provider_states(db)
-    unmatched = list(
-        db.scalars(
-            select(ExternalEventObservation)
-            .where(ExternalEventObservation.mapping_state == "UNMATCHED")
-            .order_by(ExternalEventObservation.retrieved_at.desc())
-        )
-    )
+    unmatched = source_inventory(db, unmatched_only=True)
     conflict_observations = list(
         db.scalars(
             select(ExternalEventObservation)
@@ -132,14 +132,6 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
         for row in conflict_observations
     ]
     tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE").order_by(Track.name)))
-    suggestions = {
-        str(row.id): (
-            None
-            if (row.parsed_facts or {}).get("venue_confidence") == "CLUB_ONLY"
-            else suggested_track(db, row.source_track_name)
-        )
-        for row in unmatched
-    }
     recent_refreshes = list(
         db.scalars(
             select(AuditEvent)
@@ -157,7 +149,10 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
             unmatched=unmatched,
             conflicts=conflicts,
             tracks=tracks,
-            suggestions=suggestions,
+            regions=list(
+                db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name))
+            ),
+            confirmed_mappings=confirmed_mapping_rows(db),
             recent_refreshes=recent_refreshes,
             refresh_result=refresh_result,
         ),
@@ -224,7 +219,10 @@ def map_track(
     track = db.get(Track, track_id)
     if not track or track.lifecycle != "ACTIVE":
         raise HTTPException(400, "Select an active track.")
-    confirm_track_mapping(db, provider, external_track_name, track.id, request.state.user.id)
+    try:
+        confirm_track_mapping(db, provider, external_track_name, track.id, request.state.user.id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     record_audit(
         db,
         "external_track.mapped",
@@ -235,6 +233,96 @@ def map_track(
     )
     db.commit()
     return RedirectResponse("/admin/online-sources?mapped=1", status_code=303)
+
+
+@router.post("/admin/online-sources/create-track-map")
+def create_track_and_map(
+    request: Request,
+    provider: str = Form(...),
+    external_track_name: str = Form(...),
+    region_id: uuid.UUID = Form(...),
+    track_name: str = Form(...),
+    map_reference: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    provider = provider.strip().upper()
+    inventory_item = next(
+        (
+            item
+            for item in source_inventory(db, provider=provider, unmatched_only=True)
+            if item.source_key == normalized_key(external_track_name)
+        ),
+        None,
+    )
+    if inventory_item is None:
+        raise HTTPException(404, "Unmatched source identity not found.")
+    if inventory_item.club_only:
+        raise HTTPException(409, "Create Track & Map is unavailable for a club-only source identity.")
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != "ACTIVE":
+        raise HTTPException(400, "Select an active Region.")
+    clean_name = " ".join(track_name.strip().split())
+    if not 2 <= len(clean_name) <= 120:
+        raise HTTPException(400, "Track name must be between 2 and 120 characters.")
+    duplicate = normalized_track_match(db, region.id, clean_name)
+    if duplicate:
+        raise HTTPException(
+            409,
+            f"{duplicate.name} already exists in {region.name}; map to the existing Track instead.",
+        )
+    try:
+        track = Track(
+            region_id=region.id,
+            name=clean_name,
+            palette_slot=allocate_palette_slot(db, region.id),
+            map_reference=map_reference.strip()[:500] or None,
+        )
+        db.add(track)
+        db.flush()
+        confirm_track_mapping(db, provider, external_track_name, track.id, request.state.user.id)
+        record_audit(
+            db,
+            "track.created",
+            "track",
+            track.id,
+            request.state.user.id,
+            region_id=region.id,
+            detail={"source_setup": True},
+        )
+        record_audit(
+            db,
+            "external_track.mapped",
+            "track",
+            track.id,
+            request.state.user.id,
+            detail={"provider": provider, "external_track_key": inventory_item.source_key},
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse("/admin/online-sources?created_mapped=1", status_code=303)
+
+
+@router.get("/admin/online-sources/source-inventory.json")
+def download_source_inventory(request: Request, db: Session = Depends(get_db)):
+    require_admin(request.state.actor)
+    return JSONResponse(
+        inventory_template(db),
+        headers={"Content-Disposition": 'attachment; filename="ontrack-source-mapping-template.json"'},
+    )
+
+
+@router.get("/admin/structural-master-data.json")
+def download_structural_master_data(request: Request, db: Session = Depends(get_db)):
+    require_admin(request.state.actor)
+    return JSONResponse(
+        structural_master_data_bundle(db),
+        headers={"Content-Disposition": 'attachment; filename="ontrack-structural-master-data.json"'},
+    )
 
 
 @router.get("/external-events/{event_id}", response_class=HTMLResponse)

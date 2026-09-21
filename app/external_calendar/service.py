@@ -39,10 +39,13 @@ def normalized_key(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
 
-def suggested_track(db: Session, source_name: str) -> Track | None:
+def suggested_track(
+    db: Session, source_name: str, *, tracks: list[Track] | None = None
+) -> Track | None:
     """Return a display-only suggestion; it never creates an authoritative mapping."""
     source = normalized_key(source_name)
-    tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE")))
+    if tracks is None:
+        tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE")))
     exact = [track for track in tracks if normalized_key(track.name) == source]
     if len(exact) == 1:
         return exact[0]
@@ -206,7 +209,10 @@ def confirm_track_mapping(
         )
     )
     if mapping:
-        mapping.track_id = track_id
+        if mapping.track_id != track_id:
+            raise ValueError(
+                "This source identity is already mapped to another Track; remapping requires a separate reviewed workflow."
+            )
     else:
         mapping = ExternalTrackMapping(
             provider=provider,
@@ -217,13 +223,17 @@ def confirm_track_mapping(
         )
         db.add(mapping)
     db.flush()
-    for observation in db.scalars(
-        select(ExternalEventObservation).where(
-            ExternalEventObservation.provider == provider,
-            ExternalEventObservation.event_id.is_(None),
-            ExternalEventObservation.source_track_name == external_name,
+    pending = list(
+        db.scalars(
+            select(ExternalEventObservation).where(
+                ExternalEventObservation.provider == provider,
+                ExternalEventObservation.event_id.is_(None),
+            )
         )
-    ):
+    )
+    for observation in pending:
+        if normalized_key(observation.source_track_name) != key:
+            continue
         facts = observation.parsed_facts
         event_date = date.fromisoformat(str(facts["event_date"]))
         event = db.scalar(

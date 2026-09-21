@@ -1067,10 +1067,18 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .control-record { border-top: 1px solid var(--line); padding: 9px 2px; }
 .control-record > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .control-record[open] > summary { margin-bottom: 10px; }
+.source-identity-main { min-width: 0; }
+.source-identity-main > strong, .source-identity-meta { display: block; overflow-wrap: anywhere; }
+.source-identity-meta { margin-top: 3px; font-weight: 600; }
+.source-identity-state { flex: 0 0 auto; }
 .compact-signout { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .compact-signout form { margin: 0; }
 .builder-add-slot { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
-@media (max-width: 560px) { .compact-signout { align-items: stretch; flex-direction: column; } }
+@media (max-width: 560px) {
+  .compact-signout { align-items: stretch; flex-direction: column; }
+  .control-record > summary { align-items: flex-start; }
+  .source-identity-state { max-width: 42%; text-align: right; }
+}
 
 /* Direct workday-builder component vocabulary, adapted to stable On Track draft slots. */
 [hidden] { display: none !important; }
