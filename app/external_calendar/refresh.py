@@ -115,7 +115,7 @@ def refresh_provider(
                 result.matched += 1
         result.warnings.extend(normalized.warnings)
         if result.warnings or result.conflicts or result.unresolved or any(
-            value != "OK" for value in result.components.values()
+            value not in {"OK", "OK_FALLBACK"} for value in result.components.values()
         ):
             result.status = "PARTIAL"
         state = db.get(ExternalProviderState, provider)

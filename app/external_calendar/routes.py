@@ -133,7 +133,11 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
     ]
     tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE").order_by(Track.name)))
     suggestions = {
-        str(row.id): suggested_track(db, row.source_track_name)
+        str(row.id): (
+            None
+            if (row.parsed_facts or {}).get("venue_confidence") == "CLUB_ONLY"
+            else suggested_track(db, row.source_track_name)
+        )
         for row in unmatched
     }
     recent_refreshes = list(

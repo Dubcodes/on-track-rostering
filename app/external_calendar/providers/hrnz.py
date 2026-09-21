@@ -1,15 +1,304 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
 
 from app.external_calendar.adapters import NormalizedProviderResult
 from app.external_calendar.http import SourceHTTPClient, SourceHTTPError
 from app.external_calendar.service import ProviderObservation, normalized_key
 
 RACE_ICS_URL = "https://infohorse.hrnz.co.nz/datahrs/calendar/HRNZOfficialMeetings.ics"
+RACE_DATES_INDEX_URL = "https://infohorse.hrnz.co.nz/datahrs/calendar/Raceday/dates_index.htm"
+PROGRAMMES_URL = "https://infohorse.hrnz.co.nz/datahrs/programmes/programm.htm"
 TRIALS_DIARY_URL = "https://www.hrnz.co.nz/racing/race-programmes/trials-diary/"
+_INFOHORSE_HOST = "infohorse.hrnz.co.nz"
+_MONTHS = {
+    name.lower(): number
+    for number, name in enumerate(
+        ("", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+    )
+    if name
+}
+
+
+@dataclass(frozen=True)
+class RaceMonthLink:
+    month: date
+    url: str
+
+
+@dataclass(frozen=True)
+class ProgrammeEntry:
+    event_date: date
+    club: str
+    title: str
+    programme_id: str | None
+    tentative: bool
+    venue: str | None
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.current_href: str | None = None
+        self.current_text = ""
+        self.links: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            self.current_href = dict(attrs).get("href")
+            self.current_text = ""
+
+    def handle_data(self, data: str) -> None:
+        if self.current_href is not None:
+            self.current_text = f"{self.current_text} {' '.join(data.split())}".strip()
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self.current_href is not None:
+            self.links.append((self.current_href, self.current_text))
+            self.current_href = None
+            self.current_text = ""
+
+
+class _TableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_row = False
+        self.in_cell = False
+        self.cell_text = ""
+        self.cell_links: list[tuple[str, str]] = []
+        self.link_href: str | None = None
+        self.link_text = ""
+        self.row: list[dict[str, object]] = []
+        self.rows: list[list[dict[str, object]]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self.in_row = True
+            self.row = []
+        elif self.in_row and tag in {"td", "th"}:
+            self.in_cell = True
+            self.cell_text = ""
+            self.cell_links = []
+        elif self.in_cell and tag == "a":
+            self.link_href = dict(attrs).get("href")
+            self.link_text = ""
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if self.in_cell and text:
+            self.cell_text = f"{self.cell_text} {text}".strip()
+            if self.link_href is not None:
+                self.link_text = f"{self.link_text} {text}".strip()
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self.link_href is not None:
+            self.cell_links.append((self.link_href, self.link_text))
+            self.link_href = None
+            self.link_text = ""
+        elif tag in {"td", "th"} and self.in_cell:
+            self.row.append({"text": self.cell_text, "links": list(self.cell_links)})
+            self.in_cell = False
+        elif tag == "tr" and self.in_row:
+            if self.row:
+                self.rows.append(self.row)
+            self.in_row = False
+
+
+def _allowed_infohorse_url(url: str, *, prefix: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == _INFOHORSE_HOST
+        and parsed.path.lower().startswith(prefix.lower())
+        and parsed.query == ""
+    )
+
+
+def _next_month(value: date) -> date:
+    return date(value.year + (value.month == 12), 1 if value.month == 12 else value.month + 1, 1)
+
+
+def parse_race_dates_index(html: str, *, start: date, end: date) -> list[RaceMonthLink]:
+    parser = _LinkParser()
+    parser.feed(html)
+    links: dict[date, RaceMonthLink] = {}
+    for href, label in parser.links:
+        match = re.fullmatch(r"\s*([A-Za-z]+)\s+(\d{4})\s*", label)
+        if not match or match.group(1).lower() not in _MONTHS:
+            continue
+        month = date(int(match.group(2)), _MONTHS[match.group(1).lower()], 1)
+        url = urljoin(RACE_DATES_INDEX_URL, href)
+        if not _allowed_infohorse_url(url, prefix="/datahrs/calendar/raceday/"):
+            continue
+        if month <= end and _next_month(month) > start:
+            links[month] = RaceMonthLink(month, url)
+    if not links:
+        raise ValueError("HRNZ Racing Dates index contained no allowed month links in range.")
+    return [links[key] for key in sorted(links)]
+
+
+def _explicit_venue(text: str) -> str | None:
+    for pattern in (
+        r"(?i)\bmoved\s+to\s+([A-Za-z][A-Za-z .'-]*?)(?:\)|$)",
+        r"(?i)\bATC\s+at\s+([A-Za-z][A-Za-z .'-]*?)(?:\)|$)",
+    ):
+        found = re.search(pattern, text)
+        if found:
+            return found.group(1).strip()
+    return None
+
+
+def _programme_venue(title: str) -> str | None:
+    for pattern in (
+        r"(?i)\((?:AT|MOVED\s+TO)\s+([A-Za-z][A-Za-z .'-]+)\)\s*$",
+        r"(?i)(?:@|\bAT)\s+([A-Za-z][A-Za-z .'-]+)\s*$",
+    ):
+        found = re.search(pattern, title)
+        if found:
+            return found.group(1).strip()
+    return None
+
+
+def parse_programme_index(html: str) -> tuple[list[ProgrammeEntry], list[str]]:
+    parser = _TableParser()
+    parser.feed(html)
+    entries: list[ProgrammeEntry] = []
+    warnings: list[str] = []
+    previous_club = ""
+    for row in parser.rows:
+        if len(row) < 3:
+            continue
+        texts = [str(cell["text"]).strip() for cell in row]
+        date_index = next((i for i, value in enumerate(texts) if re.search(r"\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b", value)), None)
+        linked = next(
+            (
+                (href, text)
+                for cell in row
+                for href, text in cell["links"]
+                if text
+                and _allowed_infohorse_url(
+                    urljoin(PROGRAMMES_URL, href), prefix="/datahrs/programmes/"
+                )
+            ),
+            None,
+        )
+        if date_index is None or linked is None:
+            continue
+        date_match = re.search(r"\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b", texts[date_index])
+        try:
+            event_date = datetime.strptime(date_match.group(), "%d %b %Y").date()  # type: ignore[union-attr]
+        except ValueError:
+            warnings.append("HRNZ programme row had an invalid date.")
+            continue
+        club = texts[0] or previous_club
+        if club:
+            previous_club = club
+        if not club:
+            warnings.append(f"HRNZ programme for {event_date} had no club identity.")
+            continue
+        href, title = linked
+        url = urljoin(PROGRAMMES_URL, href)
+        programme_id = None
+        if _allowed_infohorse_url(url, prefix="/datahrs/programmes/"):
+            programme_id = urlparse(url).path.rsplit("/", 1)[-1].split(".", 1)[0]
+        entries.append(
+            ProgrammeEntry(
+                event_date=event_date,
+                club=club,
+                title=title.strip(),
+                programme_id=programme_id,
+                tentative=any("tentative" in value.lower() for value in texts),
+                venue=_programme_venue(title),
+            )
+        )
+    if not entries:
+        warnings.append("HRNZ programme index contained no recognisable entries.")
+    return entries, warnings
+
+
+def parse_race_dates_month(
+    html: str,
+    *,
+    month: date,
+    programmes: list[ProgrammeEntry] | None = None,
+) -> tuple[list[ProviderObservation], list[str]]:
+    parser = _TableParser()
+    parser.feed(html)
+    output: list[ProviderObservation] = []
+    warnings: list[str] = []
+    programmes = programmes or []
+    for row in parser.rows:
+        if len(row) < 3:
+            continue
+        texts = [str(cell["text"]).strip() for cell in row]
+        if not re.fullmatch(r"\d{1,2}", texts[0]):
+            continue
+        club_cell = row[-1]
+        linked_club = next((text for _href, text in club_cell["links"] if text), "")
+        club = linked_club.strip()
+        if not club:
+            warnings.append(f"HRNZ Racing Dates row {texts[0]} {month:%B %Y} had no club.")
+            continue
+        try:
+            event_date = date(month.year, month.month, int(texts[0]))
+        except ValueError:
+            warnings.append(f"HRNZ Racing Dates row had an invalid date in {month:%B %Y}.")
+            continue
+        marker = next((value for value in texts[1:-1] if value in {"*", "+"}), "")
+        row_text = texts[-1]
+        explicit_venue = _explicit_venue(row_text)
+        candidates = [
+            entry
+            for entry in programmes
+            if entry.event_date == event_date and normalized_key(entry.club) == normalized_key(club)
+        ]
+        programme = candidates[0] if len(candidates) == 1 else None
+        if len(candidates) > 1:
+            warnings.append(f"HRNZ programme match was ambiguous for {club} on {event_date}.")
+        venue = explicit_venue or (programme.venue if programme else None)
+        tentative = "(P)" in row_text.upper() or bool(programme and programme.tentative)
+        facts: dict[str, object] = {
+            "status": "SCHEDULED",
+            "club": club,
+            "venue_confidence": "EXPLICIT" if venue else "CLUB_ONLY",
+            "tentative": tentative,
+        }
+        if marker == "*":
+            facts["meeting_period"] = "NIGHT"
+        elif marker == "+":
+            facts["meeting_period"] = "TWILIGHT"
+        if venue:
+            facts["venue_evidence"] = venue
+        if programme:
+            facts["programme_title"] = programme.title
+            if programme.programme_id:
+                facts["programme_id"] = programme.programme_id
+        source_name = venue or club
+        output.append(
+            ProviderObservation(
+                provider="HRNZ",
+                provider_event_id=f"race-html:{event_date}:{normalized_key(club)}",
+                event_date=event_date,
+                source_track_name=source_name,
+                discipline="HARNESS",
+                event_kind="RACE",
+                facts=facts,
+                raw_payload={
+                    "club": club,
+                    "row": row_text,
+                    "meeting_marker": marker or None,
+                    "programme_id": programme.programme_id if programme else None,
+                    "programme_title": programme.title if programme else None,
+                },
+            )
+        )
+    if not output:
+        warnings.append(f"HRNZ Racing Dates page for {month:%B %Y} contained no recognisable meetings.")
+    return output, warnings
 
 
 def _unfold_ics(text: str) -> list[str]:
@@ -186,35 +475,137 @@ class HRNZAdapter:
     def __init__(self, client: SourceHTTPClient):
         self.client = client
 
+    def _get_infohorse(self, url: str, *, accept: str, prefix: str) -> str:
+        if not _allowed_infohorse_url(url, prefix=prefix):
+            raise SourceHTTPError("HRNZ source URL was outside the allowlist.")
+        response = self.client.get(url, accept=accept)
+        final_url = getattr(response, "url", url)
+        if not _allowed_infohorse_url(final_url, prefix=prefix):
+            raise SourceHTTPError("HRNZ source redirected outside the allowlist.")
+        return response.text
+
     def fetch(self, start: date, end: date) -> dict[str, object]:
         payload: dict[str, object] = {"errors": {}}
-        for key, url, accept in (
-            ("races", RACE_ICS_URL, "text/calendar,text/plain"),
-            ("trials", TRIALS_DIARY_URL, "text/html"),
-        ):
+        try:
+            race_ics = self._get_infohorse(
+                RACE_ICS_URL,
+                accept="text/calendar,text/plain",
+                prefix="/datahrs/calendar/",
+            )
             try:
-                payload[key] = self.client.get(url, accept=accept).text
-            except SourceHTTPError as exc:
-                payload["errors"][key] = str(exc)  # type: ignore[index]
+                parsed_ics, _ics_warnings = parse_race_ics(race_ics)
+            except ValueError as exc:
+                raise SourceHTTPError(str(exc)) from exc
+            if not parsed_ics:
+                raise SourceHTTPError("HRNZ racing calendar contained no usable meetings.")
+            payload["race_ics"] = race_ics
+        except SourceHTTPError as exc:
+            payload["errors"]["race_ics"] = str(exc)  # type: ignore[index]
+            try:
+                index_html = self._get_infohorse(
+                    RACE_DATES_INDEX_URL,
+                    accept="text/html",
+                    prefix="/datahrs/calendar/raceday/",
+                )
+                month_links = parse_race_dates_index(index_html, start=start, end=end)
+                months: dict[str, str] = {}
+                for link in month_links:
+                    try:
+                        months[link.month.isoformat()] = self._get_infohorse(
+                            link.url,
+                            accept="text/html",
+                            prefix="/datahrs/calendar/raceday/",
+                        )
+                    except SourceHTTPError as month_exc:
+                        payload["errors"][f"race_month_{link.month:%Y_%m}"] = str(  # type: ignore[index]
+                            month_exc
+                        )
+                payload["race_months"] = months
+                try:
+                    payload["programmes"] = self._get_infohorse(
+                        PROGRAMMES_URL,
+                        accept="text/html",
+                        prefix="/datahrs/programmes/",
+                    )
+                except SourceHTTPError as programme_exc:
+                    payload["errors"]["race_programmes"] = str(programme_exc)  # type: ignore[index]
+            except (SourceHTTPError, ValueError) as fallback_exc:
+                payload["errors"]["race_dates_fallback"] = str(fallback_exc)  # type: ignore[index]
+        try:
+            payload["trials"] = self.client.get(TRIALS_DIARY_URL, accept="text/html").text
+        except SourceHTTPError as exc:
+            payload["errors"]["trials"] = str(exc)  # type: ignore[index]
         return payload
 
     def normalize(self, payload: object, start: date, end: date) -> NormalizedProviderResult:
         if not isinstance(payload, dict):
             raise ValueError("HRNZ payload was invalid.")
         output: list[ProviderObservation] = []
-        warnings = list((payload.get("errors") or {}).values())
-        components = {key: "ERROR" for key in (payload.get("errors") or {})}
-        parsers = (("races", parse_race_ics), ("trials", lambda value: parse_trials_diary(value, reference=start)))
-        for key, parser in parsers:
-            if isinstance(payload.get(key), str):
+        errors = payload.get("errors") if isinstance(payload.get("errors"), dict) else {}
+        warnings: list[str] = []
+        components: dict[str, str] = {}
+
+        if isinstance(payload.get("race_ics"), str):
+            try:
+                parsed, parser_warnings = parse_race_ics(payload["race_ics"])
+                output.extend(parsed)
+                warnings.extend(parser_warnings)
+                components["races"] = "PARTIAL" if parser_warnings else "OK"
+            except ValueError as exc:
+                warnings.append(str(exc))
+                components["races"] = "ERROR"
+        elif isinstance(payload.get("race_months"), dict):
+            programmes: list[ProgrammeEntry] = []
+            fallback_warnings: list[str] = []
+            if isinstance(payload.get("programmes"), str):
+                programmes, programme_warnings = parse_programme_index(payload["programmes"])
+                fallback_warnings.extend(programme_warnings)
+            elif "race_programmes" in errors:
+                fallback_warnings.append("HRNZ programme enrichment was unavailable.")
+            for key, html in payload["race_months"].items():
+                if not isinstance(key, str) or not isinstance(html, str):
+                    continue
                 try:
-                    parsed, parser_warnings = parser(payload[key])
-                    output.extend(parsed)
-                    warnings.extend(parser_warnings)
-                    components[key] = "PARTIAL" if parser_warnings else "OK"
-                except ValueError as exc:
-                    warnings.append(str(exc))
-                    components[key] = "ERROR"
+                    month = date.fromisoformat(key)
+                except ValueError:
+                    fallback_warnings.append("HRNZ fallback payload used an invalid month key.")
+                    continue
+                parsed, parser_warnings = parse_race_dates_month(
+                    html, month=month, programmes=programmes
+                )
+                output.extend(parsed)
+                fallback_warnings.extend(parser_warnings)
+            warnings.extend(fallback_warnings)
+            race_errors = [key for key in errors if key.startswith("race_month_")]
+            warnings.extend(
+                f"HRNZ Racing Dates month {key.removeprefix('race_month_')} was unavailable."
+                for key in race_errors
+            )
+            if any(item.event_kind == "RACE" for item in output):
+                components["races"] = (
+                    "PARTIAL_FALLBACK" if fallback_warnings or race_errors else "OK_FALLBACK"
+                )
+            else:
+                components["races"] = "ERROR"
+        else:
+            components["races"] = "ERROR"
+            for key in ("race_ics", "race_dates_fallback"):
+                if key in errors:
+                    warnings.append(str(errors[key]))
+
+        if isinstance(payload.get("trials"), str):
+            try:
+                parsed, parser_warnings = parse_trials_diary(payload["trials"], reference=start)
+                output.extend(parsed)
+                warnings.extend(parser_warnings)
+                components["trials"] = "PARTIAL" if parser_warnings else "OK"
+            except ValueError as exc:
+                warnings.append(str(exc))
+                components["trials"] = "ERROR"
+        else:
+            components["trials"] = "ERROR"
+            if "trials" in errors:
+                warnings.append(str(errors["trials"]))
         output = [item for item in output if start <= item.event_date <= end]
         if not output:
             raise ValueError("HRNZ returned no usable calendar observations.")

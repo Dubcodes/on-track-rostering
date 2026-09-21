@@ -4,6 +4,7 @@ import json
 import re
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
+from zoneinfo import ZoneInfo
 
 from app.external_calendar.adapters import NormalizedProviderResult
 from app.external_calendar.http import SourceHTTPClient, SourceHTTPError
@@ -32,6 +33,8 @@ _MONTHS = {
     )
     if name
 }
+_MEETING_TYPES = {"P": "RACE", "R": "RACE", "T": "TRIAL"}
+_NEW_ZEALAND = ZoneInfo("Pacific/Auckland")
 
 
 class _EventTileParser(HTMLParser):
@@ -136,9 +139,16 @@ def parse_calendar_json(raw: str) -> tuple[list[ProviderObservation], list[str]]
     warnings: list[str] = []
     for record in records:
         try:
-            kind = "TRIAL" if record["WebMeetingType"] == "T" else "RACE"
+            meeting_type = str(record["WebMeetingType"]).strip().upper()
+            if meeting_type not in _MEETING_TYPES:
+                warnings.append(
+                    f"Love Racing calendar record used unknown WebMeetingType {meeting_type or '(blank)'}."
+                )
+                continue
+            kind = _MEETING_TYPES[meeting_type]
             millis = int(re.search(r"-?\d+", str(record["RaceDate"])).group())
-            event_date = datetime.fromtimestamp(millis / 1000, tz=UTC).date()
+            # RaceInfo encodes NZ midnight as an absolute ASP.NET timestamp.
+            event_date = datetime.fromtimestamp(millis / 1000, tz=UTC).astimezone(_NEW_ZEALAND).date()
             track = str(record["Racecourse"]).strip()
             provider_id = str(record.get("DayID") or f"{kind.lower()}:{event_date}:{normalized_key(track)}")
             if not track:

@@ -13,7 +13,8 @@ Discovery was performed against the official public sources on 21 September 2026
 - Request: `start` and `end` in `dd-MMM-yyyy` form.
 - Useful fields: `DayID`, `RaceDate` (`/Date(milliseconds)/`), `Racecourse`, `Club`, and `WebMeetingType`.
 - Stable identity: `DayID`.
-- Classification: `WebMeetingType == T` is a trial; other published meeting types are race meetings.
+- Classification: observed and explicitly accepted values are `T` (trial) and `R`/`P` (race meeting). Unknown values are skipped with a warning; they are never silently treated as races.
+- Date semantics: the ASP.NET timestamp is converted to `Pacific/Auckland` before taking the calendar date; representative live values encode New Zealand midnight and would be one day early if truncated in UTC.
 - Timing and race count: not present in this calendar response, so they remain unknown.
 - Horizon: accepts a bounded date interval. On Track requests the configured lookback/future horizon once per refresh.
 - Observed behavior: one response covers races and trials and is the preferred source. The site can apply an upstream bot challenge; this is surfaced as a component error rather than bypassed.
@@ -28,8 +29,8 @@ No documented public Love Racing API was found. No authentication, cookie captur
 ### Race meetings
 
 - Provider: `HRNZ`
-- Official index: `https://infohorse.hrnz.co.nz/datahrs/calendar/raceday/dates_index.htm`
-- Chosen source: `https://infohorse.hrnz.co.nz/datahrs/calendar/HRNZOfficialMeetings.ics`
+- Official index: `https://infohorse.hrnz.co.nz/datahrs/calendar/Raceday/dates_index.htm`
+- Preferred source: `https://infohorse.hrnz.co.nz/datahrs/calendar/HRNZOfficialMeetings.ics`
 - Format: iCalendar (`VEVENT`).
 - Useful fields: `UID`, `DTSTART`, `SUMMARY`, and `LOCATION`.
 - Stable identity: `UID`, with date/normalized venue fallback.
@@ -38,7 +39,13 @@ No documented public Love Racing API was found. No authentication, cookie captur
 - Caching: one request per refresh. No meeting-detail fan-out.
 - Failure modes: HTTP/challenge response, non-iCalendar body, or malformed individual events.
 
-During local live smoke testing, the official ICS host returned HTTP 403 to a non-browser service client even though the link is publicly advertised. The adapter and offline contract tests are complete, but this component correctly reports `ERROR`/provider `PARTIAL` until the deployment environment can fetch the official feed. On Track does not bypass the challenge.
+If the ICS request fails or contains no usable meetings, On Track follows the bounded month links published by the official Racing Dates index. Only `https://infohorse.hrnz.co.nz/datahrs/calendar/Raceday/` URLs on the exact official host are allowed. Only months intersecting the requested horizon are fetched; there is no recursive crawl and no meeting-detail fan-out. A successful fallback is reported explicitly as `OK_FALLBACK` (or `PARTIAL_FALLBACK` when individual pages or rows warn).
+
+Racing Dates rows identify the racing **club**, not necessarily the physical Track. Club text is preserved as unresolved source evidence unless the same row explicitly states a relocation/venue, such as `moved to Methven`, or the single bounded official programme-index request supplies an unambiguous date-and-club match with explicit venue wording such as `ATC @ CAMBRIDGE` or `BANKS PENINSULA AT ORARI`. Tentative, night, and twilight markers remain source facts. They do not cancel or hide an event, fabricate a time, or create a global club-to-Track mapping.
+
+The official programme index is `https://infohorse.hrnz.co.nz/datahrs/programmes/programm.htm`. It is optional enrichment for the HTML fallback. On Track reads the index only, retains programme title/identity and explicit venue evidence, and never fans out across the linked programme detail pages. Ambiguous matches stay unresolved.
+
+During local live smoke testing, the official Infohorse host returned HTTP 403 to the application service client even though the pages and ICS link are publicly visible. The adapter and offline contract tests cover both sources, but a deployment environment receiving the same response correctly reports the race component as `ERROR`. On Track does not impersonate a browser or bypass the upstream restriction.
 
 HRNZ also documents an API at `https://harness.hrnz.co.nz/APIdoc/Version-1.1/`, but production access requires approval and is a paid service. It is therefore not used or represented as a public API.
 
@@ -71,6 +78,6 @@ HRNZ also documents an API at `https://harness.hrnz.co.nz/APIdoc/Version-1.1/`, 
 | --- | --- | --- |
 | Love Racing races | RaceInfo JSON, official event-HTML fallback | Live |
 | Love Racing trials | RaceInfo JSON | Live |
-| HRNZ races | Official ICS | Upstream HTTP 403 from local service client; reports partial |
+| HRNZ races | Official ICS; bounded official Racing Dates/programme-index fallback | Upstream HTTP 403 from local service client; reports race error while trials remain independent |
 | HRNZ trials | Official Trials Diary HTML | Live |
 | Future API | None | Not configured |
