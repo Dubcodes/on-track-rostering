@@ -19,9 +19,8 @@ from app.auth.security import (
 from app.auth.service import create_invitation, validated_email
 from app.branding.service import update_branding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
-from app.catalog.service import allocate_palette_slot
 from app.core.database import get_db
-from app.core.enums import Lifecycle, Role
+from app.core.enums import DeclinePolicy, Lifecycle, Role
 from app.core.forms import controlled_integrity, optional_uuid
 from app.core.time import utcnow
 from app.identity.models import (
@@ -68,16 +67,30 @@ def _active_reference(db: Session, model, raw_id: str, label: str):  # type: ign
 @router.get("", response_class=HTMLResponse)
 def admin_page(request: Request, db: Session = Depends(get_db)):
     _admin(request)
-    track_rows = list(
-        db.execute(select(Track, Region.name).join(Region).order_by(Region.name, Track.name)).all()
-    )
+    all_regions = list(db.scalars(select(Region).order_by(Region.name)))
+    all_tracks = list(db.scalars(select(Track).order_by(Track.name)))
+    active_regions = [row for row in all_regions if row.lifecycle == Lifecycle.ACTIVE.value]
+    active_region_ids = {row.id for row in active_regions}
     users = list(db.scalars(select(User).order_by(User.display_name)))
     return templates.TemplateResponse(
         "admin.html",
         context(
             request,
-            regions=list(db.scalars(select(Region).order_by(Region.name))),
-            tracks=track_rows,
+            regions=active_regions,
+            archived_regions=[
+                row for row in all_regions if row.lifecycle == Lifecycle.ARCHIVED.value
+            ],
+            tracks=[
+                row
+                for row in all_tracks
+                if row.lifecycle == Lifecycle.ACTIVE.value and row.region_id in active_region_ids
+            ],
+            archived_tracks=[
+                row
+                for row in all_tracks
+                if row.lifecycle == Lifecycle.ARCHIVED.value or row.region_id not in active_region_ids
+            ],
+            decline_policies=[item.value for item in DeclinePolicy],
             groups=list(db.scalars(select(CrewGroup).order_by(CrewGroup.name))),
             positions=list(
                 db.execute(
@@ -160,59 +173,6 @@ def update_system_settings(
     )
     db.commit()
     return RedirectResponse("/admin#system-settings", status_code=303)
-
-
-@router.post("/regions")
-def create_region(
-    request: Request, name: str = Form(...), csrf_token: str = Form(...), db: Session = Depends(get_db)
-):
-    _admin(request)
-    verify_csrf(request, csrf_token)
-    region = Region(name=_name_or_400(name, "Region name", 100))
-    with controlled_integrity(db, "A region already uses that name."):
-        db.add(region)
-        db.flush()
-        record_audit(db, "region.created", "region", region.id, request.state.user.id, region_id=region.id)
-        db.commit()
-    return RedirectResponse("/admin#regions", status_code=303)
-
-
-@router.post("/tracks")
-def create_track(
-    request: Request,
-    name: str = Form(...),
-    region_id: uuid.UUID = Form(...),
-    csrf_token: str = Form(...),
-    db: Session = Depends(get_db),
-):
-    _admin(request)
-    verify_csrf(request, csrf_token)
-    region = db.get(Region, region_id)
-    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
-        raise HTTPException(400, "Select an active region.")
-    try:
-        slot = allocate_palette_slot(db, region_id)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    track = Track(
-        name=_name_or_400(name, "Track name", 120),
-        region_id=region_id,
-        palette_slot=slot,
-    )
-    with controlled_integrity(db, "A track in that region already uses that name."):
-        db.add(track)
-        db.flush()
-        record_audit(
-            db,
-            "track.created",
-            "track",
-            track.id,
-            request.state.user.id,
-            region_id=region_id,
-            detail={"name": track.name, "palette_slot": track.palette_slot},
-        )
-        db.commit()
-    return RedirectResponse("/admin#tracks", status_code=303)
 
 
 @router.post("/positions")

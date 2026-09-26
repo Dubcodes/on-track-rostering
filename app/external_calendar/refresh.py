@@ -114,7 +114,7 @@ def refresh_provider(
             elif outcome == "MATCHED":
                 result.matched += 1
         result.warnings.extend(normalized.warnings)
-        if result.warnings or result.conflicts or result.unresolved or any(
+        if result.warnings or any(
             value not in {"OK", "OK_FALLBACK"} for value in result.components.values()
         ):
             result.status = "PARTIAL"
@@ -125,7 +125,7 @@ def refresh_provider(
         state.observations_found = result.observations
         state.events_created = result.created
         state.events_enriched = result.enriched
-        state.warning_count = len(result.warnings) + result.conflicts + result.unresolved
+        state.warning_count = len(result.warnings)
         record_audit(
             db,
             "external_provider.refreshed",

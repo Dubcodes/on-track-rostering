@@ -623,6 +623,75 @@ def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> No
 
 
 @pytest.mark.parametrize("width", [1280, 320])
+def test_live_staging_management_build_entry_and_contextual_help(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["admin"])
+
+    page.goto(base_url + "/admin")
+    assert page.get_by_text("Active Regions", exact=True).count() == 1
+    assert page.get_by_text("Active Tracks", exact=True).count() == 1
+    assert page.get_by_text("Remove unused", exact=True).count() >= 2
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"admin-{width}.png")
+
+    page.goto(base_url + "/manage/catalog")
+    assert page.locator("details.archived-records > summary").filter(
+        has_text="Archived Regions"
+    ).count() == 1
+    assert page.locator("details.archived-records > summary").filter(
+        has_text="Archived Tracks"
+    ).count() == 1
+    _assert_no_horizontal_overflow(page)
+    if width == 1280:
+        _capture_page(page, "master-data-1280.png")
+
+    page.goto(base_url + "/settings")
+    page.get_by_role("link", name="Build", exact=True).click()
+    page.wait_for_url("**/manage/workdays/new")
+    assert page.locator(".builder-start-card").count() == 1
+    assert page.get_by_role("heading", name="Start a private draft").count() == 1
+    assert page.get_by_role("button", name="Start private draft").count() == 1
+    assert page.locator("section.panel > form.form-grid").count() == 0
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, f"build-new-{width}.png")
+    page.locator('input[name="work_date"]').fill(
+        "2030-01-10" if width == 1280 else "2030-01-11"
+    )
+    page.locator('select[name="category"]').select_option("OFFICE_DAY")
+    page.locator('select[name="region_id"]').select_option(values["region_id"])
+    page.locator('select[name="track_id"]').select_option(values["track_id"])
+    page.locator('input[name="title"]').fill(f"Browser private draft {width}")
+    page.get_by_role("button", name="Start private draft").click()
+    page.wait_for_url("**/manage/workdays/*")
+    assert page.locator(".builder-form").count() == 1
+    assert page.get_by_text("Private draft", exact=False).count() >= 1
+
+    for context_key, heading in (
+        ("settings", "Settings"),
+        ("admin", "Administration"),
+        ("online-sources", "Online Sources"),
+    ):
+        page.goto(base_url + f"/help?context_key={context_key}")
+        assert page.get_by_role("heading", name=heading, exact=True).count() == 1
+        _assert_no_horizontal_overflow(page)
+        _capture_page(page, f"help-{context_key}-{width}.png")
+    context.close()
+
+    employee_context = browser.new_context(viewport={"width": width, "height": 900})
+    employee_page = employee_context.new_page()
+    _login(employee_page, base_url, values["employee"])
+    employee_page.goto(base_url + "/help")
+    assert employee_page.get_by_role("heading", name="Help home").count() == 1
+    assert employee_page.locator('a[href="/admin"]').count() == 0
+    assert employee_page.locator('a[href="/manage/catalog"]').count() == 0
+    assert employee_page.locator('a[href="/manage/workdays/new"]').count() == 0
+    _assert_no_horizontal_overflow(employee_page)
+    employee_context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
 def test_master_data_palette_changes_with_theme(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
     context = browser.new_context(viewport={"width": width, "height": 900})
@@ -672,6 +741,11 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     assert page.get_by_text("Conflicting observations").count() == 1
     assert page.get_by_role("button", name="Refresh now").count() == 2
     assert page.get_by_text("PARTIAL", exact=True).count() == 1
+    assert page.get_by_text("Source health", exact=True).count() == 3
+    assert page.get_by_text("Mapping status", exact=True).count() == 3
+    assert page.get_by_text("Actual warnings / errors", exact=True).count() == 3
+    assert page.get_by_text("Unmapped identities", exact=True).count() == 3
+    assert page.get_by_text("Unmapped observations", exact=True).count() == 3
     suggested_record = page.locator(
         f'details.control-record:has(input[name="external_track_name"][value="{values["track_name"]}"])'
     ).first
@@ -1497,7 +1571,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + "/manage/catalog")
     assert page.locator(".brand > strong:first-child").inner_text() == configured_name
-    assert page.get_by_text("Regions", exact=True).is_visible()
+    assert page.get_by_text("Active Regions", exact=True).is_visible()
     assert not errors
     context.close()
 

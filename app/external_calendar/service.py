@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.policy import Actor, require_manage_region
-from app.catalog.models import Track
+from app.catalog.models import Region, Track
 from app.core.time import parse_time, utcnow
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation, ExternalTrackMapping
 from app.rostering.models import Workday, WorkdayRevision
@@ -45,7 +45,13 @@ def suggested_track(
     """Return a display-only suggestion; it never creates an authoritative mapping."""
     source = normalized_key(source_name)
     if tracks is None:
-        tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE")))
+        tracks = list(
+            db.scalars(
+                select(Track)
+                .join(Region, Region.id == Track.region_id)
+                .where(Track.lifecycle == "ACTIVE", Region.lifecycle == "ACTIVE")
+            )
+        )
     exact = [track for track in tracks if normalized_key(track.name) == source]
     if len(exact) == 1:
         return exact[0]

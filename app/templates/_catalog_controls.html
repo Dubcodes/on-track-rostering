@@ -1,0 +1,46 @@
+{% macro region_controls(regions, archived_regions, csrf_token) %}
+<section class="panel" id="regions">
+  <div class="section-heading"><div><p class="eyebrow">Operational geography</p><h2>Active Regions</h2></div></div>
+  {% for region in regions %}
+  <details class="control-record"><summary><strong>{{ region.name }}</strong><span class="badge">Active</span></summary>
+    <form method="post" action="/manage/catalog/regions/{{ region.id }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ACTIVE">
+      <label>Name<input name="name" value="{{ region.name }}" required></label>
+      <label>Decline policy<select name="decline_policy">{% for policy in decline_policies %}<option value="{{ policy }}" {% if region.decline_policy == policy %}selected{% endif %}>{{ policy|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+      <label>Race-day lead minutes<input type="number" min="0" max="1440" name="lead_minutes_race_day" value="{{ region.lead_minutes_race_day }}"></label>
+      <label>Holiday geography<input name="statutory_holiday_region" value="{{ region.statutory_holiday_region or '' }}" placeholder="Auckland"></label>
+      <button>Save region</button>
+    </form>
+    <div class="row-actions danger-actions">
+      <form method="post" action="/manage/catalog/regions/{{ region.id }}/lifecycle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ARCHIVED"><button class="secondary">Archive</button></form>
+      <form method="post" action="/manage/catalog/regions/{{ region.id }}/remove-unused" onsubmit="return confirm('Permanently remove this unused Region?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm_remove" value="yes"><button class="secondary">Remove unused</button></form>
+    </div>
+  </details>
+  {% else %}<p class="muted">No active Regions.</p>{% endfor %}
+  <details><summary>Add Region</summary><form method="post" action="/manage/catalog/regions" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="name" required maxlength="100"></label><button>Add Region</button></form></details>
+  <details class="archived-records"><summary>Archived Regions <span class="badge">{{ archived_regions|length }}</span></summary>
+    {% for region in archived_regions %}<div class="archived-record"><span><strong>{{ region.name }}</strong><small>Hidden from active operational selectors</small></span><div class="row-actions"><form method="post" action="/manage/catalog/regions/{{ region.id }}/lifecycle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ACTIVE"><button>Restore</button></form><form method="post" action="/manage/catalog/regions/{{ region.id }}/remove-unused" onsubmit="return confirm('Permanently remove this unused Region?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm_remove" value="yes"><button class="secondary">Remove unused</button></form></div></div>{% else %}<p class="muted">No archived Regions.</p>{% endfor %}
+  </details>
+</section>
+{% endmacro %}
+
+{% macro track_controls(tracks, archived_tracks, regions, csrf_token) %}
+<section class="panel" id="tracks">
+  <div class="section-heading"><div><p class="eyebrow">Venue master data</p><h2>Active Tracks</h2></div></div>
+  {% for track in tracks %}
+  <details class="control-record"><summary><span><i class="track-dot" data-presentation="{{ track.palette_slot|track_token }}"></i> <strong>{{ track.name }}</strong></span><span class="badge">Active</span></summary>
+    <form method="post" action="/manage/catalog/tracks/{{ track.id }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ACTIVE">
+      <label>Name<input name="name" value="{{ track.name }}" required></label>
+      <label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == track.region_id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+      <label>Map reference<input name="map_reference" value="{{ track.map_reference or '' }}"></label><button>Save track</button>
+    </form>
+    <div class="row-actions danger-actions"><form method="post" action="/manage/catalog/tracks/{{ track.id }}/lifecycle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ARCHIVED"><button class="secondary">Archive</button></form><form method="post" action="/manage/catalog/tracks/{{ track.id }}/remove-unused" onsubmit="return confirm('Permanently remove this unused Track?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm_remove" value="yes"><button class="secondary">Remove unused</button></form></div>
+  </details>
+  {% else %}<p class="muted">No active Tracks.</p>{% endfor %}
+  <details><summary>Add Track</summary><form method="post" action="/manage/catalog/tracks" class="form-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}</select></label><label>Name<input name="name" required></label><label>Map reference<input name="map_reference"></label><button>Add Track</button></form></details>
+  <details class="archived-records"><summary>Archived Tracks <span class="badge">{{ archived_tracks|length }}</span></summary>
+    {% for track in archived_tracks %}<div class="archived-record"><span><i class="track-dot" data-presentation="{{ track.palette_slot|track_token }}"></i> <strong>{{ track.name }}</strong><small>{% if track.lifecycle == 'ARCHIVED' %}Archived Track{% else %}Hidden because its Region is archived{% endif %}</small></span><div class="row-actions">{% if track.lifecycle == 'ARCHIVED' %}<form method="post" action="/manage/catalog/tracks/{{ track.id }}/lifecycle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ACTIVE"><button>Restore</button></form>{% endif %}<form method="post" action="/manage/catalog/tracks/{{ track.id }}/remove-unused" onsubmit="return confirm('Permanently remove this unused Track?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm_remove" value="yes"><button class="secondary">Remove unused</button></form></div></div>{% else %}<p class="muted">No archived Tracks.</p>{% endfor %}
+  </details>
+</section>
+{% endmacro %}

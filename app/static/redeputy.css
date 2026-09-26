@@ -1074,10 +1074,22 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .compact-signout { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .compact-signout form { margin: 0; }
 .builder-add-slot { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.builder-start-card { max-width: 900px; }
+.builder-start-form { display: grid; gap: 18px; }
+.builder-start-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+.builder-start-actions { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
+.builder-start-actions p { max-width: 560px; margin: 0; }
+.archived-records { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.archived-record { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.archived-record strong, .archived-record small { display: block; }
+.danger-actions { margin-top: 12px; }
+.admin-grid > #regions, .admin-grid > #tracks { grid-column: 1 / -1; }
 @media (max-width: 560px) {
   .compact-signout { align-items: stretch; flex-direction: column; }
   .control-record > summary { align-items: flex-start; }
   .source-identity-state { max-width: 42%; text-align: right; }
+  .builder-start-grid { grid-template-columns: 1fr; }
+  .builder-start-actions, .archived-record { align-items: stretch; flex-direction: column; }
 }
 
 /* Direct workday-builder component vocabulary, adapted to stable On Track draft slots. */

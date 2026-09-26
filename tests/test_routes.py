@@ -212,12 +212,12 @@ def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) 
 
     cases = [
         (
-            "/admin/regions",
+            "/manage/catalog/regions",
             {"name": "Northern", "csrf_token": csrf},
             409,
         ),
         (
-            "/admin/tracks",
+            "/manage/catalog/tracks",
             {
                 "name": "Ellerslie",
                 "region_id": str(region_id),
@@ -278,7 +278,7 @@ def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) 
             400,
         ),
         (
-            "/admin/tracks",
+            "/manage/catalog/tracks",
             {
                 "name": "Missing Region Track",
                 "region_id": str(uuid.uuid4()),
@@ -304,7 +304,7 @@ def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) 
         assert client.post(path, data=data, follow_redirects=False).status_code == expected
 
     created = client.post(
-        "/admin/regions",
+        "/manage/catalog/regions",
         data={"name": "Central", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -1507,6 +1507,174 @@ def test_catalog_track_creation_rejects_normalized_duplicate(routed_db) -> None:
             select(Track).where(Track.region_id == other_region_id, Track.name == "ELLERSLIE")
         )
         assert created is not None and 1 <= created.palette_slot <= 20
+
+
+def test_admin_catalog_archive_restore_and_remove_unused_guards(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        admin_user = db.scalar(select(User).where(User.email == "admin@example.test"))
+        db.add(
+            ExternalTrackMapping(
+                provider="LOVE_RACING",
+                external_track_key="referenced-track",
+                external_track_name="Referenced Track",
+                track_id=track_id,
+                confirmed_by_user_id=admin_user.id,
+            )
+        )
+        historical_workday = Workday(
+            region_id=region_id,
+            category="RACE_DAY",
+            created_by_user_id=admin_user.id,
+        )
+        db.add(historical_workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=historical_workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 10, 1),
+            track_id=track_id,
+            track_name_snapshot="Ellerslie historical snapshot",
+            title="Historical day",
+            created_by_user_id=admin_user.id,
+            published_by_user_id=admin_user.id,
+        )
+        db.add(revision)
+        db.flush()
+        historical_workday.current_published_revision_id = revision.id
+        spare_region = Region(name="Setup Mistake")
+        db.add(spare_region)
+        db.flush()
+        spare_track = Track(name="Temporary Track", region_id=spare_region.id, palette_slot=1)
+        db.add(spare_track)
+        db.commit()
+        spare_region_id, spare_track_id = spare_region.id, spare_track.id
+
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    admin_page = admin.get("/admin")
+    assert admin_page.status_code == 200
+    assert f'/manage/catalog/regions/{spare_region_id}' in admin_page.text
+    assert f'/manage/catalog/tracks/{spare_track_id}' in admin_page.text
+
+    archived_track = admin.post(
+        f"/manage/catalog/tracks/{spare_track_id}/lifecycle",
+        data={"lifecycle": "ARCHIVED", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert archived_track.status_code == 303
+    archived_region = admin.post(
+        f"/manage/catalog/regions/{spare_region_id}/lifecycle",
+        data={"lifecycle": "ARCHIVED", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert archived_region.status_code == 303
+    new_workday = admin.get("/manage/workdays/new")
+    assert "Temporary Track" not in new_workday.text
+    assert "Setup Mistake" not in new_workday.text
+    online_sources = admin.get("/admin/online-sources")
+    assert f'value="{spare_track_id}"' not in online_sources.text
+    assert f'value="{spare_region_id}"' not in online_sources.text
+    catalog = admin.get("/manage/catalog")
+    assert "Archived Regions" in catalog.text and "Archived Tracks" in catalog.text
+
+    assert admin.post(
+        f"/manage/catalog/regions/{spare_region_id}/lifecycle",
+        data={"lifecycle": "ACTIVE", "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 303
+    assert admin.post(
+        f"/manage/catalog/tracks/{spare_track_id}/lifecycle",
+        data={"lifecycle": "ACTIVE", "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 303
+
+    assert admin.post(
+        f"/manage/catalog/tracks/{spare_track_id}/remove-unused",
+        data={"confirm_remove": "yes", "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 303
+    assert admin.post(
+        f"/manage/catalog/regions/{spare_region_id}/remove-unused",
+        data={"confirm_remove": "yes", "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 303
+    with factory() as db:
+        assert db.get(Track, spare_track_id) is None
+        assert db.get(Region, spare_region_id) is None
+
+    with factory() as db:
+        snapshot_names = list(
+            db.scalars(
+                select(WorkdayRevision.track_name_snapshot).where(
+                    WorkdayRevision.track_id == track_id
+                )
+            )
+        )
+    assert snapshot_names
+    assert admin.post(
+        f"/manage/catalog/tracks/{track_id}/lifecycle",
+        data={"lifecycle": "ARCHIVED", "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 303
+    assert f'value="{track_id}"' not in admin.get("/manage/workdays/new").text
+    with factory() as db:
+        assert list(
+            db.scalars(
+                select(WorkdayRevision.track_name_snapshot).where(
+                    WorkdayRevision.track_id == track_id
+                )
+            )
+        ) == snapshot_names
+    assert admin.post(
+        f"/manage/catalog/tracks/{track_id}/lifecycle",
+        data={"lifecycle": "ACTIVE", "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 303
+
+    referenced_track = admin.post(
+        f"/manage/catalog/tracks/{track_id}/remove-unused",
+        data={"confirm_remove": "yes", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert referenced_track.status_code == 409
+    assert "Archive it instead" in referenced_track.text
+    referenced_region = admin.post(
+        f"/manage/catalog/regions/{region_id}/remove-unused",
+        data={"confirm_remove": "yes", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert referenced_region.status_code == 409
+    assert "Archive it instead" in referenced_region.text
+
+
+@pytest.mark.parametrize(
+    ("context_key", "heading"),
+    [
+        ("month", "Your Month"),
+        ("builder", "Build a roster"),
+        ("settings", "Settings"),
+        ("admin", "Administration"),
+        ("catalog", "Master data"),
+        ("online-sources", "Online Sources"),
+        ("data-import", "Data Import"),
+        ("unknown", "Help home"),
+    ],
+)
+def test_contextual_help_content_and_authorized_links(routed_db, context_key, heading) -> None:  # type: ignore[no-untyped-def]
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+    response = admin.get(f"/help?context_key={context_key}")
+    assert response.status_code == 200 and heading in response.text
+
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    help_home = employee.get("/help")
+    assert "Help home" in help_home.text
+    assert 'href="/admin"' not in help_home.text
+    assert 'href="/manage/catalog"' not in help_home.text
+    assert 'href="/manage/workdays/new"' not in help_home.text
 
 
 def test_upcoming_feed_is_today_when_rostered_plus_three_across_months(

@@ -57,7 +57,13 @@ def source_inventory(
 
     regions = {row.id: row for row in db.scalars(select(Region))}
     tracks = list(db.scalars(select(Track)))
-    active_tracks = [row for row in tracks if row.lifecycle == "ACTIVE"]
+    active_tracks = [
+        row
+        for row in tracks
+        if row.lifecycle == "ACTIVE"
+        and regions.get(row.region_id)
+        and regions[row.region_id].lifecycle == "ACTIVE"
+    ]
     tracks_by_id = {row.id: row for row in tracks}
     mappings = {
         (row.provider, row.external_track_key): row

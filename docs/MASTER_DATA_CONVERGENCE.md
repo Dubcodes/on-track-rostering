@@ -268,3 +268,29 @@ read-only until safe remap semantics are designed. The detailed staging
 workflow and fictional starter bundle are documented in
 `docs/REAL_DATA_ONBOARDING.md` and
 `docs/examples/ontrack-master-data.example.json`.
+
+## First live-staging UX correction
+
+Administration and the Master Data workspace share one reusable Region/Track
+management surface. Region policy and geography, Track Region/map reference,
+Archive, Restore, and normalized Track-name rules remain owned by the existing
+catalog routes and services. Active and archived records are separated;
+archived Regions and their Tracks are excluded from operational selectors.
+`Remove unused` is deliberately narrow: SQLAlchemy's actual foreign-key graph
+is checked transactionally, referenced records are rejected, and audit history
+is retained. No lifecycle or deletion schema was added.
+
+The manual Build entry now uses the same private-draft and compact component
+language as the existing roster Builder. It remains a small identity step and
+does not persist anything until submitted. External-event adoption continues to
+open the same Builder and retains its duplicate guard.
+
+Help content is centralized as structured topics with concise tasks, rules, and
+authorization-filtered workspace links. Unknown contexts resolve to a useful
+Help index rather than a generic paragraph.
+
+Provider refresh health now reflects source/component and malformed-record
+warnings only. Unmapped observations, unique unmatched identities, confirmed
+mappings, and reconciliation conflicts are computed as a separate Online
+Sources read model. Existing observations and canonical events are not rewritten
+and real Track mappings are not claimed complete.

@@ -8,6 +8,26 @@ from sqlalchemy.orm import Session
 from app.catalog.models import Region, Track
 
 
+def business_reference_tables(db: Session, row: Region | Track) -> list[str]:
+    """Return tables with real FK references to a catalog row.
+
+    Audit scope is preserved separately when removing an unused Region; it is
+    not treated as business use of the catalog record.
+    """
+    target = row.__table__
+    references: list[str] = []
+    for table in target.metadata.tables.values():
+        if table.name == "audit_events":
+            continue
+        for column in table.columns:
+            if not any(fk.column.table is target for fk in column.foreign_keys):
+                continue
+            if db.execute(select(column).where(column == row.id).limit(1)).first():
+                references.append(table.name)
+                break
+    return sorted(set(references))
+
+
 def normalized_name(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 

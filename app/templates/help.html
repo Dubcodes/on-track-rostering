@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Help · {{ branding.product_name }}{% endblock %}
-{% block content %}<section class="page-head"><p class="eyebrow">Help · {{ context_key }}</p><h1>Using {{ branding.product_name }}</h1></section>
-<section class="panel prose">
-{% if context_key == 'month' %}<h2>Your month</h2><p>The calendar shows only published roster information you are authorized to see. Select a coloured workday to open its operational detail.</p>
-{% elif context_key == 'day' %}<h2>Workday detail</h2><p>Primary timing and notes appear first. Supporting calculations and change history stay collapsed until needed.</p>
-{% elif context_key == 'builder' %}<h2>Building a roster</h2><p>Save an incomplete draft freely. Crew cannot see it until you review Preview and publish the revision.</p>
-{% else %}<h2>Authoritative and simple</h2><p>{{ branding.product_name }} stores the published roster directly. Contact your Manager if an assignment or time looks wrong.</p>{% endif %}
-</section>{% endblock %}
+{% block content %}<section class="page-head"><p class="eyebrow">Help{% if context_key != 'index' %} · {{ context_key|replace('-',' ')|title }}{% endif %}</p><h1>{{ help_topic.title }}</h1><p class="lede">{{ help_topic.introduction }}</p></section>
+<div class="settings-grid help-grid"><section class="panel"><h2>Common tasks</h2><ul class="help-list">{% for item in help_topic.tasks %}<li>{{ item }}</li>{% endfor %}</ul></section><section class="panel"><h2>Important rules</h2><ul class="help-list">{% for item in help_topic.rules %}<li>{{ item }}</li>{% endfor %}</ul></section></div>
+{% if help_links %}<section class="panel"><h2>Related workspaces</h2><div class="row-actions">{% for link in help_links %}<a class="button secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</div></section>{% endif %}{% endblock %}
 

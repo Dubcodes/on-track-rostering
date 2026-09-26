@@ -30,6 +30,7 @@ from app.external_calendar.inventory import (
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
+    ExternalTrackMapping,
 )
 from app.external_calendar.refresh import ensure_provider_states, refresh_provider
 from app.external_calendar.service import (
@@ -119,6 +120,26 @@ def sources_page(request: Request, db: Session = Depends(get_db)):
 def _sources_response(request: Request, db: Session, *, refresh_result=None):
     states = ensure_provider_states(db)
     unmatched = source_inventory(db, unmatched_only=True)
+    observations = list(db.scalars(select(ExternalEventObservation)))
+    mappings = list(db.scalars(select(ExternalTrackMapping)))
+    provider_metrics: dict[str, dict[str, int]] = {}
+    for provider, _label in PROVIDERS:
+        provider_observations = [row for row in observations if row.provider == provider]
+        unmatched_observations = [
+            row for row in provider_observations if row.mapping_state == "UNMATCHED"
+        ]
+        provider_metrics[provider] = {
+            "mapped_identities": sum(1 for row in mappings if row.provider == provider),
+            "unmapped_identities": len(
+                {normalized_key(row.source_track_name) for row in unmatched_observations}
+            ),
+            "unmapped_observations": len(unmatched_observations),
+            "conflicts": sum(
+                1
+                for row in provider_observations
+                if row.reconciliation_state == "CONFLICT"
+            ),
+        }
     conflict_observations = list(
         db.scalars(
             select(ExternalEventObservation)
@@ -131,7 +152,14 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
         {"observation": row, "event": db.get(ExternalCalendarEvent, row.event_id)}
         for row in conflict_observations
     ]
-    tracks = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE").order_by(Track.name)))
+    tracks = list(
+        db.scalars(
+            select(Track)
+            .join(Region, Region.id == Track.region_id)
+            .where(Track.lifecycle == "ACTIVE", Region.lifecycle == "ACTIVE")
+            .order_by(Track.name)
+        )
+    )
     recent_refreshes = list(
         db.scalars(
             select(AuditEvent)
@@ -146,6 +174,7 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
             request,
             providers=PROVIDERS,
             provider_states=states,
+            provider_metrics=provider_metrics,
             unmatched=unmatched,
             conflicts=conflicts,
             tracks=tracks,

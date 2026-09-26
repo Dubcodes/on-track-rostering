@@ -41,6 +41,7 @@ from app.employee.read_models import day_assignments, month_items
 from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
 from app.external_calendar.read_models import calendar_preference, external_calendar_items
 from app.external_calendar.service import event_evidence
+from app.help.content import help_topic
 from app.hours.service import fortnight_bounds
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notices.service import prominent_notice, recent_notices, relevant_notice_region_ids
@@ -722,4 +723,8 @@ def update_capability_preference(
 
 @router.get("/help", response_class=HTMLResponse)
 def help_page(request: Request, context_key: str = "general"):
-    return templates.TemplateResponse("help.html", context(request, context_key=context_key))
+    resolved_key, topic, links = help_topic(context_key, request.state.actor)
+    return templates.TemplateResponse(
+        "help.html",
+        context(request, context_key=resolved_key, help_topic=topic, help_links=links),
+    )

@@ -1,5 +1,14 @@
 {% extends "base.html" %}{% set help_context = 'builder' %}
-{% block title %}New workday · {{ branding.product_name }}{% endblock %}
-{% block content %}<a class="back-link" href="/month">← Back to roster</a><section class="page-head"><p class="eyebrow">Manual entry always available</p><h1>Create a workday</h1></section>
-<section class="panel"><form method="post" action="/manage/workdays" class="form-grid" data-region-track-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Date<input type="date" name="work_date" required></label><label>Category<select name="category">{% for category in categories %}<option value="{{ category }}">{{ category.replace('_',' ').title() }}</option>{% endfor %}</select></label><label>Region<select name="region_id" data-track-region required>{% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}</select></label><label>Track<select name="track_id" data-region-track><option value="">To be confirmed</option>{% for track in tracks %}{% if track.region_id == regions[0].id %}<option value="{{ track.id }}">{{ track.name }}</option>{% endif %}{% endfor %}</select></label><label class="wide-field">Title<input name="title" placeholder="Race Day"></label><button>Create draft</button></form><template data-region-track-options>{% for track in tracks %}<option value="{{ track.id }}" data-region-id="{{ track.region_id }}">{{ track.name }}</option>{% endfor %}</template></section>{% endblock %}
+{% block title %}Build roster · {{ branding.product_name }}{% endblock %}
+{% block content %}<a class="back-link" href="/month">← Back to roster</a>
+<section class="page-heading compact-heading builder-head"><div><p class="eyebrow">Private draft</p><h1>Build roster</h1><p class="muted">Choose the day identity, then continue directly into the private roster Builder.</p></div></section>
+<article class="detail-card builder-start-card">
+  <div class="detail-card-heading"><div><p class="eyebrow">Step 1 · day details</p><h2>Start a private draft</h2></div><span class="badge">Not visible to crew</span></div>
+  <form method="post" action="/manage/workdays" class="builder-start-form" data-region-track-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="builder-start-grid"><label>Date<input type="date" name="work_date" required></label><label>Category<select name="category">{% for category in categories %}<option value="{{ category }}">{{ category.replace('_',' ').title() }}</option>{% endfor %}</select></label><label>Region<select name="region_id" data-track-region required>{% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}</select></label><label>Track<select name="track_id" data-region-track><option value="">To be confirmed</option>{% for track in tracks %}{% if track.region_id == regions[0].id %}<option value="{{ track.id }}">{{ track.name }}</option>{% endif %}{% endfor %}</select></label><label class="wide-field">Title <small>Optional</small><input name="title" placeholder="Race Day"></label></div>
+    <div class="builder-start-actions"><p class="muted">The Workday is created only when you continue. You will land in the full Builder to add positions and people.</p><button>Start private draft</button></div>
+  </form>
+  <template data-region-track-options>{% for track in tracks %}<option value="{{ track.id }}" data-region-id="{{ track.region_id }}">{{ track.name }}</option>{% endfor %}</template>
+</article>{% endblock %}
 

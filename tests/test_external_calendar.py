@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import date, time
 
 import pytest
@@ -244,10 +245,18 @@ def test_typed_import_rejects_malformed_and_literal_colour() -> None:
 class FixtureAdapter:
     provider = "LOVE_RACING"
 
-    def __init__(self, observations=None, *, warnings=None, failure: Exception | None = None):
+    def __init__(
+        self,
+        observations=None,
+        *,
+        warnings=None,
+        failure: Exception | None = None,
+        components=None,
+    ):
         self.observations = observations or []
         self.warnings = warnings or []
         self.failure = failure
+        self.components = components
         self.fetches = 0
 
     def fetch(self, start, end):  # type: ignore[no-untyped-def]
@@ -260,7 +269,7 @@ class FixtureAdapter:
         return NormalizedProviderResult(
             self.observations,
             self.warnings,
-            {"calendar": "PARTIAL" if self.warnings else "OK"},
+            self.components or {"calendar": "PARTIAL" if self.warnings else "OK"},
         )
 
 
@@ -316,11 +325,40 @@ def test_unmapped_refresh_counts_unresolved_not_created_events(db):  # type: ign
     result = refresh_provider(
         db,
         "LOVE_RACING",
-        adapter=FixtureAdapter([observation("LOVE_RACING", "Unknown Venue")]),
+        adapter=FixtureAdapter(
+            [observation("LOVE_RACING", f"Unknown Venue {index}") for index in range(10)]
+        ),
     )
-    assert result.status == "PARTIAL"
-    assert result.unresolved == 1 and result.created == 0
+    assert result.status == "OK"
+    assert result.unresolved == 10 and result.created == 0
+    assert result.warnings == []
+    state = db.get(ExternalProviderState, "LOVE_RACING")
+    assert state.warning_count == 0
     assert db.scalar(select(func.count()).select_from(ExternalCalendarEvent)) == 0
+
+
+def test_component_failure_and_malformed_warning_are_provider_health_not_mapping(db):  # type: ignore[no-untyped-def]
+    db.add(ExternalProviderState(provider="HRNZ", enabled=True, status="READY"))
+    db.commit()
+    unresolved = [observation("HRNZ", f"Club {index}") for index in range(9)]
+    partial = refresh_provider(
+        db,
+        "HRNZ",
+        adapter=FixtureAdapter(
+            unresolved,
+            warnings=["Race calendar returned HTTP 403."],
+            components={"races": "ERROR", "trials": "OK"},
+        ),
+    )
+    assert partial.status == "PARTIAL"
+    assert partial.unresolved == 9
+    assert db.get(ExternalProviderState, "HRNZ").warning_count == 1
+
+    malformed = replace(observation("HRNZ", "Malformed Venue"), discipline="UNKNOWN")
+    warned = refresh_provider(db, "HRNZ", adapter=FixtureAdapter([malformed]))
+    assert warned.status == "PARTIAL"
+    assert len(warned.warnings) == 1
+    assert db.get(ExternalProviderState, "HRNZ").warning_count == 1
 
 
 def test_source_inventory_groups_unique_provider_identity_and_suppresses_club_suggestion(db):  # type: ignore[no-untyped-def]

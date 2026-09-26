@@ -46,3 +46,27 @@ python -m app.external_calendar.inventory --format json --provider HRNZ
 ```
 
 Preview every import in the Admin UI before applying it. Preview performs zero writes; Apply is transactional.
+
+## Staging setup controls
+
+Administration and **Master data** now use the same Region and Track controls.
+Active records appear first; archived records stay collapsed and are excluded
+from new operational selectors. Archive records that have operational history,
+and use **Remove unused** only for a confirmed setup mistake with no foreign-key
+business references. Referenced records return a conflict and must be archived
+instead. Restoring a Track retains safe regional palette allocation.
+
+**Build roster** starts with a compact private-draft identity step and then
+redirects into the full Builder. Opening the start page creates nothing. The
+Workday and initial draft are created only after **Start private draft**.
+
+Online Sources separates source health from mapping work. Unmapped observations
+and unique source identities are a mapping backlog, not provider warnings.
+Provider status and warning counts describe fetch, component, contract, or
+malformed-record problems; reconciliation conflicts remain a separate review
+count. A healthy refresh can therefore be `OK` while many venue identities still
+await human confirmation.
+
+Contextual Help is available from roster, management, setup, source, import,
+account, and security workspaces. Related links are filtered to the signed-in
+user's authority; route authorization remains authoritative.
