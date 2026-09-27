@@ -1,0 +1,147 @@
+{
+  "version": "1",
+  "regions": [
+    {"name": "Northern"},
+    {"name": "Central"}
+  ],
+  "tracks": [
+    {"name": "Harbour Park", "region": "Northern"},
+    {"name": "River Downs", "region": "Central"}
+  ],
+  "crew_groups": [
+    {"name": "Camera Crew"},
+    {"name": "Production Crew"}
+  ],
+  "positions": [
+    {"name": "Side 1", "crew_group": "Camera Crew"},
+    {"name": "Side 2", "crew_group": "Camera Crew"},
+    {"name": "Head On", "crew_group": "Camera Crew"},
+    {"name": "Back", "crew_group": "Camera Crew"},
+    {"name": "Turn", "crew_group": "Camera Crew"},
+    {"name": "RTS", "crew_group": "Camera Crew"},
+    {"name": "Gimbal", "crew_group": "Camera Crew"},
+    {"name": "Gimbal Assist", "crew_group": "Camera Crew"},
+    {"name": "Steady", "crew_group": "Camera Crew"},
+    {"name": "Steady Assist", "crew_group": "Camera Crew"},
+    {"name": "Director", "crew_group": "Production Crew"},
+    {"name": "VT", "crew_group": "Production Crew"},
+    {"name": "Sound", "crew_group": "Production Crew"},
+    {"name": "CCU1", "crew_group": "Production Crew"},
+    {"name": "CCU2", "crew_group": "Production Crew"},
+    {"name": "Engineer 1", "crew_group": "Production Crew"}
+  ],
+  "people": [
+    {
+      "display_name": "Alex North",
+      "email": "alex.north@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "Side 1", "signal": "WORKED"},
+        {"crew_group": "Camera Crew", "position": "Side 2", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Bailey North",
+      "email": "bailey.north@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "Head On", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Casey Central",
+      "email": "casey.central@example.invalid",
+      "home_region": "Central",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "Back", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Devon Multi",
+      "email": "devon.multi@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Camera Crew", "Production Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "RTS", "signal": "WORKED"},
+        {"crew_group": "Camera Crew", "position": "Gimbal", "signal": "WORKED"},
+        {"crew_group": "Production Crew", "position": "CCU1", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Emery New",
+      "email": "emery.new@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": []
+    },
+    {
+      "display_name": "Frankie Turn",
+      "email": "frankie.turn@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "Turn", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Gray Gimbal",
+      "email": "gray.gimbal@example.invalid",
+      "home_region": "Central",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "Gimbal", "signal": "WORKED"},
+        {"crew_group": "Camera Crew", "position": "Gimbal Assist", "signal": "MANAGER_ALLOW"}
+      ]
+    },
+    {
+      "display_name": "Harper Steady",
+      "email": "harper.steady@example.invalid",
+      "home_region": "Central",
+      "crew_groups": ["Camera Crew"],
+      "capabilities": [
+        {"crew_group": "Camera Crew", "position": "Steady", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Indigo Director",
+      "email": "indigo.director@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Production Crew"],
+      "capabilities": [
+        {"crew_group": "Production Crew", "position": "Director", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Jordan Sound",
+      "email": "jordan.sound@example.invalid",
+      "home_region": "Central",
+      "crew_groups": ["Production Crew"],
+      "capabilities": [
+        {"crew_group": "Production Crew", "position": "Sound", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Kai VT",
+      "email": "kai.vt@example.invalid",
+      "home_region": "Northern",
+      "crew_groups": ["Production Crew"],
+      "capabilities": [
+        {"crew_group": "Production Crew", "position": "VT", "signal": "WORKED"}
+      ]
+    },
+    {
+      "display_name": "Logan Engineer",
+      "email": "logan.engineer@example.invalid",
+      "home_region": "Central",
+      "crew_groups": ["Production Crew"],
+      "capabilities": [
+        {"crew_group": "Production Crew", "position": "Engineer 1", "signal": "EMPLOYEE_ALLOW"}
+      ]
+    }
+  ],
+  "external_track_mappings": [],
+  "external_events": []
+}

@@ -294,3 +294,45 @@ warnings only. Unmapped observations, unique unmatched identities, confirmed
 mappings, and reconciliation conflicts are computed as a separate Online
 Sources read model. Existing observations and canonical events are not rewritten
 and real Track mappings are not claimed complete.
+
+## Builder/Day fidelity and staging seed tooling — 2026-09-27
+
+The compact Builder and published Day remain on On Track's private-draft and
+immutable-publication architecture. Position and Person search share one
+keyboard/touch controller; its floating list is anchored to the active field,
+uses `visualViewport` when a mobile keyboard reduces the usable screen, flips
+above when necessary, and stays within the visible viewport. Published Day uses
+the policy-aware read model and the same collapsed, provider-neutral source
+evidence partial as external-event detail.
+
+`scripts/export_redeputy_seed.py` is developer-only conversion tooling. It opens
+an explicitly supplied Re-Deputy SQLite database read-only and emits the existing
+version-1 neutral import format. It excludes credentials, tokens, sessions,
+payroll, and integration data, sanitizes names by default, and has no On Track
+runtime dependency on Re-Deputy. Example:
+
+```powershell
+python scripts/export_redeputy_seed.py --database J:\safe-copy\deputy_roster.sqlite3 --output var\seed\redeputy-neutral.json
+```
+
+The local reference checkout currently has no usable populated database, so
+`seed/redeputy-staging-neutral.json` is a committed synthetic fixture: 2 Regions,
+2 Tracks, 2 Crew Groups, 16 operational Positions, and 12 People with selective
+capability signals. Import it through **Administration → Data Import** before
+provisioning logins.
+
+`scripts/create_staging_accounts.py` is a separate, idempotent staging operation.
+It requires an existing active Admin actor, links already-imported People, grants
+regional Employee access, hashes the runtime credential with On Track's auth
+primitive, writes an audit event, and does not send invitations. Existing PINs
+are never changed unless `--reset-existing-pin` is explicit:
+
+```powershell
+$env:ONTRACK_STAGING_SEED_PIN = '<runtime value>'
+$env:DATABASE_URL = '<staging PostgreSQL URL>'
+python scripts/create_staging_accounts.py --bundle seed\redeputy-staging-neutral.json --actor-email admin@example.invalid --limit 5
+```
+
+No credential is stored in the neutral import. No deployment is performed by
+either command. Operations/Travel remains deferred; Love Racing and HRNZ adapters
+already exist but still require deployment-environment qualification.
