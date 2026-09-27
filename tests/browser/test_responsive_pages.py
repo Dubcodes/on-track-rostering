@@ -1369,7 +1369,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert same_date_warning.is_visible()
     assert same_date_warning.inner_text() == "!"
     person_input.fill("Browser Crew")
-    assert person_picker.get_by_text("Browser Crew Member", exact=True).is_visible()
+    assert person_picker.locator(
+        '[data-picker-option][data-label="Browser Crew Member"]'
+    ).is_visible()
     page.keyboard.press("Escape")
     manager_person_input = manager_action.locator(
         '[data-picker-kind="person"] [data-picker-input]'
@@ -1432,6 +1434,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         ).inner_text().casefold() == "other crew"
         _capture_page(page, f"new-position-picker-{width}.png")
         page.keyboard.press("Escape")
+    page.keyboard.press("Escape")
     rows.last.locator("[data-toggle-advanced]").click()
     rows.last.locator("[data-remove-row]").click()
     assert rows.count() == before_add
@@ -1439,7 +1442,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert applications.is_visible()
     applications.locator("summary").click()
     assert applications.locator(".builder-application-position").count() == 1
-    assert applications.get_by_text("Browser Crew Member", exact=True).is_visible()
+    assert applications.locator(
+        ".builder-application-row strong", has_text="Browser Crew Member"
+    ).is_visible()
     assert applications.get_by_role("button", name="Select").is_visible()
     assert applications.get_by_text("also rostered this date", exact=False).is_visible()
     _assert_no_horizontal_overflow(page)
