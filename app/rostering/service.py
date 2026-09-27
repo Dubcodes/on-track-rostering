@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
 from app.audit.service import record_audit
-from app.catalog.models import BasePosition, Region, Track
+from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.enums import (
     AssignmentStatus,
     CapabilitySignal,
@@ -21,6 +21,7 @@ from app.core.time import utcnow
 from app.identity.models import Person, User
 from app.notifications.service import record_event
 from app.positions.service import set_signal
+from app.rostering.conflicts import publication_conflicts
 from app.rostering.diff import PublicationChange, publication_diff
 from app.rostering.models import (
     AllowanceIndicator,
@@ -29,6 +30,12 @@ from app.rostering.models import (
     ProgrammeItem,
     Workday,
     WorkdayRevision,
+)
+from app.rostering.travel import (
+    TRANSPORT_CUSTOM,
+    TRANSPORT_MODES,
+    TRANSPORT_UNASSIGNED,
+    TRANSPORT_VEHICLE,
 )
 
 
@@ -53,6 +60,10 @@ class AssignmentInput:
     note_private: bool = True
     start_time: time | None = None
     end_time: time | None = None
+    transport_mode: str = TRANSPORT_UNASSIGNED
+    vehicle_id: uuid.UUID | None = None
+    custom_transport_text: str = ""
+    accommodation_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,6 +85,8 @@ class DraftDetailsInput:
     race_count: int | None
     day_note: str
     change_reason: str
+    start_origin: str = ""
+    finish_destination: str = ""
 
 
 def _validated_track(db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID) -> str:
@@ -152,6 +165,8 @@ def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> Wor
         first_race_time=published.first_race_time,
         last_race_time=published.last_race_time,
         race_count=published.race_count,
+        start_origin=published.start_origin,
+        finish_destination=published.finish_destination,
         day_note=published.day_note,
         created_by_user_id=actor_user_id,
     )
@@ -174,6 +189,8 @@ def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> Wor
                 note_private=old.note_private,
                 vehicle_id=old.vehicle_id,
                 vehicle_name_snapshot=old.vehicle_name_snapshot,
+                transport_mode=old.transport_mode,
+                custom_transport_text=old.custom_transport_text,
                 accommodation_name=old.accommodation_name,
             )
         )
@@ -379,8 +396,20 @@ def save_draft(
             and not item.note.strip()
             and item.start_time is None
             and item.end_time is None
+            and item.transport_mode == TRANSPORT_UNASSIGNED
+            and not item.custom_transport_text.strip()
+            and not item.accommodation_name.strip()
         )
     ]
+    hotels_by_person: dict[uuid.UUID, str] = {}
+    for item in assignments:
+        hotel = item.accommodation_name.strip()
+        if not item.person_id or not hotel:
+            continue
+        existing_hotel = hotels_by_person.get(item.person_id)
+        if existing_hotel and existing_hotel.casefold() != hotel.casefold():
+            raise ValueError("Use one consistent hotel for each person on this workday.")
+        hotels_by_person[item.person_id] = hotel
 
     active_positions = {
         row.id: row
@@ -389,12 +418,17 @@ def save_draft(
     active_people = {
         row.id: row for row in db.scalars(select(Person).where(Person.lifecycle == "ACTIVE"))
     }
+    active_vehicles = {
+        row.id: row for row in db.scalars(select(Vehicle).where(Vehicle.lifecycle == "ACTIVE"))
+    }
     current = {
         row.id: row
         for row in db.scalars(select(Assignment).where(Assignment.revision_id == draft.id))
     }
     submitted_ids = [row.assignment_id for row in assignments if row.assignment_id is not None]
-    if len(submitted_ids) != len(set(submitted_ids)) or any(row_id not in current for row_id in submitted_ids):
+    if len(submitted_ids) != len(set(submitted_ids)) or any(
+        row_id not in current for row_id in submitted_ids
+    ):
         raise ValueError("One or more assignment rows do not belong to this draft.")
 
     track_name = _validated_track(db, details.track_id, workday.region_id)
@@ -426,12 +460,21 @@ def save_draft(
             raise ValueError("Choose a person, Open position, or TBC / not offered.")
         if item.slot_index is not None and item.slot_index < 1:
             raise ValueError("Slot index must be at least 1.")
+        if item.transport_mode not in TRANSPORT_MODES:
+            raise ValueError("Select a valid transport option.")
+        vehicle = active_vehicles.get(item.vehicle_id) if item.vehicle_id else None
+        if item.transport_mode == TRANSPORT_VEHICLE and vehicle is None:
+            raise ValueError("Select an active vehicle for vehicle transport.")
+        if item.transport_mode != TRANSPORT_VEHICLE and item.vehicle_id is not None:
+            raise ValueError("Vehicle selection does not match the transport option.")
+        if item.transport_mode == TRANSPORT_CUSTOM and not item.custom_transport_text.strip():
+            raise ValueError("Enter the custom transport arrangement.")
         prepared.append((item, position, person))
 
     draft.work_date = details.work_date
     draft.track_id = details.track_id
     draft.track_name_snapshot = track_name
-    draft.title = details.title.strip() or "Workday"
+    draft.title = details.title.strip() or workday.category.replace("_", " ").title()
     draft.start_time, draft.end_time, draft.on_track_time = (
         details.start_time,
         details.end_time,
@@ -443,6 +486,8 @@ def save_draft(
     draft.race_count = details.race_count
     draft.day_note = details.day_note.strip()
     draft.change_reason = details.change_reason.strip()
+    draft.start_origin = details.start_origin.strip()
+    draft.finish_destination = details.finish_destination.strip()
 
     kept_ids = set(submitted_ids)
     for assignment_id, assignment in current.items():
@@ -466,6 +511,17 @@ def save_draft(
         assignment.note_private = item.note_private
         assignment.start_time = item.start_time
         assignment.end_time = item.end_time
+        assignment.transport_mode = item.transport_mode
+        assignment.vehicle_id = item.vehicle_id
+        assignment.vehicle_name_snapshot = (
+            active_vehicles[item.vehicle_id].name if item.vehicle_id else None
+        )
+        assignment.custom_transport_text = item.custom_transport_text.strip()
+        assignment.accommodation_name = (
+            hotels_by_person.get(item.person_id)
+            if item.person_id
+            else item.accommodation_name.strip()
+        ) or None
     workday.lock_version += 1
     db.commit()
     return draft
@@ -507,6 +563,7 @@ def publish(
     draft_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_version: int,
+    confirm_conflicts: bool = False,
 ) -> WorkdayRevision:
     with db.begin():
         workday = db.scalar(
@@ -526,6 +583,11 @@ def publish(
             raise PublishConflict("This revision has already been published.")
         if draft.based_on_revision_id != workday.current_published_revision_id:
             raise PublishConflict("The published roster changed while this draft was being edited.")
+        conflicts = publication_conflicts(db, workday, draft)
+        if conflicts and not confirm_conflicts:
+            raise PublishConflict(
+                "Roster conflicts changed or remain unresolved. Return to Preview and explicitly confirm Publish anyway."
+            )
         previous = (
             db.get(WorkdayRevision, workday.current_published_revision_id)
             if workday.current_published_revision_id
@@ -688,6 +750,8 @@ def decline_published_assignment(
             first_race_time=published.first_race_time,
             last_race_time=published.last_race_time,
             race_count=published.race_count,
+            start_origin=published.start_origin,
+            finish_destination=published.finish_destination,
             day_note=published.day_note,
             change_reason="Employee declined assignment",
             created_by_user_id=actor_user_id,
@@ -719,6 +783,8 @@ def decline_published_assignment(
                     note_private=old.note_private,
                     vehicle_id=old.vehicle_id,
                     vehicle_name_snapshot=old.vehicle_name_snapshot,
+                    transport_mode=old.transport_mode,
+                    custom_transport_text=old.custom_transport_text,
                     accommodation_name=old.accommodation_name,
                 )
             )

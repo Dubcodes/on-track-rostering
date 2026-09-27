@@ -73,6 +73,8 @@ class WorkdayRevision(Base):
     first_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     last_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     race_count: Mapped[int | None] = mapped_column(nullable=True)
+    start_origin: Mapped[str] = mapped_column(String(160), default="")
+    finish_destination: Mapped[str] = mapped_column(String(160), default="")
     day_note: Mapped[str] = mapped_column(Text, default="")
     change_reason: Mapped[str] = mapped_column(String(500), default="")
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
@@ -101,6 +103,8 @@ class Assignment(Base):
     note_private: Mapped[bool] = mapped_column(Boolean, default=True)
     vehicle_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("vehicles.id"), nullable=True)
     vehicle_name_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    transport_mode: Mapped[str] = mapped_column(String(24), default="UNASSIGNED")
+    custom_transport_text: Mapped[str] = mapped_column(String(160), default="")
     accommodation_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
 
 

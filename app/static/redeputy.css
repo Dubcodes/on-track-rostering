@@ -1196,6 +1196,14 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .builder-review-sections summary span { color: var(--muted); font-size: .76rem; }
 .builder-review-crew p { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0; }
 .builder-change-list { display: grid; gap: 6px; margin-top: 8px; }
+.builder-meeting-name { margin: .2rem 0; font-size: 1.05rem; font-weight: 650; color: var(--muted); }
+.builder-travel-panel > summary { align-items: center; }
+.builder-travel-body { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .8rem; padding-top: .8rem; }
+.day-nav-hint { margin: .35rem 0 0; color: var(--muted); font-size: .78rem; }
+.day-swipe-hint { display: inline-block; margin: .35rem 0 0; padding: .25rem .5rem; border-radius: 999px; background: var(--surface-soft); color: var(--text); font-size: .78rem; }
+.day-swipe-hint[hidden] { display: none; }
+.day-nav-buttons { display: inline-flex; gap: .4rem; }
+.conflict-review { border-color: var(--warning,#c67b17); }
 @media (max-width: 560px) {
   .day-date-title { align-items: flex-start; }
   .day-heading-actions { display: grid; width: 100%; grid-template-columns: 1fr; }
@@ -1204,4 +1212,6 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
   .crew-roster-row { grid-template-columns: minmax(68px,.85fr) minmax(0,1.35fr) minmax(44px,.6fr); gap: 5px; padding: 7px 6px; font-size: .78rem; }
   .race-day-rows { grid-template-columns: minmax(78px,max-content) minmax(0,1fr); width: 100%; }
   .change-lines li, .source-evidence-list header { flex-direction: column; }
+  .builder-travel-body { grid-template-columns: 1fr; }
+  .day-nav-buttons { width: 100%; justify-content: space-between; }
 }

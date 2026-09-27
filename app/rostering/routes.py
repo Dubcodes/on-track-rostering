@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.policy import can_manage_region, require_manage_region
 from app.auth.security import verify_csrf
-from app.catalog.models import BasePosition, Region, Track
+from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, WorkdayCategory
 from app.core.time import parse_time
@@ -18,6 +18,7 @@ from app.identity.models import Person, UserPersonLink
 from app.positions.ordering import position_order
 from app.positions.service import bulk_eligibility
 from app.rostering.builder_read import crew_picker_views
+from app.rostering.conflicts import publication_conflicts
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
@@ -35,6 +36,7 @@ from app.rostering.service import (
     update_assignment,
     update_draft_details,
 )
+from app.rostering.travel import TRANSPORT_LABELS, TRANSPORT_UNASSIGNED
 from app.web import context, templates
 
 router = APIRouter(prefix="/manage")
@@ -175,6 +177,14 @@ def _builder_context(
         people_groups_by_assignment=people_groups_by_assignment,
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
+        vehicles=sorted(
+            db.scalars(select(Vehicle).where(Vehicle.lifecycle == "ACTIVE")),
+            key=lambda vehicle: (
+                vehicle.home_region_id != workday.region_id,
+                vehicle.name.casefold(),
+            ),
+        ),
+        transport_labels=TRANSPORT_LABELS,
         **extra,
     )
 
@@ -335,6 +345,7 @@ async def save_workday_draft(
 
     try:
         assignment_ids = form.getlist("assignment_id")
+        row_count = len(assignment_ids)
         position_ids = form.getlist("base_position_id")
         slot_indexes = form.getlist("slot_index")
         person_ids = form.getlist("person_id")
@@ -343,6 +354,10 @@ async def save_workday_draft(
         private_values = form.getlist("note_private")
         starts = form.getlist("assignment_start_time")
         ends = form.getlist("assignment_end_time")
+        transport_modes = form.getlist("transport_mode") or [TRANSPORT_UNASSIGNED] * row_count
+        vehicle_ids = form.getlist("vehicle_id") or [""] * row_count
+        custom_transports = form.getlist("custom_transport_text") or [""] * row_count
+        accommodation_names = form.getlist("accommodation_name") or [""] * row_count
         lengths = {
             len(values)
             for values in (
@@ -355,6 +370,10 @@ async def save_workday_draft(
                 private_values,
                 starts,
                 ends,
+                transport_modes,
+                vehicle_ids,
+                custom_transports,
+                accommodation_names,
             )
         }
         if len(lengths) != 1:
@@ -370,6 +389,10 @@ async def save_workday_draft(
                 note_private=str(private_values[index]) == "1",
                 start_time=parse_time(str(starts[index])),
                 end_time=parse_time(str(ends[index])),
+                transport_mode=str(transport_modes[index] or TRANSPORT_UNASSIGNED),
+                vehicle_id=optional_uuid(vehicle_ids[index]),
+                custom_transport_text=str(custom_transports[index]),
+                accommodation_name=str(accommodation_names[index]),
             )
             for index in range(len(assignment_ids))
         ]
@@ -388,6 +411,8 @@ async def save_workday_draft(
             ),
             day_note=str(form.get("day_note", "")),
             change_reason=str(form.get("change_reason", "")),
+            start_origin=str(form.get("start_origin", "")),
+            finish_destination=str(form.get("finish_destination", "")),
         )
         save_draft(
             db,
@@ -605,6 +630,7 @@ def preview(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             draft,
             changes=preview_diff(db, workday, draft),
             warnings=_publication_warnings(db, workday, draft),
+            conflicts=publication_conflicts(db, workday, draft),
         ),
     )
 
@@ -616,6 +642,7 @@ def publish_workday(
     draft_id: uuid.UUID = Form(...),
     expected_version: int = Form(...),
     csrf_token: str = Form(...),
+    confirm_conflicts: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
@@ -625,7 +652,14 @@ def publish_workday(
     require_manage_region(request.state.actor, workday.region_id)
     db.commit()
     try:
-        publish(db, workday_id, draft_id, request.state.user.id, expected_version)
+        publish(
+            db,
+            workday_id,
+            draft_id,
+            request.state.user.id,
+            expected_version,
+            confirm_conflicts=confirm_conflicts,
+        )
     except PublishConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     return RedirectResponse(f"/day/{workday_id}", status_code=303)

@@ -67,6 +67,8 @@ def publication_diff(
             ("last_race_time", "Last race"),
             ("race_count", "Race count"),
             ("end_time", "Finish"),
+            ("start_origin", "Start origin"),
+            ("finish_destination", "Finish destination"),
             ("day_note", "Normal day notes"),
         ):
             before, after = getattr(previous, attribute), getattr(draft, attribute)
@@ -126,6 +128,8 @@ def publication_diff(
             ("note", "Assignment note"),
             ("note_private", "Note visibility"),
             ("vehicle_name_snapshot", "Vehicle"),
+            ("transport_mode", "Transport"),
+            ("custom_transport_text", "Custom transport"),
             ("accommodation_name", "Accommodation"),
         ):
             before, after = getattr(old, attribute), getattr(new, attribute)

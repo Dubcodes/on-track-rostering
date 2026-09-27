@@ -39,9 +39,7 @@ def normalized_key(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
 
-def suggested_track(
-    db: Session, source_name: str, *, tracks: list[Track] | None = None
-) -> Track | None:
+def suggested_track(db: Session, source_name: str, *, tracks: list[Track] | None = None) -> Track | None:
     """Return a display-only suggestion; it never creates an authoritative mapping."""
     source = normalized_key(source_name)
     if tracks is None:
@@ -306,13 +304,29 @@ def adopt_external_event(
     existing = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
     if existing:
         return existing, False
+    day_type = "Race Day" if event.event_kind == "RACE" else "Trials"
+    meeting_name = day_type
+    observations = db.scalars(
+        select(ExternalEventObservation)
+        .where(ExternalEventObservation.event_id == event.id)
+        .order_by(ExternalEventObservation.retrieved_at.desc())
+    )
+    for observation in observations:
+        candidate = (
+            observation.parsed_facts.get("programme_title")
+            or observation.parsed_facts.get("meeting_name")
+            or observation.raw_payload.get("title")
+        )
+        if isinstance(candidate, str) and candidate.strip():
+            meeting_name = candidate.strip()[:160]
+            break
     workday = create_workday(
         db,
         region_id=track.region_id,
         category="RACE_DAY" if event.event_kind == "RACE" else "TRIALS",
         work_date=event.event_date,
         track_id=track.id,
-        title="Race Day" if event.event_kind == "RACE" else "Trials",
+        title=meeting_name,
         actor_user_id=actor.user_id,
         commit=False,
     )

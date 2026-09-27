@@ -193,9 +193,25 @@
     if (picker.dataset.pickerKind === "position") {
       row.querySelector("[data-position-value]").value = option.dataset.value || "";
       if (option.dataset.value) loadCrewPicker(row, option.dataset.value);
-    } else {
+    } else if (picker.dataset.pickerKind === "person") {
       row.querySelector("[data-person-value]").value = option.dataset.value || "";
       row.querySelector("[data-assignment-state]").value = option.dataset.state || "ASSIGNED";
+    } else if (picker.dataset.pickerKind === "transport") {
+      row.querySelector("[data-transport-value]").value = option.dataset.value || "UNASSIGNED";
+      if (option.dataset.value !== "VEHICLE") {
+        row.querySelector("[data-vehicle-value]").value = "";
+        const vehicleInput = row.querySelector('[data-picker-kind="vehicle"] [data-picker-input]');
+        if (vehicleInput) vehicleInput.value = "Select vehicle";
+      }
+      if (option.dataset.value !== "CUSTOM") {
+        const customInput = row.querySelector('input[name="custom_transport_text"]');
+        if (customInput) customInput.value = "";
+      }
+    } else if (picker.dataset.pickerKind === "vehicle") {
+      row.querySelector("[data-vehicle-value]").value = option.dataset.value || "";
+      row.querySelector("[data-transport-value]").value = option.dataset.value ? "VEHICLE" : "UNASSIGNED";
+      const transportInput = row.querySelector('[data-picker-kind="transport"] [data-picker-input]');
+      if (transportInput) transportInput.value = option.dataset.value ? "Vehicle" : "No transport assigned yet";
     }
     closePicker(picker);
     refreshRow(row);
