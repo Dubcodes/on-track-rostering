@@ -130,9 +130,31 @@ def _builder_context(
         )
         .order_by(OpenPositionApplication.created_at)
     ).all() if workday.current_published_revision_id else []
-    applications_by_slot: dict[uuid.UUID, list[tuple[OpenPositionApplication, Person]]] = {}
+    picker_people_by_position = {
+        position_id: {
+            person.id: person
+            for group in view.groups
+            for person in group[1]
+        }
+        for position_id, view in picker_views.items()
+    }
+    assignments_by_slot = {assignment.slot_key: assignment for assignment in assignments}
+    applications_by_slot: dict[uuid.UUID, list[dict[str, object]]] = {}
     for application, person in application_rows:
-        applications_by_slot.setdefault(application.slot_key, []).append((application, person))
+        assignment = assignments_by_slot.get(application.slot_key)
+        picker_person = (
+            picker_people_by_position.get(assignment.base_position_id, {}).get(person.id)
+            if assignment
+            else None
+        )
+        applications_by_slot.setdefault(application.slot_key, []).append(
+            {
+                "application": application,
+                "person": person,
+                "advisory": picker_person.hint if picker_person else "Eligibility reviewed on selection",
+                "same_date": picker_person.same_date if picker_person else False,
+            }
+        )
     return context(
         request,
         workday=workday,
@@ -193,6 +215,7 @@ def workday_crew_picker(
                             "label": person.display_name,
                             "hint": person.hint,
                             "context": person.context_label,
+                            "same_date": person.same_date,
                         }
                         for person in people
                     ],

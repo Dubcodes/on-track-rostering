@@ -29,7 +29,13 @@ from app.external_calendar.models import (
 from app.identity.models import Person, RoleGrant, TrustedDevice, User, UserPersonLink
 from app.notices.models import OperationalNotice
 from app.notifications.models import NotificationPreference
-from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
+from app.rostering.models import (
+    Assignment,
+    OpenPositionApplication,
+    PositionCapability,
+    Workday,
+    WorkdayRevision,
+)
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("ONTRACK_RUN_BROWSER_TESTS") != "1",
@@ -105,11 +111,25 @@ def browser_site():  # type: ignore[no-untyped-def]
         position = BasePosition(name=f"Browser Position {suffix}", crew_group_id=group.id)
         head_on = BasePosition(name=f"Head On {suffix}", crew_group_id=group.id)
         director = BasePosition(name=f"Director {suffix}", crew_group_id=group.id)
+        side_one = BasePosition(name="Side 1", crew_group_id=group.id)
+        side_two = BasePosition(name="Side 2", crew_group_id=group.id)
         duplicate_a = Person(display_name="John Smith", home_region_id=cross_region.id)
         duplicate_b = Person(display_name="John Smith", home_region_id=cross_region.id)
         person.home_region_id = region.id
         manager_person.home_region_id = region.id
-        db.add_all([track, cross_track, position, head_on, director, duplicate_a, duplicate_b])
+        db.add_all(
+            [
+                track,
+                cross_track,
+                position,
+                head_on,
+                director,
+                side_one,
+                side_two,
+                duplicate_a,
+                duplicate_b,
+            ]
+        )
         db.flush()
         db.add_all(
             [
@@ -159,6 +179,12 @@ def browser_site():  # type: ignore[no-untyped-def]
         )
         db.add(revision)
         db.flush()
+        open_assignment = Assignment(
+            revision_id=revision.id,
+            base_position_id=side_one.id,
+            display_name_snapshot="Side 1",
+            status="OPEN",
+        )
         db.add_all(
             [Assignment(
                 revision_id=revision.id,
@@ -199,7 +225,17 @@ def browser_site():  # type: ignore[no-untyped-def]
                 base_position_id=position.id,
                 display_name_snapshot="Declined camera",
                 status="MANAGER_ACTION_REQUIRED",
-            )]
+            ),
+            open_assignment]
+        )
+        db.flush()
+        db.add(
+            OpenPositionApplication(
+                revision_id=revision.id,
+                slot_key=open_assignment.slot_key,
+                person_id=person.id,
+                status="APPLIED",
+            )
         )
         workday.current_published_revision_id = revision.id
         cross_workday = Workday(region_id=cross_region.id, created_by_user_id=manager.id)
@@ -930,6 +966,42 @@ def _assert_no_horizontal_overflow(page: Page) -> None:
     raise AssertionError(f"horizontal overflow details: {details!r}")
 
 
+def _assert_picker_geometry(page: Page, input_locator, menu_locator) -> None:  # type: ignore[no-untyped-def]
+    input_box = input_locator.bounding_box()
+    menu_box = menu_locator.bounding_box()
+    assert input_box and menu_box
+    viewport = page.evaluate(
+        """() => {
+          const viewport = window.visualViewport;
+          const top = viewport?.offsetTop || 0;
+          const left = viewport?.offsetLeft || 0;
+          const width = viewport?.width || window.innerWidth;
+          const height = viewport?.height || window.innerHeight;
+          return {top, bottom: top + height, left, right: left + width};
+        }"""
+    )
+    placement = menu_locator.get_attribute("data-placement")
+    menu_top, menu_bottom = menu_box["y"], menu_box["y"] + menu_box["height"]
+    menu_left, menu_right = menu_box["x"], menu_box["x"] + menu_box["width"]
+    input_top, input_bottom = input_box["y"], input_box["y"] + input_box["height"]
+    assert menu_top >= viewport["top"] + 3
+    assert menu_bottom <= viewport["bottom"] + 1
+    assert menu_left >= viewport["left"] + 3
+    assert menu_right <= viewport["right"] + 1
+    if placement == "below":
+        assert abs(menu_top - input_bottom) <= 8
+    elif placement == "above":
+        assert abs(input_top - menu_bottom) <= 8
+    else:
+        assert placement == "sheet"
+        assert menu_locator.locator("[data-picker-context]").is_visible()
+    assert not (
+        menu_top < viewport["top"] + 80
+        and input_top > viewport["top"] + 180
+        and placement != "sheet"
+    )
+
+
 def _watch_browser_errors(page: Page) -> list[str]:
     errors: list[str] = []
 
@@ -953,6 +1025,17 @@ def _capture_page(page: Page, name: str) -> None:
     page.screenshot(path=str(output / name), full_page=True)
 
 
+def _capture_viewport(page: Page, name: str) -> None:
+    if os.environ.get("ONTRACK_CAPTURE_BROWSER_SCREENSHOTS") != "1":
+        return
+    output = Path("test-results/ui-fidelity")
+    output.mkdir(parents=True, exist_ok=True)
+    page.evaluate(
+        "async () => { await document.fonts.ready; await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); }"
+    )
+    page.screenshot(path=str(output / name), full_page=False)
+
+
 def _capture_locator(page: Page, selector: str, name: str) -> None:
     if os.environ.get("ONTRACK_CAPTURE_BROWSER_SCREENSHOTS") != "1":
         return
@@ -968,6 +1051,66 @@ def _select_theme(page: Page, base_url: str, theme: str) -> None:
     page.locator('form[action="/settings/theme"] button').click()
     page.wait_for_url("**/settings?theme=saved")
     assert page.locator("html").get_attribute("data-theme") == theme
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_builder_picker_tracks_active_field_geometry(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    usable_height = 760 if width == 1280 else 540
+    context = browser.new_context(
+        viewport={"width": width, "height": usable_height}, has_touch=width <= 760
+    )
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+
+    row = page.locator("[data-assignment-row]").last
+    position_picker = row.locator('[data-picker-kind="position"]')
+    position_input = position_picker.locator("[data-picker-input]")
+    position_menu = position_picker.locator("[data-picker-menu]")
+    position_input.scroll_into_view_if_needed()
+    page.evaluate("window.scrollBy(0, 90)")
+    position_input.click()
+    scroll_after_open = page.evaluate("window.scrollY")
+    position_input.fill("Sid")
+    assert abs(page.evaluate("window.scrollY") - scroll_after_open) <= 1
+    assert position_picker.get_by_text("Side 1", exact=True).is_visible()
+    assert position_picker.get_by_text("Side 2", exact=True).is_visible()
+    _assert_picker_geometry(page, position_input, position_menu)
+    _capture_viewport(page, f"builder-position-picker-open-{width}.png")
+    with page.expect_response(lambda response: "/crew-picker?" in response.url) as crew_response:
+        position_picker.get_by_text("Side 1", exact=True).click()
+    response = crew_response.value
+    assert response.ok, f"crew picker returned {response.status}: {response.text()}"
+
+    person_picker = row.locator('[data-picker-kind="person"]')
+    person_input = person_picker.locator("[data-picker-input]")
+    person_menu = person_picker.locator("[data-picker-menu]")
+    person_input.click()
+    person_input.fill("Browser Crew")
+    crew_option = person_picker.locator('[data-picker-option][data-label="Browser Crew Member"]')
+    crew_option.wait_for(state="visible")
+    _assert_picker_geometry(page, person_input, person_menu)
+    _capture_viewport(page, f"builder-person-picker-open-{width}.png")
+    crew_option.click()
+    page.keyboard.press("Escape")
+    assert person_menu.is_hidden()
+
+    page.get_by_role("button", name="Add position").click()
+    bottom_row = page.locator("[data-assignment-row]").last
+    bottom_position_picker = bottom_row.locator('[data-picker-kind="position"]')
+    bottom_position_input = bottom_position_picker.locator("[data-picker-input]")
+    bottom_position_menu = bottom_position_picker.locator("[data-picker-menu]")
+    bottom_position_input.scroll_into_view_if_needed()
+    bottom_position_input.fill("Sid")
+    assert bottom_position_picker.get_by_text("Side 1", exact=True).is_visible()
+    assert bottom_position_picker.get_by_text("Side 2", exact=True).is_visible()
+    _assert_picker_geometry(page, bottom_position_input, bottom_position_menu)
+    _capture_viewport(page, f"builder-bottom-position-picker-open-{width}.png")
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    context.close()
 
 
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])
@@ -1220,6 +1363,11 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert person_picker.get_by_text(
         "No position history recorded; also rostered this date", exact=True
     ).is_visible()
+    same_date_warning = person_picker.locator(
+        '.same-date-warning[title="Already rostered on this date"]'
+    ).first
+    assert same_date_warning.is_visible()
+    assert same_date_warning.inner_text() == "!"
     person_input.fill("Browser Crew")
     assert person_picker.get_by_text("Browser Crew Member", exact=True).is_visible()
     page.keyboard.press("Escape")
@@ -1287,6 +1435,13 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     rows.last.locator("[data-toggle-advanced]").click()
     rows.last.locator("[data-remove-row]").click()
     assert rows.count() == before_add
+    applications = page.locator(".builder-application-panel")
+    assert applications.is_visible()
+    applications.locator("summary").click()
+    assert applications.locator(".builder-application-position").count() == 1
+    assert applications.get_by_text("Browser Crew Member", exact=True).is_visible()
+    assert applications.get_by_role("button", name="Select").is_visible()
+    assert applications.get_by_text("also rostered this date", exact=False).is_visible()
     _assert_no_horizontal_overflow(page)
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}/preview")
     assert page.get_by_text("Publication preview", exact=True).is_visible()
@@ -1460,12 +1615,12 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     _capture_page(page, f"race-night-crew-month-notice-{width}.png")
 
     page.goto(base_url + "/month?year=2026&month=9")
-    brand = page.get_by_role("link", name="Demo it home")
+    brand = page.get_by_role("link", name="Current month roster")
     assert brand.is_visible()
     page.get_by_role("link", name="Next month").click()
     page.wait_for_url("**/month?year=2026&month=10*")
     assert page.locator(".month-nav > strong").inner_text() == "October 2026"
-    page.get_by_role("link", name="Demo it home").click()
+    page.get_by_role("link", name="Current month roster").click()
     page.wait_for_url(base_url + "/month")
     assert page.locator(".month-nav > strong").inner_text() == date.today().strftime("%B %Y")
     _capture_page(page, f"brand-current-month-return-{width}.png")

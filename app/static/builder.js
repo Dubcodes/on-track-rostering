@@ -4,15 +4,100 @@
   if (!form) return;
   const list = form.querySelector("[data-assignment-list]");
   const template = form.querySelector("[data-assignment-template]");
+  let openPicker = null;
+  let positioningListenersAttached = false;
   const normalize = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const viewport = () => {
+    const visual = window.visualViewport;
+    return {
+      top: visual?.offsetTop || 0,
+      left: visual?.offsetLeft || 0,
+      width: visual?.width || window.innerWidth,
+      height: visual?.height || window.innerHeight,
+    };
+  };
+  const positionPicker = (picker) => {
+    const menu = picker.querySelector("[data-picker-menu]");
+    const input = picker.querySelector("[data-picker-input]");
+    if (menu.hidden) return;
+    const rect = input.getBoundingClientRect();
+    const view = viewport();
+    const margin = 8;
+    const gap = 4;
+    const viewRight = view.left + view.width;
+    const viewBottom = view.top + view.height;
+    const width = Math.min(Math.max(rect.width, 280), Math.max(0, view.width - margin * 2));
+    const left = Math.min(Math.max(rect.left, view.left + margin), viewRight - width - margin);
+    const below = viewBottom - rect.bottom - gap - margin;
+    const above = rect.top - view.top - gap - margin;
+    const desired = Math.min(menu.scrollHeight, 360);
+    let placement = "below";
+    let available = below;
+    if (below < Math.min(160, desired) && above > below) {
+      placement = "above";
+      available = above;
+    }
+    let maxHeight = Math.max(0, Math.min(360, available));
+    let top;
+    if (maxHeight >= 112) {
+      top = placement === "below"
+        ? rect.bottom + gap
+        : rect.top - gap - Math.min(desired, maxHeight);
+    } else {
+      placement = "sheet";
+      top = view.top + margin;
+      maxHeight = Math.max(96, view.height - margin * 2);
+    }
+    Object.assign(menu.style, {
+      position: "fixed",
+      top: `${Math.round(top)}px`,
+      left: `${Math.round(left)}px`,
+      right: "auto",
+      width: `${Math.round(width)}px`,
+      maxWidth: "none",
+      maxHeight: `${Math.round(maxHeight)}px`,
+    });
+    menu.dataset.placement = placement;
+  };
+  const repositionOpenPicker = () => { if (openPicker) positionPicker(openPicker); };
+  const addPositioningListeners = () => {
+    if (positioningListenersAttached) return;
+    window.addEventListener("resize", repositionOpenPicker);
+    window.addEventListener("scroll", repositionOpenPicker, true);
+    window.visualViewport?.addEventListener("resize", repositionOpenPicker);
+    window.visualViewport?.addEventListener("scroll", repositionOpenPicker);
+    positioningListenersAttached = true;
+  };
+  const removePositioningListeners = () => {
+    if (!positioningListenersAttached) return;
+    window.removeEventListener("resize", repositionOpenPicker);
+    window.removeEventListener("scroll", repositionOpenPicker, true);
+    window.visualViewport?.removeEventListener("resize", repositionOpenPicker);
+    window.visualViewport?.removeEventListener("scroll", repositionOpenPicker);
+    positioningListenersAttached = false;
+  };
   const closePicker = (picker) => {
-    picker.querySelector("[data-picker-menu]").hidden = true;
+    const menu = picker.querySelector("[data-picker-menu]");
+    menu.hidden = true;
+    menu.removeAttribute("data-placement");
+    menu.removeAttribute("style");
     picker.querySelector("[data-picker-input]").setAttribute("aria-expanded", "false");
+    if (openPicker === picker) {
+      openPicker = null;
+      removePositioningListeners();
+    }
   };
   const visibleOptions = (picker) => [...picker.querySelectorAll("[data-picker-option]")].filter((item) => !item.hidden);
   const setActive = (picker, option) => {
     picker.querySelectorAll("[data-picker-option]").forEach((item) => item.classList.toggle("is-active", item === option));
-    option?.scrollIntoView({block: "nearest"});
+    if (!option) return;
+    const menu = picker.querySelector("[data-picker-menu]");
+    const optionTop = option.offsetTop;
+    const optionBottom = optionTop + option.offsetHeight;
+    if (optionTop < menu.scrollTop) menu.scrollTop = optionTop;
+    else if (optionBottom > menu.scrollTop + menu.clientHeight) {
+      menu.scrollTop = optionBottom - menu.clientHeight;
+    }
   };
   const filter = (picker) => {
     const needle = normalize(picker.querySelector("[data-picker-input]").value);
@@ -55,6 +140,15 @@
         option.dataset.search = `${person.label} ${person.context || ""} ${person.hint || ""}`;
         const name = document.createElement("strong");
         name.textContent = person.label;
+        if (person.same_date) {
+          const warning = document.createElement("span");
+          warning.className = "same-date-warning";
+          warning.setAttribute("role", "img");
+          warning.setAttribute("aria-label", "Already rostered on this date");
+          warning.title = "Already rostered on this date";
+          warning.textContent = "!";
+          name.append(" ", warning);
+        }
         option.append(name);
         [person.context, person.hint].filter(Boolean).forEach((detail) => {
           const small = document.createElement("small");
@@ -113,6 +207,10 @@
       picker.querySelector("[data-picker-menu]").hidden = false;
       input.setAttribute("aria-expanded", "true");
       filter(picker);
+      openPicker = picker;
+      addPositioningListeners();
+      positionPicker(picker);
+      window.requestAnimationFrame(() => positionPicker(picker));
     };
     input.addEventListener("focus", () => { open(); input.select(); });
     input.addEventListener("input", open);

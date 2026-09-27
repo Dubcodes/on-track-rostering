@@ -19,6 +19,7 @@ class CrewPickerPerson:
     display_name: str
     hint: str
     context_label: str
+    same_date: bool
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ def crew_picker_views(
                 display_name=person.display_name,
                 hint=hint,
                 context_label=context_label,
+                same_date=person.id in same_date_people,
             )
             is_relevant = bool(
                 person.id in forced_relevant.get(position_id, set())

@@ -4,8 +4,8 @@ Reference examined read-only at local commit `20d65d9` (`Re-Deputy 0.5.5`) on 20
 
 | Area | Classification | On Track treatment |
 |---|---|---|
-| Month/Day/Settings visual language | Copy then adapt conceptually | Rebuilt clean Jinja/CSS with the familiar calendar/list, track chips, concise timing strip, collapsed detail, mobile navigation, and holiday star. No Deputy state is referenced. |
-| Manual roster builder | Conceptually reuse/rewrite | Retained stable rows, person selection, Open/TBC distinction, incomplete drafts, Preview and Publish; rewritten against base positions and authoritative revisions. |
+| Month/List/Day/Settings visual language | Directly reuse where appropriate, then adapt | Re-Deputy's calendar/list, compact cards, mobile navigation, holiday marker, theme picker, published-Day detail hierarchy and crew table are adapted onto On Track read models. No Deputy state is referenced. |
+| Manual roster builder | Directly reuse interaction language, then adapt | Compact Position/Person/More rows, grouped searchable pickers, Open/TBC choices and publish-review components are adapted onto canonical base positions, stable slots and authoritative revisions. Preview deliberately remains a separate On Track route. |
 | Public holidays | Copy then adapt | Adapted the deterministic NZ national holiday/Matariki calculation into `app/core/holidays.py`; operational regions remain separate from statutory geography. |
 | Trusted devices and invitations | Conceptually reuse/rewrite | Preserved hash-only random tokens, expiry/single use/revocation concepts and sliding device trust; rewritten for Argon2id, role-sensitive lifetimes, CSRF, auth epochs, and PostgreSQL. |
 | Same-origin/security headers/redirect safety | Conceptually reuse/rewrite | Central middleware/policy implementation replaces Re-Deputy route-specific checks. |
@@ -16,7 +16,7 @@ Reference examined read-only at local commit `20d65d9` (`Re-Deputy 0.5.5`) on 20
 | Release-gate philosophy | Copy then adapt | The Windows-native runner compiles, lints, tests, checks JS, and conditionally runs real PostgreSQL migration idempotence. Docker is excluded from local qualification; Compose is retained for the separate production server. |
 | `main.py` / `database.py` | Behavioral study only | Their behavior informed boundaries; their monolithic architecture was rejected. |
 | Deputy capture, OAuth, iCal, evidence reconciliation, interpreted workdays, roster-note inference | Deputy-specific / do not migrate | Entirely absent. On Track assignments and revision snapshots are authoritative. |
-| Live Love Racing/HRNZ | Deferred investigation | Provider-neutral programme/source override schema only; no scraping occurs in request paths. |
+| Live Love Racing/HRNZ | Implemented as bounded provider adapters | Official public planning evidence is fetched only through explicit Admin/CLI refresh orchestration, normalized into provider-neutral observations and reconciled without blocking manual rostering. HRNZ race/fallback component state remains explicit. No request-path scraping or Deputy source state is used. |
 # Fidelity inventory (2026-09-14)
 
 The current application deliberately reuses Re-Deputy's interaction language, not its data source or runtime architecture.
@@ -48,7 +48,13 @@ The current application deliberately reuses Re-Deputy's interaction language, no
 
 ## Intentionally not ported
 
-Deputy credentials, login, synchronization, scraping, API behavior, source evidence/diagnostics, source-specific alerts, the `S` shortcut, hard-coded historical timesheet anchors, Deputy payroll semantics and SQLite architecture are excluded.
+Deputy credentials, login, synchronization/source state, Deputy-specific controls, arbitrary free-text roles, transport or hotel/accommodation mutation, source-specific alerts, the `S` shortcut, hard-coded historical timesheet anchors, Deputy payroll semantics and SQLite architecture are excluded. Existing vehicle/accommodation snapshot values may be displayed, but are not edited by the Builder.
+
+## Final dedicated fidelity pass
+
+The Month/List, Builder, dedicated Preview and published Day transplants are complete. The description is deliberately not byte-for-byte copying: Re-Deputy's visual and interaction language is directly reused where appropriate and adapted onto On Track's independent domain architecture, authorization and immutable publication model.
+
+On narrow and touch layouts, Builder pickers improve on Re-Deputy's fixed-top mobile menu. JavaScript measures the active Position or Person input against `visualViewport`, chooses an anchored below/above placement, clamps width and height to the usable viewport, and uses a labelled compact sheet only when neither side has useful space. Placement is recomputed for visual-viewport resize/scroll so a reduced keyboard viewport does not leave an unexplained menu under the application header. Desktop uses the same measured anchoring and may flip above when required.
 
 ## Deferred to Operations/Travel
 
