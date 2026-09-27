@@ -49,18 +49,19 @@
     input.form?.addEventListener("submit", normalize);
   });
   const rosterNav = document.querySelector("[data-roster-nav]");
+  const dayNav = document.querySelector("[data-day-nav]");
   const go = (url) => { if (url) window.location.href = url; };
   const isTyping = (event) => {
     const tag = event.target?.tagName;
     return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable;
   };
   document.addEventListener("keydown", (event) => {
-    if (!rosterNav || event.altKey || event.ctrlKey || event.metaKey || isTyping(event)) return;
+    if ((!rosterNav && !dayNav) || event.altKey || event.ctrlKey || event.metaKey || isTyping(event)) return;
     const key = event.key.toLowerCase();
-    if (key === "m") go(rosterNav.dataset.monthUrl);
-    if (key === "l") go(rosterNav.dataset.listUrl);
-    if (key === "n") go(rosterNav.dataset.nextUrl);
-    if (key === "p") go(rosterNav.dataset.prevUrl);
+    if (key === "m") go(rosterNav?.dataset.monthUrl);
+    if (key === "l") go(rosterNav?.dataset.listUrl);
+    if (key === "n") go((dayNav || rosterNav)?.dataset.nextUrl);
+    if (key === "p") go((dayNav || rosterNav)?.dataset.prevUrl);
   });
   const offline = document.getElementById("offline-banner");
   const updateOnline = () => {
@@ -82,18 +83,45 @@
   });
   let touchStartX = 0;
   let touchStartY = 0;
+  let touchEligible = false;
+  let lastDaySwipe = {direction: "", at: 0};
+  let daySwipeHintTimer = 0;
+  const showDaySwipeHint = (direction) => {
+    const hint = dayNav?.querySelector("[data-day-swipe-hint]");
+    if (!hint) return;
+    hint.textContent = `Swipe again for ${direction === "next" ? "next" : "previous"} rostered day`;
+    hint.hidden = false;
+    window.clearTimeout(daySwipeHintTimer);
+    daySwipeHintTimer = window.setTimeout(() => { hint.hidden = true; }, 1500);
+  };
   document.addEventListener("touchstart", (event) => {
-    if (!rosterNav || event.touches.length !== 1) return;
+    if ((!rosterNav && !dayNav) || event.touches.length !== 1) return;
+    touchEligible = !event.target.closest("a, button, input, select, textarea, summary, [role='button']");
+    if (!touchEligible) return;
     touchStartX = event.touches[0].clientX;
     touchStartY = event.touches[0].clientY;
   }, {passive: true});
   document.addEventListener("touchend", (event) => {
-    if (!rosterNav || !touchStartX || !event.changedTouches.length) return;
+    if ((!rosterNav && !dayNav) || !touchEligible || !touchStartX || !event.changedTouches.length) return;
     const deltaX = event.changedTouches[0].clientX - touchStartX;
     const deltaY = event.changedTouches[0].clientY - touchStartY;
     touchStartX = 0;
     touchStartY = 0;
     if (Math.abs(deltaX) < 70 || Math.abs(deltaX) < Math.abs(deltaY) * 1.4) return;
+    const direction = deltaX < 0 ? "next" : "prev";
+    if (dayNav) {
+      const destination = direction === "next" ? dayNav.dataset.nextUrl : dayNav.dataset.prevUrl;
+      if (!destination) return;
+      const now = Date.now();
+      if (lastDaySwipe.direction === direction && now - lastDaySwipe.at <= 1300) {
+        lastDaySwipe = {direction: "", at: 0};
+        go(destination);
+      } else {
+        lastDaySwipe = {direction, at: now};
+        showDaySwipeHint(direction);
+      }
+      return;
+    }
     go(deltaX < 0 ? rosterNav.dataset.nextUrl : rosterNav.dataset.prevUrl);
   }, {passive: true});
   if ("serviceWorker" in navigator && document.body.dataset.userNamespace) {

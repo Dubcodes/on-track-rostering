@@ -6,7 +6,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.policy import Actor, can_crew_view
+from app.auth.policy import Actor, can_crew_view, can_view_management_detail
 from app.catalog.models import Region, Track
 from app.catalog.presentation import track_token
 from app.core.enums import Role
@@ -15,6 +15,48 @@ from app.identity.models import Person
 from app.positions.ordering import position_order
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.participation import person_day_participation
+from app.rostering.travel import transport_display
+
+
+def adjacent_published_workdays(
+    db: Session,
+    actor: Actor,
+    current_date: date,
+) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+    """Return deterministic adjacent roster dates for the actor, never raw UUID order."""
+    personal: list[tuple[uuid.UUID, date]] = []
+    if actor.person_id:
+        personal = list(
+            db.execute(
+                select(Workday.id, WorkdayRevision.work_date)
+                .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
+                .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
+                .where(
+                    Assignment.person_id == actor.person_id,
+                    Assignment.status == "ASSIGNED",
+                )
+                .distinct()
+                .order_by(WorkdayRevision.work_date, Workday.id)
+            ).all()
+        )
+    candidates = personal
+    if not candidates:
+        candidates = [
+            (workday_id, work_date)
+            for workday_id, work_date, region_id in db.execute(
+                select(Workday.id, WorkdayRevision.work_date, Workday.region_id)
+                .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
+                .order_by(WorkdayRevision.work_date, Workday.id)
+            )
+            if can_view_management_detail(actor, region_id)
+        ]
+    previous = [row for row in candidates if row[1] < current_date]
+    following = [row for row in candidates if row[1] > current_date]
+    previous_id = None
+    if previous:
+        previous_date = previous[-1][1]
+        previous_id = next(row[0] for row in previous if row[1] == previous_date)
+    return previous_id, following[0][0] if following else None
 
 
 def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[str, object]]:
@@ -134,6 +176,9 @@ def day_assignments(
                 "note": note,
                 "is_own": is_own,
                 "can_decline": bool(is_own and row.status == "ASSIGNED" and can_self_decline),
+                "transport": transport_display(
+                    row.transport_mode, row.vehicle_name_snapshot, row.custom_transport_text
+                ),
                 "vehicle": row.vehicle_name_snapshot,
                 "accommodation": row.accommodation_name,
             }

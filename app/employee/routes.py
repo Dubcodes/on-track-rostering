@@ -37,7 +37,7 @@ from app.core.enums import CapabilitySignal, Role
 from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_VALUES, normalize_theme
 from app.core.time import local_today, utcnow, worked_minutes
-from app.employee.read_models import day_assignments, month_items
+from app.employee.read_models import adjacent_published_workdays, day_assignments, month_items
 from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
 from app.external_calendar.read_models import calendar_preference, external_calendar_items
 from app.external_calendar.service import event_evidence
@@ -243,9 +243,10 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     if crew_history and not management:
         history = [row for row in history if not row.summary.startswith("Publication reason:")]
     source_event = (
-        db.get(ExternalCalendarEvent, workday.external_event_id)
-        if workday.external_event_id
-        else None
+        db.get(ExternalCalendarEvent, workday.external_event_id) if workday.external_event_id else None
+    )
+    previous_workday_id, next_workday_id = adjacent_published_workdays(
+        db, request.state.actor, revision.work_date
     )
     return templates.TemplateResponse(
         "day.html",
@@ -253,7 +254,9 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             request,
             workday=workday,
             revision=revision,
-            presentation=track_token(db.scalar(select(Track.palette_slot).where(Track.id == revision.track_id)), workday.category),
+            presentation=track_token(
+                db.scalar(select(Track.palette_slot).where(Track.id == revision.track_id)), workday.category
+            ),
             assignments=assignments,
             management=management,
             can_edit=can_manage_region(request.state.actor, workday.region_id),
@@ -286,6 +289,8 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
                 if source_event
                 else None
             ),
+            previous_workday_id=previous_workday_id,
+            next_workday_id=next_workday_id,
         ),
     )
 

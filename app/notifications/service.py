@@ -234,7 +234,11 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
     return set()
 
 
-def _notification_payload(db: Session, event: NotificationEvent) -> dict[str, str]:
+def _notification_payload(
+    db: Session,
+    event: NotificationEvent,
+    audience_user_id: uuid.UUID | None = None,
+) -> dict[str, str]:
     product_name = branding_for(db).product_name
     titles = {
         "ROSTER_PUBLISHED": "Roster updated",
@@ -248,16 +252,65 @@ def _notification_payload(db: Session, event: NotificationEvent) -> dict[str, st
         "WEEKLY_DIGEST": "Your week ahead",
         "OPEN_POSITIONS_DIGEST": "Open positions this month",
     }
+    body = str(
+        event.payload.get("message")
+        or f"Open {product_name} to view the authoritative roster details."
+    )
+    if event.workday_id and audience_user_id:
+        workday = db.get(Workday, event.workday_id)
+        revision = (
+            db.get(WorkdayRevision, workday.current_published_revision_id)
+            if workday and workday.current_published_revision_id
+            else None
+        )
+        link = db.get(UserPersonLink, audience_user_id)
+        assignments = (
+            list(
+                db.scalars(
+                    select(Assignment).where(
+                        Assignment.revision_id == revision.id,
+                        Assignment.person_id == link.person_id,
+                        Assignment.status == "ASSIGNED",
+                    )
+                )
+            )
+            if revision and link
+            else []
+        )
+        if revision and assignments:
+            roles = ", ".join(sorted({row.display_name_snapshot for row in assignments}))
+            start = next(
+                (row.start_time for row in assignments if row.start_time), revision.start_time
+            )
+            start_text = start.strftime("%I:%M %p").lstrip("0") if start else "time TBC"
+            body = f"{revision.track_name_snapshot} · {roles} · {start_text}"
+        elif revision and event.assignment_slot_key:
+            open_row = db.scalar(
+                select(Assignment).where(
+                    Assignment.revision_id == revision.id,
+                    Assignment.slot_key == event.assignment_slot_key,
+                )
+            )
+            if open_row:
+                start = open_row.start_time or revision.start_time
+                start_text = start.strftime("%I:%M %p").lstrip("0") if start else "time TBC"
+                body = (
+                    f"{revision.track_name_snapshot} · {open_row.display_name_snapshot} · "
+                    f"{revision.work_date:%d %b} {start_text}"
+                )
     return {
         "title": titles.get(event.event_type, f"{product_name} update"),
-        "body": str(
-            event.payload.get("message") or f"Open {product_name} to view the authoritative roster details."
-        ),
+        "body": body,
         "url": str(
             event.payload.get("url")
             or (f"/day/{event.workday_id}" if event.workday_id else "/month")
         ),
         "event_key": event.event_key,
+        "tag": (
+            f"ontrack:{audience_user_id}:workday:{event.workday_id}"
+            if audience_user_id and event.workday_id
+            else event.event_key
+        ),
     }
 
 
@@ -360,8 +413,13 @@ def process_event(
             )
             db.add(delivery)
             existing[subscription.id] = delivery
-    payload = json.dumps(_notification_payload(db, event), separators=(",", ":"))
     subscriptions_by_id = {row.id: row for row in subscriptions}
+    payloads_by_subscription = {
+        row.id: json.dumps(
+            _notification_payload(db, event, row.user_id), separators=(",", ":")
+        )
+        for row in subscriptions
+    }
     db.commit()
 
     now = current if now is not None else utcnow()
@@ -376,6 +434,7 @@ def process_event(
         if not subscription or not subscription.active:
             delivery.status = "PERMANENT_FAILURE"
             continue
+        payload = payloads_by_subscription[subscription.id]
         attempt_count = delivery.attempt_count + 1
         try:
             sender(decrypt_subscription(subscription.encrypted_subscription), payload)

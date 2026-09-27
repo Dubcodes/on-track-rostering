@@ -127,7 +127,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(payload.title, {
     body: payload.body,
     data: {url: payload.url},
-    tag: payload.event_key || "ontrack-update"
+    tag: payload.tag || payload.event_key || "ontrack-update",
+    renotify: true
   }));
 });
 self.addEventListener("notificationclick", (event) => {
