@@ -96,7 +96,7 @@
   };
   document.addEventListener("touchstart", (event) => {
     if ((!rosterNav && !dayNav) || event.touches.length !== 1) return;
-    touchEligible = !event.target.closest("a, button, input, select, textarea, summary, [role='button']");
+    touchEligible = !(event.target instanceof Element && event.target.closest("a, button, input, select, textarea, summary, [role='button']"));
     if (!touchEligible) return;
     touchStartX = event.touches[0].clientX;
     touchStartY = event.touches[0].clientY;

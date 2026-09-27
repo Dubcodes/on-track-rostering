@@ -647,8 +647,9 @@ def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> No
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"region-track-filter-{width}.png")
     page.goto(base_url + f'/manage/workdays/{values["workday_id"]}')
-    page.locator(".builder-inline-advanced > summary").click()
     start = page.locator('input[name="start_time"]')
+    if not start.is_visible():
+        page.locator(".builder-inline-advanced > summary").click()
     assert start.get_attribute("type") == "text"
     assert start.get_attribute("inputmode") == "numeric"
     for value in ("930", "0930", "9:30", "09:30"):
@@ -1546,6 +1547,8 @@ def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type:
 
     page.goto(base_url + f"/day/{values['workday_id']}")
     original = page.url
+    previous_url = page.locator("[data-day-nav]").get_attribute("data-prev-url")
+    assert previous_url
     swipe_right = """() => {
       const target = document.body;
       const start = new Touch({identifier: 1, target, clientX: 80, clientY: 400});
@@ -1557,8 +1560,8 @@ def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type:
     assert page.url == original
     assert page.locator("[data-day-swipe-hint]").is_visible()
     page.evaluate(swipe_right)
-    page.wait_for_url("**/day/*")
-    assert page.url != original
+    page.wait_for_url(f"**{previous_url}")
+    assert page.url == base_url + previous_url
     _assert_no_horizontal_overflow(page)
     context.close()
 
