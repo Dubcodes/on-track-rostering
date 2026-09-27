@@ -30,6 +30,7 @@ jobs:
       POSTGRES_DB: ontrack
       POSTGRES_USER: ontrack
       POSTGRES_PASSWORD: ci-only-password
+      ONTRACK_BUILD_ID: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,4 +44,5 @@ jobs:
       - run: python scripts/release_gate.py
       - run: docker compose config --quiet
       - run: docker compose --env-file .env.staging.example -f compose.staging.yaml config --quiet
+      - run: STAGING_ONTRACK_BUILD_ID= docker compose --env-file .env.staging.example -f compose.staging.yaml config --quiet
       - run: docker build --build-arg BUILD_ID="$GITHUB_SHA" -t ontrack-rostering:ci .

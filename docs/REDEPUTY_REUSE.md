@@ -5,12 +5,12 @@ Reference examined read-only at local commit `20d65d9` (`Re-Deputy 0.5.5`) on 20
 | Area | Classification | On Track treatment |
 |---|---|---|
 | Month/List/Day/Settings visual language | Directly reuse where appropriate, then adapt | Re-Deputy's calendar/list, compact cards, mobile navigation, holiday marker, theme picker, published-Day detail hierarchy and crew table are adapted onto On Track read models. No Deputy state is referenced. |
-| Manual roster builder | Directly reuse interaction language, then adapt | Compact Position/Person/More rows, grouped searchable pickers, Open/TBC choices and publish-review components are adapted onto canonical base positions, stable slots and authoritative revisions. Preview deliberately remains a separate On Track route. |
+| Manual roster builder | Directly reuse interaction language, then adapt | The one-page Race Day Builder now combines day details, friendly timing, Re-Deputy-derived travel/hotel/transport controls, canonical Position/Person pickers, notes, and atomic Save & Preview. Meeting title is secondary and Preview deliberately remains separate. |
 | Public holidays | Copy then adapt | Adapted the deterministic NZ national holiday/Matariki calculation into `app/core/holidays.py`; operational regions remain separate from statutory geography. |
 | Trusted devices and invitations | Conceptually reuse/rewrite | Preserved hash-only random tokens, expiry/single use/revocation concepts and sliding device trust; rewritten for Argon2id, role-sensitive lifetimes, CSRF, auth epochs, and PostgreSQL. |
 | Same-origin/security headers/redirect safety | Conceptually reuse/rewrite | Central middleware/policy implementation replaces Re-Deputy route-specific checks. |
 | PWA shell/service worker | Conceptually reuse/rewrite | New user-namespaced read-only roster cache and sequential prefetch; Re-Deputy's notification click behavior is not copied. |
-| Push identity/notifications | Conceptually reuse/rewrite | Encrypted subscriptions, deterministic events, claim leases, retries, audience union, and person/day reminders were written for On Track's publication model. Production VAPID/browser delivery still needs deployment validation. |
+| Push identity/notifications | Conceptually reuse/rewrite | Database events remain independently auditable, while the browser tag is stable per User + Workday so each device retains one current visible notification for that roster day. Production VAPID/browser delivery still needs deployment validation. |
 | Track maps | Deferred investigation | Track has a non-blocking future map reference. Retrieval/upload/catalog mechanics were not transplanted. |
 | Backup philosophy | Conceptually reuse/rewrite | Documented validated `pg_dump`/restore workflow; SQLite backup code is intentionally not copied. |
 | Release-gate philosophy | Copy then adapt | The Windows-native runner compiles, lints, tests, checks JS, and conditionally runs real PostgreSQL migration idempotence. Docker is excluded from local qualification; Compose is retained for the separate production server. |
@@ -46,9 +46,11 @@ The current application deliberately reuses Re-Deputy's interaction language, no
 | Operational notice | Active global audience, or non-Contractor grants in the selected region | Master switch; one notice event key when optional push is selected |
 | Test notification | Requesting active user only | Deliberately bypasses preference switches; one unique user-request event key |
 
+Published Day navigation is deliberate: P/N selects the adjacent rostered date, while mobile requires two same-direction swipes within the short arming window. A single swipe never leaves operational information.
+
 ## Intentionally not ported
 
-Deputy credentials, login, synchronization/source state, Deputy-specific controls, arbitrary free-text roles, transport or hotel/accommodation mutation, source-specific alerts, the `S` shortcut, hard-coded historical timesheet anchors, Deputy payroll semantics and SQLite architecture are excluded. Existing vehicle/accommodation snapshot values may be displayed, but are not edited by the Builder.
+Deputy credentials, login, synchronization/source state, Deputy-specific controls, arbitrary free-text roles, source-specific alerts, the `S` shortcut, hard-coded historical timesheet anchors, Deputy payroll semantics and SQLite architecture are excluded.
 
 ## Final dedicated fidelity pass
 
@@ -58,4 +60,4 @@ On narrow and touch layouts, Builder pickers improve on Re-Deputy's fixed-top mo
 
 ## Deferred to Operations/Travel
 
-Vehicle/accommodation mutation in the ordinary builder, travel legs and larger operation coordination remain deferred. Existing published values may be displayed, but this pass does not invent service behavior around schema fields whose product workflow is not yet settled.
+The Race Day Builder now owns roster-level start/finish points plus per-person transport and accommodation snapshots. Larger multi-day operation coordination and TravelLeg planning remain deferred.

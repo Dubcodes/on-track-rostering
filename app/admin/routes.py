@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import os
 import uuid
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.admin.data_export import safe_data_export
 from app.audit.service import record_audit
 from app.auth.policy import require_admin
 from app.auth.security import (
@@ -19,10 +22,11 @@ from app.auth.security import (
 from app.auth.service import create_invitation, validated_email
 from app.branding.service import update_branding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.enums import DeclinePolicy, Lifecycle, Role
 from app.core.forms import controlled_integrity, optional_uuid
-from app.core.time import utcnow
+from app.core.time import local_today, utcnow
 from app.identity.models import (
     Invitation,
     Person,
@@ -113,7 +117,25 @@ def admin_page(request: Request, db: Session = Depends(get_db)):
                 )
             ),
             roles=[role.value for role in Role],
+            retention_days=get_settings().retention_days,
+            retention_from_environment="ONTRACK_RETENTION_DAYS" in os.environ,
         ),
+    )
+
+
+@router.get("/download-data")
+def download_data(request: Request, db: Session = Depends(get_db)):
+    _admin(request)
+    payload = safe_data_export(db)
+    return StreamingResponse(
+        BytesIO(payload),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="ontrack-data-{local_today().isoformat()}.zip"'
+            ),
+            "Cache-Control": "no-store",
+        },
     )
 
 

@@ -1472,6 +1472,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     _assert_no_horizontal_overflow(page)
     if width > 760:
         page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+        page.locator('details:has(input[name="title"]) > summary').click()
         for selector in ('input[name="title"]', 'textarea[name="day_note"]', 'select[name="track_id"]'):
             page.locator(selector).focus()
             guarded_url = page.url
@@ -1490,7 +1491,7 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
     _login(page, base_url, values["manager"])
     edit_url = base_url + f"/manage/workdays/{values['trial_workday_id']}"
     page.goto(edit_url)
-    page.get_by_text("Timing and day notes", exact=True).click()
+    page.get_by_text("Timing", exact=True).click()
     first_trial = page.locator('input[name="first_trial_time"]')
     assert first_trial.is_visible()
     assert first_trial.input_value()
@@ -1526,6 +1527,38 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
     _capture_page(page, f"published-trial-day-corrected-{width}.png")
     _assert_no_horizontal_overflow(page)
     assert not errors
+    context.close()
+
+
+def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 375, "height": 900}, has_touch=True)
+    page = context.new_page()
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+    assert page.get_by_text("Travel & hotels", exact=False).is_visible()
+    assert page.locator('input[name="start_origin"]').is_visible()
+    assert page.locator('[data-picker-kind="transport"]').first.count() == 1
+    assert page.locator('[data-picker-kind="vehicle"]').first.count() == 1
+    _assert_no_horizontal_overflow(page)
+    _capture_page(page, "builder-travel-375.png")
+
+    page.goto(base_url + f"/day/{values['workday_id']}")
+    original = page.url
+    swipe_right = """() => {
+      const target = document.body;
+      const start = new Touch({identifier: 1, target, clientX: 80, clientY: 400});
+      const end = new Touch({identifier: 1, target, clientX: 220, clientY: 405});
+      target.dispatchEvent(new TouchEvent('touchstart', {touches: [start], bubbles: true}));
+      target.dispatchEvent(new TouchEvent('touchend', {changedTouches: [end], bubbles: true}));
+    }"""
+    page.evaluate(swipe_right)
+    assert page.url == original
+    assert page.locator("[data-day-swipe-hint]").is_visible()
+    page.evaluate(swipe_right)
+    page.wait_for_url("**/day/*")
+    assert page.url != original
+    _assert_no_horizontal_overflow(page)
     context.close()
 
 

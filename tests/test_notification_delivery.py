@@ -251,6 +251,7 @@ def test_delivery_uses_configured_product_name(db) -> None:  # type: ignore[no-u
         "body": "Open Track Crew to view the authoritative roster details.",
         "url": "/month",
         "event_key": "branding:1",
+        "tag": "branding:1",
     }
 
 

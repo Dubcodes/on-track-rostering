@@ -21,7 +21,7 @@ services:
     build:
       context: .
       args:
-        BUILD_ID: ${STAGING_ONTRACK_BUILD_ID:?Set the exact qualified Git SHA}
+        BUILD_ID: ${STAGING_ONTRACK_BUILD_ID:-}
     restart: unless-stopped
     environment:
       ONTRACK_DATABASE_URL: postgresql+psycopg://${STAGING_POSTGRES_USER:-ontrack_staging}:${STAGING_POSTGRES_PASSWORD}@staging_db:5432/${STAGING_POSTGRES_DB:-ontrack_staging}

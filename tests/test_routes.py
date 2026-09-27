@@ -1,6 +1,8 @@
+import io
 import re
 import uuid
 import warnings
+import zipfile
 from calendar import monthrange
 from datetime import date, time, timedelta
 from pathlib import Path
@@ -621,6 +623,25 @@ def _login(client: TestClient, email: str, pin: str) -> str:
     csrf = client.cookies.get("ontrack_csrf")
     assert csrf
     return csrf
+
+
+def test_admin_data_export_is_authorized_and_secret_free(routed_db) -> None:  # type: ignore[no-untyped-def]
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+    response = admin.get("/admin/download-data")
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].startswith(
+        'attachment; filename="ontrack-data-'
+    )
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        contents = b"".join(archive.read(name) for name in names)
+    assert {"accounts.csv", "workday_revisions.csv", "audit_events.csv"} <= names
+    assert b"credential_hash" not in contents
+
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    assert employee.get("/admin/download-data").status_code == 403
 
 
 def _publish_rows(

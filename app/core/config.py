@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def _image_build_id() -> str:
+    marker = Path("/app/.ontrack-build-id")
+    try:
+        return marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 class Settings(BaseSettings):
@@ -37,7 +46,8 @@ class Settings(BaseSettings):
     fortnight_anchor: str = "2026-08-31"
     lunch_allowance_hours: float = Field(default=12.0, ge=0)
     app_version: str = "0.3.0"
-    build_id: str = ""
+    build_id: str = Field(default_factory=_image_build_id)
+    retention_days: int = Field(default=365, ge=1, le=3650)
     racing_source_timeout_seconds: float = Field(default=15.0, ge=2.0, le=60.0)
     racing_source_max_bytes: int = Field(default=2_000_000, ge=100_000, le=10_000_000)
     racing_source_lookback_days: int = Field(default=14, ge=0, le=90)

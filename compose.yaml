@@ -21,7 +21,7 @@ services:
     build:
       context: .
       args:
-        BUILD_ID: ${ONTRACK_BUILD_ID:-unknown}
+        BUILD_ID: ${ONTRACK_BUILD_ID:?Set the exact qualified Git SHA}
     restart: unless-stopped
     env_file:
       - path: .env

@@ -336,3 +336,18 @@ python scripts/create_staging_accounts.py --bundle seed\redeputy-staging-neutral
 No credential is stored in the neutral import. No deployment is performed by
 either command. Operations/Travel remains deferred; Love Racing and HRNZ adapters
 already exist but still require deployment-environment qualification.
+
+## Race Day fidelity repair — 2026-09-28
+
+Race/Trial building is now one page: Track/date identity, friendly timing,
+Re-Deputy-derived travel/hotel/transport interaction, canonical crew rows, and
+secondary notes/meeting name all save atomically before Preview. Source evidence
+may seed a meeting name, but Date + Track + Race/Trial type remain primary.
+Preview reports cross-Workday person and vehicle conflicts and requires an
+explicit server-verified Publish-anyway choice; multiple positions on the same
+Workday remain valid. Published Day shows immutable transport/hotel snapshots.
+
+Day P/N navigation follows rostered dates and mobile navigation requires a
+deliberate double swipe. Visible push notifications replace older notifications
+for the same User + Workday without collapsing database event history. The HRNZ
+race-source TAB NZ fallback remains the next bounded external-source task.
