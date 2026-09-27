@@ -1491,8 +1491,9 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
     _login(page, base_url, values["manager"])
     edit_url = base_url + f"/manage/workdays/{values['trial_workday_id']}"
     page.goto(edit_url)
-    page.get_by_text("Timing", exact=True).click()
     first_trial = page.locator('input[name="first_trial_time"]')
+    if not first_trial.is_visible():
+        page.get_by_text("Timing", exact=True).click()
     assert first_trial.is_visible()
     assert first_trial.input_value()
     assert page.locator('input[name="first_race_time"]').count() == 0
