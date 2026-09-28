@@ -36,7 +36,7 @@ from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role
 from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_VALUES, normalize_theme
-from app.core.time import local_today, utcnow, worked_minutes
+from app.core.time import local_today, parse_time, utcnow, worked_minutes
 from app.employee.read_models import adjacent_published_workdays, day_assignments, month_items
 from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
 from app.external_calendar.read_models import calendar_preference, external_calendar_items
@@ -46,10 +46,12 @@ from app.hours.service import fortnight_bounds
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notices.service import prominent_notice, recent_notices, relevant_notice_region_ids
 from app.notifications.models import NotificationPreference, PushSubscription
+from app.notifications.service import record_event
 from app.positions.service import set_preference_signal
 from app.rostering.models import (
     AllowanceIndicator,
     Assignment,
+    PersonalWorkdayEntry,
     PositionCapability,
     Workday,
     WorkdayRevision,
@@ -148,7 +150,7 @@ def month_view(
     upcoming = [
         item
         for item in month_items(db, request.state.actor, today, today + timedelta(days=370))
-        if item["own"]
+        if item["own"] and item["workday_status"] == "SCHEDULED"
     ][:5]
     previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
     following = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
@@ -205,6 +207,16 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
     management = can_view_management_detail(request.state.actor, workday.region_id)
+    if workday.generated_from_workday_id and request.state.actor.person_id and not management:
+        opted_out = db.scalar(
+            select(PersonalWorkdayEntry.id).where(
+                PersonalWorkdayEntry.workday_id == workday.generated_from_workday_id,
+                PersonalWorkdayEntry.person_id == request.state.actor.person_id,
+                PersonalWorkdayEntry.standard_travel_opt_out.is_(True),
+            )
+        )
+        if opted_out:
+            raise HTTPException(404, "Workday not found")
     region = db.get(Region, workday.region_id)
     crew_history = can_crew_view(request.state.actor, workday.region_id)
     own_rows = (
@@ -220,6 +232,16 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         else []
     )
     self_decline = can_self_decline_assignment(request.state.actor, workday, revision, own_rows)
+    personal_entry = (
+        db.scalar(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id == workday.id,
+                PersonalWorkdayEntry.person_id == request.state.actor.person_id,
+            )
+        )
+        if request.state.actor.person_id and own_rows
+        else None
+    )
     assignments = day_assignments(
         db,
         request.state.actor,
@@ -228,6 +250,13 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         can_view_private_notes=management,
         can_self_decline=self_decline,
     )
+    if personal_entry:
+        for row in assignments:
+            if row["is_own"]:
+                row["start"] = personal_entry.start_time or row["start"]
+                row["end"] = personal_entry.end_time or row["end"]
+                if personal_entry.standard_travel_opt_out:
+                    row["transport"] = "Making own way"
     participation = person_day_participation(revision, own_rows) if own_rows else None
     history = (
         list(
@@ -291,8 +320,71 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             ),
             previous_workday_id=previous_workday_id,
             next_workday_id=next_workday_id,
+            personal_entry=personal_entry,
+            can_personalize=bool(own_rows and request.state.actor.person_id),
         ),
     )
+
+
+@router.post("/day/{workday_id}/personal")
+async def save_personal_workday_entry(
+    workday_id: uuid.UUID, request: Request, db: Session = Depends(get_db)
+):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    person_id = request.state.actor.person_id
+    workday = db.get(Workday, workday_id)
+    revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
+    assigned = (
+        db.scalar(
+            select(Assignment.id).where(
+                Assignment.revision_id == revision.id,
+                Assignment.person_id == person_id,
+                Assignment.status == "ASSIGNED",
+            )
+        )
+        if revision and person_id
+        else None
+    )
+    if not workday or not revision or not person_id or not assigned:
+        raise HTTPException(404, "Published assignment not found")
+    entry = db.scalar(
+        select(PersonalWorkdayEntry).where(
+            PersonalWorkdayEntry.workday_id == workday.id,
+            PersonalWorkdayEntry.person_id == person_id,
+        )
+    )
+    if entry is None:
+        entry = PersonalWorkdayEntry(workday_id=workday.id, person_id=person_id)
+        db.add(entry)
+    previous_opt_out = entry.standard_travel_opt_out
+    entry.note = str(form.get("note", "")).strip()
+    entry.start_time = parse_time(str(form.get("personal_start_time", "")))
+    entry.end_time = parse_time(str(form.get("personal_finish_time", "")))
+    entry.last_race_time_changed = bool(form.get("last_race_time_changed"))
+    entry.finished_back_at_office = bool(form.get("finished_back_at_office"))
+    entry.standard_travel_opt_out = bool(form.get("standard_travel_opt_out"))
+    entry.updated_at = utcnow()
+    if previous_opt_out != entry.standard_travel_opt_out:
+        record_audit(
+            db,
+            "workday.personal_travel_changed",
+            "workday",
+            workday.id,
+            request.state.user.id,
+            region_id=workday.region_id,
+            detail={"making_own_way": entry.standard_travel_opt_out},
+        )
+        record_event(
+            db,
+            event_key=f"travel-exception:{workday.id}:{person_id}:{entry.updated_at.isoformat()}",
+            event_type="MANAGER_ACTION_REQUIRED",
+            region_id=workday.region_id,
+            workday_id=workday.id,
+            payload={"kind": "TRAVEL_EXCEPTION", "making_own_way": entry.standard_travel_opt_out},
+        )
+    db.commit()
+    return RedirectResponse(f"/day/{workday.id}?personal=saved#notes-and-timing", status_code=303)
 
 
 @router.get("/day/{workday_id}/assignments/{slot_key}/decline", response_class=HTMLResponse)
@@ -520,7 +612,9 @@ def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
         }
     today = local_today()
     rows = month_items(db, request.state.actor, today, today + timedelta(days=370))
-    own_rows = [row for row in rows if row["own"]]
+    own_rows = [
+        row for row in rows if row["own"] and row["workday_status"] == "SCHEDULED"
+    ]
     today_rows = [row for row in own_rows if row["date"] == today]
     future_rows = [row for row in own_rows if row["date"] > today]
     selected_rows = today_rows[:1] + future_rows[:3]

@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.core.enums import AssignmentStatus, RevisionState, WorkdayCategory
+from app.core.enums import AssignmentStatus, RevisionState, WorkdayCategory, WorkdayStatus
 from app.core.time import utcnow
 
 
@@ -37,11 +37,15 @@ class Workday(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     region_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regions.id"), index=True)
     operation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("operations.id"), nullable=True)
+    generated_from_workday_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workdays.id"), nullable=True, unique=True
+    )
     external_event_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("external_calendar_events.id"), nullable=True, unique=True
     )
     category: Mapped[str] = mapped_column(String(32), default=WorkdayCategory.RACE_DAY.value)
     racing_discipline: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default=WorkdayStatus.SCHEDULED.value, index=True)
     current_published_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("workday_revisions.id", use_alter=True), nullable=True
     )
@@ -69,8 +73,10 @@ class WorkdayRevision(Base):
     title: Mapped[str] = mapped_column(String(160), default="Race Day")
     start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time_is_override: Mapped[bool] = mapped_column(Boolean, default=False)
     on_track_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     first_trial_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    last_trial_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     first_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     last_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     race_count: Mapped[int | None] = mapped_column(nullable=True)
@@ -116,6 +122,25 @@ class Assignment(Base):
     accommodation_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     uses_standard_travel: Mapped[bool] = mapped_column(Boolean, default=True)
     hotel_to_track_minutes_override: Mapped[int | None] = mapped_column(nullable=True)
+    finish_destination_override: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    return_travel_minutes_override: Mapped[int | None] = mapped_column(nullable=True)
+
+
+class PersonalWorkdayEntry(Base):
+    __tablename__ = "personal_workday_entries"
+    __table_args__ = (UniqueConstraint("workday_id", "person_id"),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workday_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workdays.id", ondelete="CASCADE"), index=True
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("people.id"), index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    last_race_time_changed: Mapped[bool] = mapped_column(Boolean, default=False)
+    finished_back_at_office: Mapped[bool] = mapped_column(Boolean, default=False)
+    standard_travel_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class OpenPositionApplication(Base):

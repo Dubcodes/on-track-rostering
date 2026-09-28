@@ -7,7 +7,7 @@ from datetime import time
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.core.enums import AssignmentStatus
+from app.core.enums import AssignmentStatus, WorkdayStatus
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.travel import TRANSPORT_VEHICLE
 
@@ -63,8 +63,12 @@ def publication_conflicts(
     workday: Workday,
     draft: WorkdayRevision,
     visible_region_ids: set[uuid.UUID] | None = None,
+    *,
+    include_inactive_current: bool = False,
 ) -> list[RosterConflict]:
     """Compare a draft with authoritative published and active-draft rosters on its date."""
+    if not include_inactive_current and workday.status != WorkdayStatus.SCHEDULED.value:
+        return []
     current_rows = list(
         db.scalars(
             select(Assignment).where(
@@ -87,6 +91,7 @@ def publication_conflicts(
         .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
         .where(
             Workday.id != workday.id,
+            Workday.status == WorkdayStatus.SCHEDULED.value,
             WorkdayRevision.work_date == draft.work_date,
             Assignment.status == AssignmentStatus.ASSIGNED.value,
         )

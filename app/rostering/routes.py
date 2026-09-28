@@ -9,13 +9,15 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.service import record_audit
 from app.auth.policy import can_manage_region, require_manage_region
 from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.database import get_db
-from app.core.enums import AssignmentStatus, RacingDiscipline, WorkdayCategory
+from app.core.enums import AssignmentStatus, RacingDiscipline, WorkdayCategory, WorkdayStatus
 from app.core.time import parse_time
 from app.identity.models import Person, UserPersonLink
+from app.notifications.service import record_event
 from app.positions.ordering import position_order
 from app.positions.service import bulk_eligibility
 from app.rostering.builder_read import crew_picker_views
@@ -105,6 +107,8 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         "accommodation_name",
         "uses_standard_travel",
         "hotel_to_track_minutes_override",
+        "finish_destination_override",
+        "return_travel_minutes_override",
     )
     values = {name: form.getlist(name) for name in field_names}
     for name in field_names:
@@ -135,6 +139,10 @@ def _draft_payload(  # type: ignore[no-untyped-def]
             hotel_to_track_minutes_override=_optional_int(
                 values["hotel_to_track_minutes_override"][index]
             ),
+            finish_destination_override=str(values["finish_destination_override"][index]),
+            return_travel_minutes_override=_optional_int(
+                values["return_travel_minutes_override"][index]
+            ),
         )
         for index in range(row_count)
     ]
@@ -144,6 +152,7 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         title=str(form.get("title", "")),
         start_time=parse_time(str(form.get("start_time", ""))),
         end_time=parse_time(str(form.get("end_time", ""))),
+        end_time_is_override=str(form.get("end_time_is_override", "")) == "1",
         on_track_time=(
             parse_time(str(form.get("on_track_time", "")))
             if "on_track_time" in form else (draft.on_track_time if draft else None)
@@ -151,6 +160,10 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         first_trial_time=(
             parse_time(str(form.get("first_trial_time", "")))
             if "first_trial_time" in form else (draft.first_trial_time if draft else None)
+        ),
+        last_trial_time=(
+            parse_time(str(form.get("last_trial_time", "")))
+            if "last_trial_time" in form else (draft.last_trial_time if draft else None)
         ),
         first_race_time=(
             parse_time(str(form.get("first_race_time", "")))
@@ -176,7 +189,11 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         default_hotel=str(form.get("default_hotel", "")),
         hotel_to_track_minutes=_optional_int(form.get("hotel_to_track_minutes")),
         return_travel_minutes=_optional_int(form.get("return_travel_minutes")),
-        pack_up_minutes=_optional_int(form.get("pack_up_minutes")) or 60,
+        pack_up_minutes=(
+            60
+            if _optional_int(form.get("pack_up_minutes")) is None
+            else _optional_int(form.get("pack_up_minutes"))
+        ),
     )
     return details, assignments
 
@@ -521,7 +538,7 @@ def _publication_warnings(
     if draft.start_time is None:
         warnings.append("Workday start is not set.")
     if any(row.status == "TBC" for row in assignments):
-        warnings.append("One or more positions are TBC.")
+        warnings.append("One or more positions are Unassigned.")
     if any(row.status == "OPEN" for row in assignments):
         warnings.append("One or more positions are open for applications.")
     if any(row.status == "MANAGER_ACTION_REQUIRED" for row in assignments):
@@ -594,8 +611,80 @@ def edit_workday(workday_id: uuid.UUID, request: Request, db: Session = Depends(
     if not workday:
         raise HTTPException(404)
     require_manage_region(request.state.actor, workday.region_id)
+    if workday.generated_from_workday_id:
+        return RedirectResponse(f"/manage/workdays/{workday.generated_from_workday_id}", status_code=303)
     draft = ensure_draft(db, workday, request.state.user.id)
     return templates.TemplateResponse("workday_builder.html", _builder_context(db, request, workday, draft))
+
+
+@router.post("/workdays/{workday_id}/status")
+def update_workday_status(
+    workday_id: uuid.UUID,
+    request: Request,
+    status: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    workday = db.get(Workday, workday_id)
+    if not workday:
+        raise HTTPException(404)
+    require_manage_region(request.state.actor, workday.region_id)
+    if status not in {item.value for item in WorkdayStatus}:
+        raise HTTPException(400, "Invalid Workday status")
+    before = workday.status
+    workday.status = status
+    generated = db.scalar(
+        select(Workday).where(Workday.generated_from_workday_id == workday.id)
+    )
+    if generated:
+        published = db.get(WorkdayRevision, workday.current_published_revision_id)
+        generated_status = (
+            status
+            if status in {WorkdayStatus.CANCELLED.value, WorkdayStatus.ABANDONED.value}
+            else (
+                WorkdayStatus.SCHEDULED.value
+                if published and published.standard_travel_enabled
+                else WorkdayStatus.CANCELLED.value
+            )
+        )
+        if generated.status != generated_status:
+            generated_before = generated.status
+            generated.status = generated_status
+            generated.lock_version += 1
+            record_audit(
+                db,
+                "workday.status_changed",
+                "workday",
+                generated.id,
+                request.state.user.id,
+                region_id=generated.region_id,
+                detail={"from": generated_before, "to": generated_status, "generated": True},
+            )
+    record_audit(
+        db,
+        "workday.status_changed",
+        "workday",
+        workday.id,
+        request.state.user.id,
+        region_id=workday.region_id,
+        detail={"from": before, "to": status},
+    )
+    record_event(
+        db,
+        event_key=f"workday-status:{workday.id}:{before}:{status}:{workday.lock_version}",
+        event_type="ROSTER_PUBLISHED",
+        region_id=workday.region_id,
+        workday_id=workday.id,
+        payload={
+            "revision_id": str(workday.current_published_revision_id or ""),
+            "previous_revision_id": None,
+            "summary": f"Workday status changed from {before} to {status}.",
+        },
+    )
+    workday.lock_version += 1
+    db.commit()
+    return RedirectResponse(f"/day/{workday.id}", status_code=303)
 
 
 @router.post("/workdays/{workday_id}/draft")

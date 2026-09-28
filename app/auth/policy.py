@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.enums import Role
+from app.core.enums import Role, WorkdayStatus
 from app.core.time import utcnow
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.rostering.models import Assignment, Workday, WorkdayRevision
@@ -147,6 +147,8 @@ def can_self_decline_assignment(
     now: datetime | None = None,
 ) -> bool:
     """Allow linked Employee/Contractor self-service only before their shift begins."""
+    if (workday.status or WorkdayStatus.SCHEDULED.value) != WorkdayStatus.SCHEDULED.value:
+        return False
     roles = actor.roles_for(workday.region_id)
     if actor.person_id is None or not roles & {
         Role.EMPLOYEE.value,

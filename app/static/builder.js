@@ -138,6 +138,10 @@
         option.dataset.state = "ASSIGNED";
         option.dataset.label = person.label;
         option.dataset.search = `${person.label} ${person.context || ""} ${person.hint || ""}`;
+        const alreadySelected = [...list.querySelectorAll("[data-assignment-row]")].some((row) =>
+          row !== picker.closest("[data-assignment-row]") && row.querySelector("[data-person-value]").value === person.id
+        );
+        option.disabled = alreadySelected;
         const name = document.createElement("strong");
         name.textContent = person.label;
         if (person.same_date) {
@@ -150,6 +154,11 @@
           name.append(" ", warning);
         }
         option.append(name);
+        if (alreadySelected) {
+          const selected = document.createElement("small");
+          selected.textContent = "Already assigned to another position";
+          option.append(selected);
+        }
         [person.context, person.hint].filter(Boolean).forEach((detail) => {
           const small = document.createElement("small");
           small.textContent = detail;
@@ -204,6 +213,7 @@
     const row = picker.closest("[data-assignment-row]");
     const input = picker.querySelector("[data-picker-input]");
     input.value = option.dataset.label || "";
+    input.dataset.selectedLabel = input.value;
     if (picker.dataset.pickerKind === "position") {
       row.querySelector("[data-position-value]").value = option.dataset.value || "";
       if (option.dataset.value) loadCrewPicker(row, option.dataset.value);
@@ -221,6 +231,22 @@
   };
   const wirePicker = (picker) => {
     const input = picker.querySelector("[data-picker-input]");
+    input.dataset.selectedLabel = input.value;
+    const clearStaleSelection = () => {
+      if (input.value === (input.dataset.selectedLabel || "")) return;
+      const row = picker.closest("[data-assignment-row]");
+      if (picker.dataset.pickerKind === "position") {
+        row.querySelector("[data-position-value]").value = "";
+      } else if (picker.dataset.pickerKind === "person") {
+        row.querySelector("[data-person-value]").value = "";
+        row.querySelector("[data-assignment-state]").value = "TBC";
+      } else if (picker.dataset.pickerKind === "vehicle") {
+        row.querySelector("[data-vehicle-value]").value = "";
+        row.querySelector("[data-transport-value]").value = "UNASSIGNED";
+      }
+      input.dataset.selectedLabel = "";
+      refreshRow(row);
+    };
     const open = () => {
       document.querySelectorAll("[data-search-picker]").forEach((other) => { if (other !== picker) closePicker(other); });
       picker.querySelector("[data-picker-menu]").hidden = false;
@@ -232,7 +258,7 @@
       window.requestAnimationFrame(() => positionPicker(picker));
     };
     input.addEventListener("focus", () => { open(); input.select(); });
-    input.addEventListener("input", open);
+    input.addEventListener("input", () => { clearStaleSelection(); open(); });
     input.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -334,14 +360,29 @@
   };
   form.querySelector("[data-apply-preset]")?.addEventListener("click", () => applyPreset(true));
   const dayType = form.querySelector("[data-day-type]");
+  form.querySelector("[data-finish-input]")?.addEventListener("input", (event) => {
+    form.querySelector("[data-finish-override]").value = event.currentTarget.value.trim() ? "1" : "0";
+  });
   const syncDayType = () => {
     const [category, discipline] = dayType.value.split(":");
+    const locationLabel = form.querySelector("[data-region-track]")?.closest("label")?.childNodes[0];
+    if (locationLabel) locationLabel.textContent = ["RACE_DAY", "TRIALS"].includes(category) ? "Track" : "Location";
     form.querySelectorAll("[data-racing-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
     form.querySelectorAll("[data-race-time]").forEach((field) => { field.hidden = category !== "RACE_DAY"; });
+    form.querySelectorAll("[data-trial-time]").forEach((field) => { field.hidden = category !== "TRIALS"; });
     form.querySelector("[data-position-preset]").value = category === "TRIALS" ? "TRIALS" : (category === "RACE_DAY" ? discipline : "BLANK");
   };
   dayType?.addEventListener("change", syncDayType);
   syncDayType();
+  const refreshNewModeCrew = () => {
+    if (form.dataset.newMode !== "1") return;
+    list.querySelectorAll("[data-assignment-row]").forEach((row) => {
+      const positionId = row.querySelector("[data-position-value]").value;
+      if (positionId) loadCrewPicker(row, positionId);
+    });
+  };
+  form.querySelector('[name="region_id"]')?.addEventListener("change", refreshNewModeCrew);
+  form.querySelector('[name="work_date"]')?.addEventListener("change", refreshNewModeCrew);
   if (form.dataset.newMode === "1" && !list.children.length) applyPreset(false);
   document.addEventListener("pointerdown", (event) => document.querySelectorAll("[data-search-picker]").forEach((picker) => { if (!picker.contains(event.target)) closePicker(picker); }));
 })();

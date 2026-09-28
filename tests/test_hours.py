@@ -9,7 +9,13 @@ from app.catalog.models import Region
 from app.core.enums import Role
 from app.hours.service import fortnight_bounds, group_people, published_hours
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
-from app.rostering.models import AllowanceIndicator, Assignment, Workday, WorkdayRevision
+from app.rostering.models import (
+    AllowanceIndicator,
+    Assignment,
+    PersonalWorkdayEntry,
+    Workday,
+    WorkdayRevision,
+)
 
 
 def _published_day(
@@ -124,6 +130,50 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
     assert rows[0]["holiday"] == "Labour Day"
     assert {item["kind"] for item in rows[0]["allowances"]} == {"LUNCH", "RESCHEDULED"}
     assert "no automatic break deduction" in rows[0]["raw"]
+    db.add_all(
+        [
+            PersonalWorkdayEntry(
+                workday_id=labour_day.workday_id,
+                person_id=person.id,
+                start_time=time(8),
+                end_time=time(18),
+            ),
+            RoleGrant(user_id=creator.id, role=Role.MANAGER.value, region_id=region.id),
+        ]
+    )
+    db.commit()
+    personal_rows = published_hours(
+        db,
+        actor=actor_for(db, employee),
+        start=date(2026, 10, 19),
+        end=date(2026, 11, 1),
+        management=False,
+    )
+    assert personal_rows[0]["minutes"] == 600
+    assert personal_rows[0]["personal_override"] is True
+    assert (personal_rows[0]["normal_start"], personal_rows[0]["normal_end"]) == (
+        time(7, 30),
+        time(19, 30),
+    )
+    management_rows = published_hours(
+        db,
+        actor=actor_for(db, creator),
+        start=date(2026, 10, 19),
+        end=date(2026, 11, 1),
+        management=True,
+    )
+    assert management_rows[0]["minutes"] == 720
+    assert management_rows[0]["personal_override"] is False
+    db.get(Workday, labour_day.workday_id).status = "CANCELLED"
+    db.commit()
+    after_cancel = published_hours(
+        db,
+        actor=actor_for(db, employee),
+        start=date(2026, 10, 19),
+        end=date(2026, 11, 1),
+        management=False,
+    )
+    assert [row["date"] for row in after_cancel] == [date(2026, 10, 27)]
 
 
 def test_management_hours_are_region_scoped_for_viewer(db) -> None:  # type: ignore[no-untyped-def]

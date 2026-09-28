@@ -6,16 +6,16 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.policy import Actor, can_crew_view, can_view_management_detail
+from app.auth.policy import Actor, can_crew_view, can_manage_region, can_view_management_detail
 from app.catalog.models import Region, Track
 from app.catalog.presentation import track_token
-from app.core.enums import Role
+from app.core.enums import Role, WorkdayStatus
 from app.core.holidays import holiday_for_date
 from app.identity.models import Person
 from app.positions.ordering import position_order
-from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.rostering.models import Assignment, PersonalWorkdayEntry, Workday, WorkdayRevision
 from app.rostering.participation import person_day_participation
-from app.rostering.travel import transport_display
+from app.rostering.travel import effective_person_travel, transport_display
 
 
 def adjacent_published_workdays(
@@ -39,6 +39,22 @@ def adjacent_published_workdays(
                 .order_by(WorkdayRevision.work_date, Workday.id)
             ).all()
         )
+        opted_out = set(
+            db.scalars(
+                select(PersonalWorkdayEntry.workday_id).where(
+                    PersonalWorkdayEntry.person_id == actor.person_id,
+                    PersonalWorkdayEntry.standard_travel_opt_out.is_(True),
+                )
+            )
+        )
+        if opted_out:
+            generated = {
+                row.id
+                for row in db.scalars(
+                    select(Workday).where(Workday.generated_from_workday_id.in_(opted_out))
+                )
+            }
+            personal = [row for row in personal if row[0] not in generated]
     candidates = personal
     if not candidates:
         candidates = [
@@ -103,7 +119,26 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         else None
     )
     result: list[dict[str, object]] = []
+    opted_out_parent_ids = (
+        set(
+            db.scalars(
+                select(PersonalWorkdayEntry.workday_id).where(
+                    PersonalWorkdayEntry.person_id == actor.person_id,
+                    PersonalWorkdayEntry.standard_travel_opt_out.is_(True),
+                )
+            )
+        )
+        if actor.person_id
+        else set()
+    )
+    draft_ids = {
+        workday.id
+        for workday, _revision, _region, _slot in rows
+        if workday.current_draft_revision_id and can_manage_region(actor, workday.region_id)
+    }
     for workday, revision, region, palette_slot in rows:
+        if workday.generated_from_workday_id in opted_out_parent_ids:
+            continue
         own = own_by_revision.get(revision.id, [])
         if not own and not broad_month:
             continue
@@ -113,6 +148,9 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         visible_statuses = (
             set(participation.statuses) if participation else statuses_by_revision.get(revision.id, set())
         )
+        display_statuses = ["UNASSIGNED" if value == "TBC" else value for value in (
+            participation.statuses if participation else ("PUBLISHED",)
+        )]
         result.append(
             {
                 "id": str(workday.id),
@@ -124,9 +162,17 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "presentation": track_token(palette_slot, workday.category),
                 "start": participation.start if participation else revision.start_time,
                 "end": participation.end if participation else revision.end_time,
-                "minutes": participation.minutes if participation else 0,
+                "minutes": (
+                    participation.minutes
+                    if participation and workday.status == WorkdayStatus.SCHEDULED.value
+                    else 0
+                ),
                 "role": participation.role_summary if participation else "Crew view",
-                "status": " / ".join(participation.statuses) if participation else "PUBLISHED",
+                "status": (
+                    workday.status
+                    if workday.status != WorkdayStatus.SCHEDULED.value
+                    else " / ".join(display_statuses)
+                ),
                 "has_open": "OPEN" in visible_statuses,
                 "cross_region": bool(
                     own and home_region_id is not None and workday.region_id != home_region_id
@@ -134,8 +180,53 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
                 "own": bool(own),
                 "published_at": revision.published_at,
+                "has_draft": workday.id in draft_ids,
+                "draft_only": False,
+                "url": f"/day/{workday.id}",
+                "workday_status": workday.status,
             }
         )
+    draft_rows = db.execute(
+        select(Workday, WorkdayRevision, Region, Track.palette_slot)
+        .join(WorkdayRevision, Workday.current_draft_revision_id == WorkdayRevision.id)
+        .join(Region, Region.id == Workday.region_id)
+        .outerjoin(Track, Track.id == WorkdayRevision.track_id)
+        .where(
+            Workday.current_published_revision_id.is_(None),
+            WorkdayRevision.work_date >= start,
+            WorkdayRevision.work_date < end,
+        )
+        .order_by(WorkdayRevision.work_date)
+    ).all()
+    for workday, revision, region, palette_slot in draft_rows:
+        if not can_manage_region(actor, workday.region_id):
+            continue
+        result.append(
+            {
+                "id": str(workday.id),
+                "region_id": workday.region_id,
+                "date": revision.work_date,
+                "category": workday.category,
+                "title": revision.title,
+                "track": revision.track_name_snapshot,
+                "presentation": track_token(palette_slot, workday.category),
+                "start": revision.start_time,
+                "end": revision.end_time,
+                "minutes": 0,
+                "role": "Private management draft",
+                "status": "DRAFT",
+                "has_open": False,
+                "cross_region": False,
+                "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
+                "own": False,
+                "published_at": None,
+                "has_draft": True,
+                "draft_only": True,
+                "url": f"/manage/workdays/{workday.id}",
+                "workday_status": workday.status,
+            }
+        )
+    result.sort(key=lambda item: (item["date"], str(item["id"])))
     return result
 
 
@@ -158,12 +249,13 @@ def day_assignments(
     result = []
     empty_labels = {
         "OPEN": "Open position",
-        "TBC": "TBC / not offered",
+        "TBC": "Unassigned",
         "MANAGER_ACTION_REQUIRED": "Needs Manager action",
     }
     for row in rows:
         is_own = actor.person_id == row.person_id
         note = row.note if (not row.note_private or is_own or can_view_private_notes) else ""
+        travel = effective_person_travel(revision, row)
         result.append(
             {
                 "slot_key": str(row.slot_key),
@@ -171,8 +263,8 @@ def day_assignments(
                 "role": row.display_name_snapshot,
                 "person": row.person_name_snapshot or empty_labels.get(row.status, "Unassigned"),
                 "status": row.status,
-                "start": row.start_time,
-                "end": row.end_time,
+                "start": travel.start,
+                "end": travel.finish,
                 "note": note,
                 "is_own": is_own,
                 "can_decline": bool(is_own and row.status == "ASSIGNED" and can_self_decline),
@@ -180,7 +272,7 @@ def day_assignments(
                     row.transport_mode, row.vehicle_name_snapshot, row.custom_transport_text
                 ),
                 "vehicle": row.vehicle_name_snapshot,
-                "accommodation": row.accommodation_name,
+                "accommodation": travel.accommodation,
             }
         )
     return result

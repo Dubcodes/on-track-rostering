@@ -1219,3 +1219,8 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
   .builder-travel-body { grid-template-columns: 1fr; }
   .day-nav-buttons { width: 100%; justify-content: space-between; }
 }
+.shift-card.is-cancelled,
+.list-shift.is-cancelled {
+  filter: grayscale(1);
+  opacity: 0.68;
+}

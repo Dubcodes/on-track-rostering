@@ -35,6 +35,12 @@ class RevisionState(StrEnum):
     PUBLISHED = "PUBLISHED"
 
 
+class WorkdayStatus(StrEnum):
+    SCHEDULED = "SCHEDULED"
+    CANCELLED = "CANCELLED"
+    ABANDONED = "ABANDONED"
+
+
 class AssignmentStatus(StrEnum):
     ASSIGNED = "ASSIGNED"
     OPEN = "OPEN"

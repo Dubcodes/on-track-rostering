@@ -63,12 +63,20 @@ def publication_diff(
             ("start_time", "Start"),
             ("on_track_time", "On-track time"),
             ("first_trial_time", "First trial"),
+            ("last_trial_time", "Last trial"),
             ("first_race_time", "First race"),
             ("last_race_time", "Last race"),
             ("race_count", "Race count"),
             ("end_time", "Finish"),
             ("start_origin", "Start origin"),
             ("finish_destination", "Finish destination"),
+            ("standard_travel_enabled", "Standard travel"),
+            ("travel_departure_time", "Travel departure"),
+            ("travel_to_hotel_minutes", "Travel to hotel minutes"),
+            ("default_hotel", "Default hotel"),
+            ("hotel_to_track_minutes", "Hotel to track minutes"),
+            ("return_travel_minutes", "Return travel minutes"),
+            ("pack_up_minutes", "Pack-up minutes"),
             ("day_note", "Normal day notes"),
         ):
             before, after = getattr(previous, attribute), getattr(draft, attribute)
@@ -131,6 +139,10 @@ def publication_diff(
             ("transport_mode", "Transport"),
             ("custom_transport_text", "Custom transport"),
             ("accommodation_name", "Accommodation"),
+            ("uses_standard_travel", "Standard travel"),
+            ("hotel_to_track_minutes_override", "Hotel to track override"),
+            ("finish_destination_override", "Finish destination override"),
+            ("return_travel_minutes_override", "Return travel override"),
         ):
             before, after = getattr(old, attribute), getattr(new, attribute)
             if before == after:

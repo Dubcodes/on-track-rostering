@@ -207,6 +207,30 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
     second_draft.track_name_snapshot = "Draft-only track"
     db.commit()
     assert month_items(db, employee_actor, date(2026, 9, 1), date(2026, 10, 1))[0]["track"] == "Ellerslie"
+    manager_rows = month_items(
+        db, actor(manager, None, region, Role.MANAGER), date(2026, 9, 1), date(2026, 10, 1)
+    )
+    assert manager_rows[0]["track"] == "Ellerslie"
+    assert manager_rows[0]["has_draft"] is True
+    assert manager_rows[0]["url"] == f"/day/{workday.id}"
+    private_draft = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.TRAINING_DAY.value,
+        work_date=date(2026, 9, 16),
+        track_id=None,
+        title="Private planning day",
+        actor_user_id=manager.id,
+    )
+    db.commit()
+    manager_rows = month_items(
+        db, actor(manager, None, region, Role.MANAGER), date(2026, 9, 1), date(2026, 10, 1)
+    )
+    assert any(row["id"] == str(private_draft.id) and row["draft_only"] for row in manager_rows)
+    assert all(
+        row["id"] != str(private_draft.id)
+        for row in month_items(db, employee_actor, date(2026, 9, 1), date(2026, 10, 1))
+    )
     unrelated = create_workday(
         db,
         region_id=region.id,

@@ -10,11 +10,17 @@ from sqlalchemy.orm import Session
 from app.auth.policy import Actor
 from app.catalog.models import Region
 from app.core.config import get_settings
-from app.core.enums import Role
+from app.core.enums import Role, WorkdayStatus
 from app.core.holidays import holiday_for_date, holiday_info_for_date
 from app.core.time import local_today
 from app.identity.models import Person
-from app.rostering.models import AllowanceIndicator, Assignment, Workday, WorkdayRevision
+from app.rostering.models import (
+    AllowanceIndicator,
+    Assignment,
+    PersonalWorkdayEntry,
+    Workday,
+    WorkdayRevision,
+)
 from app.rostering.participation import person_day_participation
 
 
@@ -55,6 +61,7 @@ def published_hours(
             WorkdayRevision.work_date >= start,
             WorkdayRevision.work_date <= end,
             Assignment.person_id.is_not(None),
+            Workday.status == WorkdayStatus.SCHEDULED.value,
         )
         .order_by(Person.display_name, WorkdayRevision.work_date, Assignment.display_name_snapshot)
     )
@@ -70,6 +77,21 @@ def published_hours(
         statement = statement.where(Assignment.person_id == actor.person_id)
 
     rows = list(db.execute(statement).all())
+    entry_workday_ids = {workday.id for _, _, workday, _, _ in rows}
+    entry_workday_ids.update(
+        workday.generated_from_workday_id
+        for _, _, workday, _, _ in rows
+        if workday.generated_from_workday_id is not None
+    )
+    personal_entries = {
+        (row.workday_id, row.person_id): row
+        for row in db.scalars(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id.in_(entry_workday_ids or {uuid.uuid4()}),
+                PersonalWorkdayEntry.person_id.in_({item[3].id for item in rows} or {uuid.uuid4()}),
+            )
+        )
+    }
     revision_people = {(revision.id, person.id) for _, revision, _, person, _ in rows}
     indicators: dict[tuple[uuid.UUID, uuid.UUID], list[AllowanceIndicator]] = defaultdict(list)
     if revision_people:
@@ -88,6 +110,9 @@ def published_hours(
         tuple[WorkdayRevision, Workday, Person, Region, list[Assignment]],
     ] = {}
     for assignment, revision, workday, person, region in rows:
+        entry = personal_entries.get((workday.generated_from_workday_id or workday.id, person.id))
+        if workday.generated_from_workday_id and entry and entry.standard_travel_opt_out:
+            continue
         key = (revision.id, person.id)
         grouped_rows.setdefault(key, (revision, workday, person, region, []))[4].append(assignment)
 
@@ -95,6 +120,15 @@ def published_hours(
     for key, (revision, workday, person, region, assignments) in grouped_rows.items():
         participation = person_day_participation(revision, assignments)
         start_time, end_time, minutes = participation.start, participation.end, participation.minutes
+        normal_start, normal_end = start_time, end_time
+        entry = personal_entries.get((workday.id, person.id))
+        if not management and entry and (entry.start_time is not None or entry.end_time is not None):
+            start_time = entry.start_time or start_time
+            end_time = entry.end_time or end_time
+            if start_time is not None and end_time is not None:
+                from app.core.time import worked_minutes
+
+                minutes = worked_minutes(revision.work_date, start_time, end_time)
         allowance_rows = [
             {
                 "kind": item.kind,
@@ -131,6 +165,11 @@ def published_hours(
                 "end": end_time,
                 "minutes": minutes,
                 "duration": format_minutes(minutes),
+                "normal_start": normal_start,
+                "normal_end": normal_end,
+                "personal_override": bool(
+                    not management and entry and (entry.start_time is not None or entry.end_time is not None)
+                ),
                 "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
                 "holiday_info": holiday_info_for_date(
                     revision.work_date, region.statutory_holiday_region or ""

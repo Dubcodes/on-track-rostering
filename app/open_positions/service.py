@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.policy import Actor, can_apply_for_open_position
 from app.catalog.models import BasePosition
-from app.core.enums import AssignmentStatus, OpenApplicationStatus
+from app.core.enums import AssignmentStatus, OpenApplicationStatus, WorkdayStatus
 from app.core.time import local_today
 from app.identity.models import Person
 from app.positions.service import eligibility
@@ -35,6 +35,7 @@ def available_positions(db: Session, actor: Actor) -> list[AvailablePosition]:
         .join(BasePosition, BasePosition.id == Assignment.base_position_id)
         .where(
             Assignment.status == AssignmentStatus.OPEN.value,
+            Workday.status == WorkdayStatus.SCHEDULED.value,
             WorkdayRevision.work_date >= local_today(),
         )
         .order_by(WorkdayRevision.work_date, Assignment.display_name_snapshot)
@@ -57,7 +58,11 @@ def apply_for_position(
     slot_key: uuid.UUID,
 ) -> OpenPositionApplication:
     workday = db.scalar(select(Workday).where(Workday.id == workday_id).with_for_update())
-    if not workday or not workday.current_published_revision_id:
+    if (
+        not workday
+        or not workday.current_published_revision_id
+        or workday.status != WorkdayStatus.SCHEDULED.value
+    ):
         raise ValueError("Open position is no longer available.")
     if not can_apply_for_open_position(actor, workday.region_id) or actor.person_id is None:
         raise PermissionError("Employee regional access is required.")

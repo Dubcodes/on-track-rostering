@@ -5,6 +5,7 @@ from datetime import datetime, time, timedelta
 
 from app.positions.ordering import position_order
 from app.rostering.models import Assignment, WorkdayRevision
+from app.rostering.travel import effective_person_travel
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,9 @@ class PersonDayParticipation:
 
 
 def _span(revision: WorkdayRevision, assignment: Assignment) -> tuple[datetime, datetime] | None:
-    start = assignment.start_time or revision.start_time
-    end = assignment.end_time or revision.end_time
+    effective = effective_person_travel(revision, assignment)
+    start = effective.start
+    end = effective.finish
     if start is None or end is None:
         return None
     start_at = datetime.combine(revision.work_date, start)
@@ -60,9 +62,9 @@ def person_day_participation(
         start, end = start_at.time(), end_at.time()
     else:
         start = next(
-            (row.start_time for row in ordered if row.start_time is not None), revision.start_time
+            (effective_person_travel(revision, row).start for row in ordered), revision.start_time
         )
-        end = next((row.end_time for row in ordered if row.end_time is not None), revision.end_time)
+        end = next((effective_person_travel(revision, row).finish for row in ordered), revision.end_time)
         minutes = 0
     return PersonDayParticipation(
         start=start,

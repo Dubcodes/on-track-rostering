@@ -693,17 +693,33 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
     assert page.get_by_text("Step 1", exact=False).count() == 0
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"build-new-{width}.png")
+    preset_row = page.locator("[data-assignment-row]").first
+    assert preset_row.locator("[data-position-value]").input_value()
+    page.locator('select[name="region_id"]').select_option(values["region_id"])
     page.locator('input[name="work_date"]').fill(
         "2030-01-10" if width == 1280 else "2030-01-11"
     )
+    page.locator('input[name="work_date"]').dispatch_event("change")
+    crew_option = preset_row.locator(
+        '[data-picker-kind="person"] [data-picker-groups] [data-picker-option]:not([disabled])'
+    ).first
+    crew_option.wait_for()
+    preset_row.locator('[data-picker-kind="person"] [data-picker-input]').click()
+    crew_option.click()
+    assert preset_row.locator("[data-person-value]").input_value()
+    preset_row.locator('[data-picker-kind="person"] [data-picker-input]').fill("not selected")
+    assert preset_row.locator("[data-person-value]").input_value() == ""
     page.locator('select[name="day_type"]').select_option("OFFICE_DAY:")
     page.once("dialog", lambda dialog: dialog.accept())
     page.get_by_role("button", name="Apply defaults").click()
     assert page.locator("[data-assignment-row]").count() == 0
-    page.locator('select[name="region_id"]').select_option(values["region_id"])
     page.locator('select[name="track_id"]').select_option(values["track_id"])
     page.locator('details:has(input[name="title"]) > summary').click()
     page.locator('input[name="title"]').fill(f"Browser private draft {width}")
+    invalid = page.locator(".builder-form").evaluate(
+        "form => [...form.querySelectorAll(':invalid')].map(field => `${field.name}:${field.value}`)"
+    )
+    assert invalid == []
     page.get_by_role("button", name="Save & Preview").click()
     page.wait_for_url("**/manage/workdays/*/preview")
     assert page.get_by_text("Publication preview", exact=True).count() == 1
@@ -1361,7 +1377,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     person_input.fill("")
     person_picker = rows.first.locator('[data-picker-kind="person"]')
     assert person_picker.get_by_text("Open position", exact=True).is_visible()
-    assert person_picker.get_by_text("TBC / not offered", exact=True).is_visible()
+    assert person_picker.get_by_text("Unassigned", exact=True).is_visible()
     assert person_picker.get_by_text("Relevant crew", exact=True).is_visible()
     assert person_picker.get_by_text("Other crew", exact=True).is_visible()
     assert person_picker.get_by_text(
@@ -1381,7 +1397,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         '[data-picker-kind="person"] [data-picker-input]'
     )
     manager_person_input.click()
-    manager_person_input.fill("TBC / not offered")
+    manager_person_input.fill("Unassigned")
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     assert manager_action.locator("[data-assignment-state]").input_value() == "TBC"
@@ -1511,6 +1527,10 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
     _capture_page(page, f"trials-builder-{width}.png")
     _assert_no_horizontal_overflow(page)
     page.keyboard.press("Escape")
+    invalid = page.locator(".builder-form").evaluate(
+        "form => [...form.querySelectorAll(':invalid')].map(field => `${field.name}:${field.value}`)"
+    )
+    assert invalid == []
     page.get_by_role("button", name="Save & Preview").click()
     page.wait_for_url(f"**/manage/workdays/{values['trial_workday_id']}/preview")
     assert page.get_by_text(updated_time, exact=True).first.is_visible()

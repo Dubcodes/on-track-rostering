@@ -13,7 +13,7 @@ from app.auth.policy import Actor, actor_for, can_manage_region
 from app.auth.security import hash_credential
 from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.config import get_settings
-from app.core.enums import RacingDiscipline, Role, WorkdayCategory
+from app.core.enums import RacingDiscipline, Role, WorkdayCategory, WorkdayStatus
 from app.core.time import utcnow
 from app.employee.read_models import adjacent_published_workdays
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
@@ -29,10 +29,15 @@ from app.rostering.service import (
     DraftDetailsInput,
     PublishConflict,
     create_workday,
+    ensure_draft,
     publish,
     save_draft,
 )
-from app.rostering.travel import TRANSPORT_VEHICLE, calculate_standard_travel
+from app.rostering.travel import (
+    TRANSPORT_VEHICLE,
+    calculate_standard_travel,
+    effective_person_travel,
+)
 
 
 def test_ruakaka_standard_travel_rounds_last_race_without_extra_allowance(db) -> None:  # type: ignore[no-untyped-def]
@@ -52,6 +57,58 @@ def test_ruakaka_standard_travel_rounds_last_race_without_extra_allowance(db) ->
     assert calculation.race_clear == time(16, 30)
     assert calculation.pack_up_done == time(17, 30)
     assert calculation.race_finish == time(22, 30)
+
+
+def test_trials_last_trial_or_explicit_finish_drives_standard_travel() -> None:
+    derived = calculate_standard_travel(
+        race_date=date(2026, 10, 14),
+        on_track_time=time(10),
+        last_race_time=time(14, 6),
+        travel_to_hotel_minutes=60,
+        hotel_to_track_minutes=30,
+        pack_up_minutes=0,
+        return_travel_minutes=90,
+    )
+    assert (derived.race_clear, derived.race_finish) == (time(14, 15), time(15, 45))
+    explicit = calculate_standard_travel(
+        race_date=date(2026, 10, 14),
+        on_track_time=time(10),
+        last_race_time=None,
+        travel_to_hotel_minutes=60,
+        hotel_to_track_minutes=30,
+        pack_up_minutes=0,
+        return_travel_minutes=None,
+        explicit_finish_time=time(16, 20),
+    )
+    assert explicit.race_finish == time(16, 20)
+
+
+def test_effective_travel_inherits_changed_defaults_and_recalculates_start() -> None:
+    revision = WorkdayRevision(
+        work_date=date(2026, 10, 14),
+        default_hotel="Beachfront Hotel",
+        hotel_to_track_minutes=30,
+        on_track_time=time(9),
+        standard_travel_enabled=True,
+    )
+    inherited = Assignment(uses_standard_travel=True)
+    assert effective_person_travel(revision, inherited).accommodation == "Beachfront Hotel"
+    assert effective_person_travel(revision, inherited).start == time(8, 30)
+    revision.default_hotel = "Harbour Hotel"
+    revision.hotel_to_track_minutes = 45
+    assert effective_person_travel(revision, inherited).accommodation == "Harbour Hotel"
+    assert effective_person_travel(revision, inherited).start == time(8, 15)
+    inherited.start_time = time(8)
+    assert effective_person_travel(revision, inherited).start == time(8)
+    inherited.start_time = None
+    inherited.accommodation_name = "Motel X"
+    assert effective_person_travel(revision, inherited).accommodation == "Motel X"
+    assert effective_person_travel(revision, inherited).start == time(8, 15)
+    revision.last_race_time = time(16)
+    revision.end_time = time(18)
+    revision.end_time_is_override = True
+    inherited.return_travel_minutes_override = 30
+    assert effective_person_travel(revision, inherited).finish == time(18)
 
 
 def test_standard_plan_generates_one_linked_travel_participation_per_person(db) -> None:  # type: ignore[no-untyped-def]
@@ -94,16 +151,13 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
         ),
         assignments=[
             DraftAssignmentInput(
-                base_position_id=position.id,
+                base_position_id=eng.id,
                 slot_index=None,
                 person_id=person.id,
                 status="ASSIGNED",
                 accommodation_name="Alternative Lodge",
                 hotel_to_track_minutes_override=15,
-            )
-            for position in (eng, ccu)
-        ]
-        + [
+            ),
             DraftAssignmentInput(
                 base_position_id=eng.id,
                 slot_index=2,
@@ -130,15 +184,183 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     assert travel_rows[0].person_id == person.id
     assert travel_rows[0].accommodation_name == "Alternative Lodge"
     race_rows = list(db.scalars(select(Assignment).where(Assignment.revision_id == draft.id)))
-    assert len([row for row in race_rows if row.person_id == person.id]) == 2
-    assert {row.start_time for row in race_rows if row.person_id == person.id} == {time(8, 45)}
+    person_row = next(row for row in race_rows if row.person_id == person.id)
+    assert person_row.start_time is None
+    assert effective_person_travel(draft, person_row).start == time(8, 45)
     assert next(row for row in race_rows if row.person_id == local_person.id).start_time == time(8, 50)
     assert (draft.start_time, draft.end_time) == (time(8, 30), time(22, 30))
+    db.refresh(workday)
+    with pytest.raises(ValueError, match="only one position"):
+        save_draft(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=workday.lock_version,
+            details=DraftDetailsInput(
+                work_date=draft.work_date,
+                track_id=track.id,
+                title=draft.title,
+                start_time=draft.start_time,
+                end_time=draft.end_time,
+                on_track_time=draft.on_track_time,
+                first_trial_time=None,
+                first_race_time=None,
+                last_race_time=draft.last_race_time,
+                race_count=None,
+                day_note="",
+                change_reason="",
+            ),
+            assignments=[
+                DraftAssignmentInput(
+                    base_position_id=position.id,
+                    slot_index=None,
+                    person_id=person.id,
+                    status="ASSIGNED",
+                )
+                for position in (eng, ccu)
+            ],
+        )
     db.commit()
-    publish(db, workday.id, draft.id, manager.id, workday.lock_version)
+    conflicting_travel = Workday(
+        region_id=region.id,
+        category=WorkdayCategory.TRAVEL_DAY.value,
+        created_by_user_id=manager.id,
+    )
+    db.add(conflicting_travel)
+    db.flush()
+    conflicting_revision = WorkdayRevision(
+        workday_id=conflicting_travel.id,
+        revision_number=1,
+        state="PUBLISHED",
+        work_date=date(2026, 10, 13),
+        track_name_snapshot="Other hotel",
+        title="Other Travel",
+        start_time=time(12),
+        end_time=time(17),
+        created_by_user_id=manager.id,
+        published_by_user_id=manager.id,
+        published_at=utcnow(),
+    )
+    db.add(conflicting_revision)
+    db.flush()
+    db.add(
+        Assignment(
+            revision_id=conflicting_revision.id,
+            display_name_snapshot="Travel",
+            person_id=person.id,
+            person_name_snapshot=person.display_name,
+            status="ASSIGNED",
+        )
+    )
+    conflicting_travel.current_published_revision_id = conflicting_revision.id
+    db.commit()
+    workday_id, draft_id, manager_id = workday.id, draft.id, manager.id
+    with pytest.raises(PublishConflict):
+        publish(db, workday_id, draft_id, manager_id, workday.lock_version)
+    conflicting_travel.status = WorkdayStatus.CANCELLED.value
+    db.commit()
+    db.refresh(workday)
+    version = workday.lock_version
+    db.commit()
+    publish(db, workday_id, draft_id, manager_id, version)
     db.refresh(travel_day)
     assert travel_day.current_published_revision_id == travel_revision.id
     assert travel_day.current_draft_revision_id is None
+    parent_draft = ensure_draft(db, workday, manager.id)
+    parent_rows = list(
+        db.scalars(select(Assignment).where(Assignment.revision_id == parent_draft.id))
+    )
+
+    def details(enabled: bool) -> DraftDetailsInput:
+        return DraftDetailsInput(
+            work_date=parent_draft.work_date,
+            track_id=parent_draft.track_id,
+            title=parent_draft.title,
+            start_time=parent_draft.start_time,
+            end_time=parent_draft.end_time,
+            on_track_time=parent_draft.on_track_time,
+            first_trial_time=parent_draft.first_trial_time,
+            first_race_time=parent_draft.first_race_time,
+            last_race_time=parent_draft.last_race_time,
+            race_count=parent_draft.race_count,
+            day_note=parent_draft.day_note,
+            change_reason="Travel plan changed",
+            start_origin=parent_draft.start_origin,
+            finish_destination=parent_draft.finish_destination,
+            category=workday.category,
+            racing_discipline=workday.racing_discipline,
+            standard_travel_enabled=enabled,
+            travel_departure_time=parent_draft.travel_departure_time,
+            travel_to_hotel_minutes=parent_draft.travel_to_hotel_minutes,
+            default_hotel=parent_draft.default_hotel,
+            hotel_to_track_minutes=parent_draft.hotel_to_track_minutes,
+            return_travel_minutes=parent_draft.return_travel_minutes,
+            pack_up_minutes=parent_draft.pack_up_minutes,
+        )
+
+    def inputs() -> list[DraftAssignmentInput]:
+        return [
+            DraftAssignmentInput(
+                assignment_id=row.id,
+                base_position_id=row.base_position_id,
+                slot_index=row.slot_index,
+                person_id=row.person_id,
+                status=row.status,
+                start_time=row.start_time,
+                end_time=row.end_time,
+                transport_mode=row.transport_mode,
+                vehicle_id=row.vehicle_id,
+                custom_transport_text=row.custom_transport_text,
+                accommodation_name=row.accommodation_name or "",
+                uses_standard_travel=row.uses_standard_travel,
+                hotel_to_track_minutes_override=row.hotel_to_track_minutes_override,
+            )
+            for row in parent_rows
+        ]
+
+    db.refresh(workday)
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=parent_draft.id,
+        expected_version=workday.lock_version,
+        details=details(False),
+        assignments=inputs(),
+    )
+    db.refresh(travel_day)
+    assert travel_day.status == WorkdayStatus.SCHEDULED.value
+    db.refresh(workday)
+    version = workday.lock_version
+    parent_draft_id = parent_draft.id
+    db.commit()
+    publish(db, workday_id, parent_draft_id, manager_id, version)
+    db.refresh(travel_day)
+    assert travel_day.status == WorkdayStatus.CANCELLED.value
+    parent_draft = ensure_draft(db, workday, manager.id)
+    parent_rows = list(
+        db.scalars(select(Assignment).where(Assignment.revision_id == parent_draft.id))
+    )
+    db.refresh(workday)
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=parent_draft.id,
+        expected_version=workday.lock_version,
+        details=details(True),
+        assignments=inputs(),
+    )
+    db.refresh(travel_day)
+    assert travel_day.status == WorkdayStatus.CANCELLED.value
+    db.refresh(workday)
+    version = workday.lock_version
+    parent_draft_id = parent_draft.id
+    db.commit()
+    publish(db, workday_id, parent_draft_id, manager_id, version)
+    db.refresh(travel_day)
+    assert travel_day.status == WorkdayStatus.SCHEDULED.value
+    assert db.scalar(
+        select(Workday.id).where(Workday.generated_from_workday_id == workday.id)
+    ) == travel_day.id
 
 
 def _user(db, email: str) -> User:  # type: ignore[no-untyped-def]
@@ -222,9 +444,10 @@ def test_travel_transport_hotel_and_generated_title_survive_publication(db) -> N
     track = Track(name="Te Rapa", region_id=region.id, palette_slot=1)
     position = BasePosition(name="Camera")
     person = Person(display_name="Builder Crew")
+    second_person = Person(display_name="Second Builder Crew")
     vehicle = Vehicle(name="Unit Van", lifecycle="ACTIVE")
     user = _user(db, "builder@example.test")
-    db.add_all([track, position, person, vehicle])
+    db.add_all([track, position, person, second_person, vehicle])
     db.commit()
     workday = create_workday(
         db, region_id=region.id, category="RACE_DAY", work_date=date(2026, 11, 1),
@@ -250,7 +473,7 @@ def test_travel_transport_hotel_and_generated_title_survive_publication(db) -> N
                 vehicle_id=vehicle.id, accommodation_name="Racecourse Hotel",
             ),
             DraftAssignmentInput(
-                base_position_id=position.id, slot_index=2, person_id=person.id,
+                base_position_id=position.id, slot_index=2, person_id=second_person.id,
                 status="ASSIGNED", transport_mode="SELF_TRAVEL",
             ),
         ],
@@ -260,7 +483,7 @@ def test_travel_transport_hotel_and_generated_title_survive_publication(db) -> N
     rows = list(db.query(Assignment).filter(Assignment.revision_id == draft.id))
     assert draft.title == "Race Day"
     assert (draft.start_origin, draft.finish_destination) == ("Auckland depot", "Auckland depot")
-    assert {row.accommodation_name for row in rows} == {"Racecourse Hotel"}
+    assert {row.accommodation_name for row in rows} == {"Racecourse Hotel", None}
     assert next(row for row in rows if row.vehicle_id).vehicle_name_snapshot == "Unit Van"
     db.commit()
     published = publish(db, workday.id, draft.id, user.id, workday.lock_version)

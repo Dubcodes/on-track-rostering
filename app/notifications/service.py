@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.branding.service import branding_for
 from app.catalog.models import Region
 from app.core.config import get_settings
-from app.core.enums import Role
+from app.core.enums import Role, WorkdayStatus
 from app.core.time import local_today, utcnow
 from app.identity.models import RoleGrant, User, UserPersonLink
 from app.notices.service import relevant_notice_user_ids
@@ -573,6 +573,7 @@ def generate_reminders(db: Session, *, now: datetime | None = None, horizon_days
         .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
         .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
         .where(
+            Workday.status == WorkdayStatus.SCHEDULED.value,
             WorkdayRevision.work_date >= today,
             WorkdayRevision.work_date <= today + timedelta(days=horizon_days),
             Assignment.person_id.is_not(None),
@@ -721,6 +722,7 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
                 .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
                 .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
                 .where(
+                    Workday.status == WorkdayStatus.SCHEDULED.value,
                     Workday.region_id.in_(authorised_regions),
                     WorkdayRevision.work_date >= week_start,
                     WorkdayRevision.work_date <= week_end,
@@ -757,6 +759,7 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
                 .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
                 .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
                 .where(
+                    Workday.status == WorkdayStatus.SCHEDULED.value,
                     Workday.region_id.in_(employee_regions),
                     WorkdayRevision.work_date >= local_date,
                     WorkdayRevision.work_date <= month_end,

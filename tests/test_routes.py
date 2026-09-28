@@ -43,7 +43,14 @@ from app.identity.models import (
     UserPersonLink,
 )
 from app.main import app
-from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
+from app.notifications.models import NotificationEvent
+from app.rostering.models import (
+    Assignment,
+    PersonalWorkdayEntry,
+    PositionCapability,
+    Workday,
+    WorkdayRevision,
+)
 from app.system_settings.models import SystemSettings
 
 
@@ -176,7 +183,7 @@ def test_unified_new_builder_saves_complete_harness_draft_atomically(routed_db) 
 
 
 def test_unified_new_builder_accepts_unassigned_preset_rows_for_office_day(routed_db) -> None:  # type: ignore[no-untyped-def]
-    _factory, (region_id, track_id, position_id, _person_id) = routed_db
+    factory, (region_id, track_id, position_id, _person_id) = routed_db
     client = TestClient(app)
     csrf = _login(client, "manager@example.test", "123456")
     saved = client.post(
@@ -203,13 +210,17 @@ def test_unified_new_builder_accepts_unassigned_preset_rows_for_office_day(route
             "uses_standard_travel": ["1", "1"],
             "hotel_to_track_minutes_override": ["", ""],
             "travel_departure_time": "12:00",
-            "pack_up_minutes": "60",
+            "pack_up_minutes": "0",
             "csrf_token": csrf,
         },
         follow_redirects=False,
     )
     assert saved.status_code == 303, saved.text
     assert saved.headers["location"].endswith("/preview")
+    with factory() as db:
+        workday_id = uuid.UUID(saved.headers["location"].split("/")[-2])
+        workday = db.get(Workday, workday_id)
+        assert db.get(WorkdayRevision, workday.current_draft_revision_id).pack_up_minutes == 0
 
 
 def test_track_edit_region_authority_palette_and_history(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -744,6 +755,85 @@ def _login(client: TestClient, email: str, pin: str) -> str:
     csrf = client.cookies.get("ontrack_csrf")
     assert csrf
     return csrf
+
+
+def test_employee_personal_timing_and_making_own_way_are_stable_and_notify_manager(
+    routed_db,
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        person = db.get(Person, person_id)
+        workday = Workday(
+            region_id=region_id,
+            category="RACE_DAY",
+            created_by_user_id=manager.id,
+        )
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 11, 2),
+            track_name_snapshot="Ellerslie",
+            title="Race Day",
+            start_time=time(8),
+            end_time=time(18),
+            standard_travel_enabled=True,
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+            published_at=utcnow(),
+        )
+        db.add(revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position_id,
+                display_name_snapshot="CCU",
+                person_id=person.id,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        workday.current_published_revision_id = revision.id
+        db.commit()
+        workday_id = workday.id
+    client = TestClient(app)
+    csrf = _login(client, "amy@example.test", "654321")
+    response = client.post(
+        f"/day/{workday_id}/personal",
+        data={
+            "csrf_token": csrf,
+            "note": "Private employee note",
+            "personal_start_time": "08:30",
+            "personal_finish_time": "17:45",
+            "last_race_time_changed": "1",
+            "finished_back_at_office": "1",
+            "standard_travel_opt_out": "1",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with factory() as db:
+        entry = db.scalar(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id == workday_id,
+                PersonalWorkdayEntry.person_id == person_id,
+            )
+        )
+        assert entry.note == "Private employee note"
+        assert (entry.start_time, entry.end_time) == (time(8, 30), time(17, 45))
+        assert entry.standard_travel_opt_out is True
+        event = db.scalar(
+            select(NotificationEvent).where(NotificationEvent.workday_id == workday_id)
+        )
+        assert event.event_type == "MANAGER_ACTION_REQUIRED"
+        workday = db.get(Workday, workday_id)
+        workday.current_published_revision_id = None
+        db.commit()
+        assert db.get(PersonalWorkdayEntry, entry.id).note == "Private employee note"
 
 
 def test_admin_data_export_is_authorized_and_secret_free(routed_db) -> None:  # type: ignore[no-untyped-def]
