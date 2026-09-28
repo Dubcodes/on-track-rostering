@@ -697,6 +697,9 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
         "2030-01-10" if width == 1280 else "2030-01-11"
     )
     page.locator('select[name="day_type"]').select_option("OFFICE_DAY:")
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.get_by_role("button", name="Apply defaults").click()
+    assert page.locator("[data-assignment-row]").count() == 0
     page.locator('select[name="region_id"]').select_option(values["region_id"])
     page.locator('select[name="track_id"]').select_option(values["track_id"])
     page.locator('details:has(input[name="title"]) > summary').click()

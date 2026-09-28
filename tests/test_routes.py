@@ -175,6 +175,43 @@ def test_unified_new_builder_saves_complete_harness_draft_atomically(routed_db) 
         assert len(rows) == 1 and rows[0].person_id == person_id
 
 
+def test_unified_new_builder_accepts_unassigned_preset_rows_for_office_day(routed_db) -> None:  # type: ignore[no-untyped-def]
+    _factory, (region_id, track_id, position_id, _person_id) = routed_db
+    client = TestClient(app)
+    csrf = _login(client, "manager@example.test", "123456")
+    saved = client.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "track_id": str(track_id),
+            "work_date": "2030-01-10",
+            "day_type": "OFFICE_DAY:",
+            "title": "Browser private draft",
+            "assignment_id": ["", ""],
+            "base_position_id": [str(position_id), str(position_id)],
+            "slot_index": ["1", "2"],
+            "person_id": ["", ""],
+            "status": ["TBC", "TBC"],
+            "note": ["", ""],
+            "note_private": ["1", "1"],
+            "assignment_start_time": ["", ""],
+            "assignment_end_time": ["", ""],
+            "transport_mode": ["UNASSIGNED", "UNASSIGNED"],
+            "vehicle_id": ["", ""],
+            "custom_transport_text": ["", ""],
+            "accommodation_name": ["", ""],
+            "uses_standard_travel": ["1", "1"],
+            "hotel_to_track_minutes_override": ["", ""],
+            "travel_departure_time": "12:00",
+            "pack_up_minutes": "60",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303, saved.text
+    assert saved.headers["location"].endswith("/preview")
+
+
 def test_track_edit_region_authority_palette_and_history(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, track_id, position_id, person_id) = routed_db
     with factory() as db:
