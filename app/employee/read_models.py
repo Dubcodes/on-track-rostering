@@ -13,8 +13,8 @@ from app.core.enums import Role, WorkdayStatus
 from app.core.holidays import holiday_for_date
 from app.identity.models import Person
 from app.positions.ordering import position_order
-from app.rostering.models import Assignment, PersonalWorkdayEntry, Workday, WorkdayRevision
-from app.rostering.participation import person_day_participation
+from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.rostering.participation import active_published_assignments, person_day_participation
 from app.rostering.travel import effective_person_travel, transport_display
 
 
@@ -26,9 +26,9 @@ def adjacent_published_workdays(
     """Return deterministic adjacent roster dates for the actor, never raw UUID order."""
     personal: list[tuple[uuid.UUID, date]] = []
     if actor.person_id:
-        personal = list(
+        personal_rows = list(
             db.execute(
-                select(Workday.id, WorkdayRevision.work_date)
+                select(Workday, WorkdayRevision, Assignment)
                 .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
                 .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
                 .where(
@@ -39,33 +39,29 @@ def adjacent_published_workdays(
                 .order_by(WorkdayRevision.work_date, Workday.id)
             ).all()
         )
-        opted_out = set(
-            db.scalars(
-                select(PersonalWorkdayEntry.workday_id).where(
-                    PersonalWorkdayEntry.person_id == actor.person_id,
-                    PersonalWorkdayEntry.standard_travel_opt_out.is_(True),
-                )
-            )
-        )
-        if opted_out:
-            generated = {
-                row.id
-                for row in db.scalars(
-                    select(Workday).where(Workday.generated_from_workday_id.in_(opted_out))
-                )
-            }
-            personal = [row for row in personal if row[0] not in generated]
+        personal = list(dict.fromkeys(
+            (workday.id, revision.work_date)
+            for workday, revision, assignment in personal_rows
+            if active_published_assignments(db, workday, revision, [assignment])
+        ))
     candidates = personal
     if not candidates:
-        candidates = [
-            (workday_id, work_date)
-            for workday_id, work_date, region_id in db.execute(
-                select(Workday.id, WorkdayRevision.work_date, Workday.region_id)
+        management_rows = db.execute(
+                select(Workday, WorkdayRevision)
                 .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
                 .order_by(WorkdayRevision.work_date, Workday.id)
-            )
-            if can_view_management_detail(actor, region_id)
-        ]
+            ).all()
+        candidates = []
+        for workday, revision in management_rows:
+            if not can_view_management_detail(actor, workday.region_id):
+                continue
+            if workday.generated_from_workday_id:
+                assignments = list(
+                    db.scalars(select(Assignment).where(Assignment.revision_id == revision.id))
+                )
+                if not active_published_assignments(db, workday, revision, assignments):
+                    continue
+            candidates.append((workday.id, revision.work_date))
     previous = [row for row in candidates if row[1] < current_date]
     following = [row for row in candidates if row[1] > current_date]
     previous_id = None
@@ -98,7 +94,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         )
     rows = db.execute(statement).all()
     own_by_revision: dict[uuid.UUID, list[Assignment]] = {}
-    statuses_by_revision: dict[uuid.UUID, set[str]] = {}
+    all_by_revision: dict[uuid.UUID, list[Assignment]] = {}
     if actor.person_id and rows:
         revision_ids = [revision.id for _workday, revision, _region, _slot in rows]
         for assignment in db.scalars(
@@ -109,44 +105,35 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
             own_by_revision.setdefault(assignment.revision_id, []).append(assignment)
     if broad_month and rows:
         revision_ids = [revision.id for _workday, revision, _region, _slot in rows]
-        for revision_id, status in db.execute(
-            select(Assignment.revision_id, Assignment.status).where(Assignment.revision_id.in_(revision_ids))
+        for assignment in db.scalars(
+            select(Assignment).where(Assignment.revision_id.in_(revision_ids))
         ):
-            statuses_by_revision.setdefault(revision_id, set()).add(status)
+            all_by_revision.setdefault(assignment.revision_id, []).append(assignment)
     home_region_id = (
         db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
         if actor.person_id
         else None
     )
     result: list[dict[str, object]] = []
-    opted_out_parent_ids = (
-        set(
-            db.scalars(
-                select(PersonalWorkdayEntry.workday_id).where(
-                    PersonalWorkdayEntry.person_id == actor.person_id,
-                    PersonalWorkdayEntry.standard_travel_opt_out.is_(True),
-                )
-            )
-        )
-        if actor.person_id
-        else set()
-    )
     draft_ids = {
         workday.id
         for workday, _revision, _region, _slot in rows
         if workday.current_draft_revision_id and can_manage_region(actor, workday.region_id)
     }
     for workday, revision, region, palette_slot in rows:
-        if workday.generated_from_workday_id in opted_out_parent_ids:
-            continue
         own = own_by_revision.get(revision.id, [])
+        if workday.generated_from_workday_id:
+            own = active_published_assignments(db, workday, revision, own)
         if not own and not broad_month:
             continue
         if not own and not can_crew_view(actor, workday.region_id):
             continue
         participation = person_day_participation(revision, own) if own else None
+        visible_rows = all_by_revision.get(revision.id, [])
+        if workday.generated_from_workday_id:
+            visible_rows = active_published_assignments(db, workday, revision, visible_rows)
         visible_statuses = (
-            set(participation.statuses) if participation else statuses_by_revision.get(revision.id, set())
+            set(participation.statuses) if participation else {row.status for row in visible_rows}
         )
         display_statuses = ["UNASSIGNED" if value == "TBC" else value for value in (
             participation.statuses if participation else ("PUBLISHED",)
@@ -238,6 +225,7 @@ def day_assignments(
     can_view_all_rows: bool,
     can_view_private_notes: bool,
     can_self_decline: bool = False,
+    workday: Workday | None = None,
 ) -> list[dict[str, object]]:
     statement = select(Assignment).where(Assignment.revision_id == revision.id)
     if not can_view_all_rows:
@@ -245,6 +233,8 @@ def day_assignments(
             return []
         statement = statement.where(Assignment.person_id == actor.person_id)
     rows = list(db.scalars(statement.order_by(Assignment.display_name_snapshot)))
+    if workday and workday.generated_from_workday_id:
+        rows = active_published_assignments(db, workday, revision, rows)
     rows.sort(key=lambda row: (position_order(row.display_name_snapshot), str(row.slot_key)))
     result = []
     empty_labels = {

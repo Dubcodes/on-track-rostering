@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import AssignmentStatus, WorkdayStatus
 from app.rostering.models import Assignment, Workday, WorkdayRevision
-from app.rostering.travel import TRANSPORT_VEHICLE
+from app.rostering.travel import TRANSPORT_VEHICLE, effective_person_travel
 
 
 @dataclass(frozen=True)
@@ -116,11 +116,13 @@ def publication_conflicts(
                 )
             if not matches:
                 continue
+            current_travel = effective_person_travel(draft, current)
+            other_travel = effective_person_travel(other_revision, other)
             overlap, timing = _overlap(
-                current.start_time or draft.start_time,
-                current.end_time or draft.end_time,
-                other.start_time or other_revision.start_time,
-                other.end_time or other_revision.end_time,
+                current_travel.start,
+                current_travel.finish,
+                other_travel.start,
+                other_travel.finish,
             )
             for kind, identity, subject in matches:
                 key = (kind, identity, other_workday.id)

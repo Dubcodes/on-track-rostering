@@ -59,6 +59,10 @@ async function offlineDayPage(workdayId) {
     timing("First race", day.first_race),
     timing("Last race", day.last_race),
     timing("Race count", day.race_count),
+  ].join("") : day.category === "TRIALS" ? [
+    timing("On track", day.on_track),
+    timing("First trial", day.first_trial),
+    timing("Last trial", day.last_trial),
   ].join("") : "";
   const assignments = (day.assignments || []).map((row) => `
     <div class="crew-roster-row own" role="row"><span role="cell">${html(row.role)}</span>

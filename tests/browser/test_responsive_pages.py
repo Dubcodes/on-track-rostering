@@ -1526,9 +1526,9 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
         page.get_by_text("Timing", exact=True).click()
     assert first_trial.is_visible()
     assert first_trial.input_value()
-    assert page.locator('input[name="first_race_time"]').count() == 0
-    assert page.locator('input[name="last_race_time"]').count() == 0
-    assert page.locator('input[name="race_count"]').count() == 0
+    assert not page.locator('input[name="first_race_time"]').is_visible()
+    assert not page.locator('input[name="last_race_time"]').is_visible()
+    assert not page.locator('input[name="race_count"]').is_visible()
     updated_time = "10:15" if width == 1280 else "10:30"
     first_trial.fill(updated_time)
     page.get_by_role("button", name="Add position").click()
@@ -1869,4 +1869,31 @@ def test_specific_personal_day_renders_from_cache_while_physically_offline(
     _assert_no_horizontal_overflow(page)
     assert not errors
     context.set_offline(False)
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
+def test_unpublished_builder_switches_timing_fields_without_reload(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900}, has_touch=width <= 760)
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/manage/workdays/new")
+    day_type = page.locator("[data-day-type]")
+    day_type.select_option("OFFICE_DAY:")
+    assert not page.locator('input[name="on_track_time"]').is_visible()
+    assert not page.locator('input[name="first_race_time"]').is_visible()
+    day_type.select_option("RACE_DAY:THOROUGHBRED")
+    assert page.locator('input[name="on_track_time"]').is_visible()
+    assert page.locator('input[name="first_trial_time"]').is_visible()
+    assert page.locator('input[name="first_race_time"]').is_visible()
+    day_type.select_option("TRIALS:THOROUGHBRED")
+    assert page.locator('input[name="last_trial_time"]').is_visible()
+    assert not page.locator('input[name="first_race_time"]').is_visible()
+    day_type.select_option("RACE_DAY:HARNESS")
+    assert not page.locator('input[name="last_trial_time"]').is_visible()
+    assert page.locator('input[name="race_count"]').is_visible()
+    _assert_no_horizontal_overflow(page)
+    assert not errors
     context.close()

@@ -146,6 +146,12 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         )
         for index in range(row_count)
     ]
+    racing = category in {
+        WorkdayCategory.RACE_DAY.value,
+        WorkdayCategory.TRIALS.value,
+    }
+    race_day = category == WorkdayCategory.RACE_DAY.value
+    trials = category == WorkdayCategory.TRIALS.value
     details = DraftDetailsInput(
         work_date=date.fromisoformat(str(form["work_date"])),
         track_id=_optional_uuid(form.get("track_id")),
@@ -153,30 +159,12 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         start_time=parse_time(str(form.get("start_time", ""))),
         end_time=parse_time(str(form.get("end_time", ""))),
         end_time_is_override=str(form.get("end_time_is_override", "")) == "1",
-        on_track_time=(
-            parse_time(str(form.get("on_track_time", "")))
-            if "on_track_time" in form else (draft.on_track_time if draft else None)
-        ),
-        first_trial_time=(
-            parse_time(str(form.get("first_trial_time", "")))
-            if "first_trial_time" in form else (draft.first_trial_time if draft else None)
-        ),
-        last_trial_time=(
-            parse_time(str(form.get("last_trial_time", "")))
-            if "last_trial_time" in form else (draft.last_trial_time if draft else None)
-        ),
-        first_race_time=(
-            parse_time(str(form.get("first_race_time", "")))
-            if "first_race_time" in form else (draft.first_race_time if draft else None)
-        ),
-        last_race_time=(
-            parse_time(str(form.get("last_race_time", "")))
-            if "last_race_time" in form else (draft.last_race_time if draft else None)
-        ),
-        race_count=(
-            _optional_int(form.get("race_count"))
-            if "race_count" in form else (draft.race_count if draft else None)
-        ),
+        on_track_time=parse_time(str(form.get("on_track_time", ""))) if racing else None,
+        first_trial_time=parse_time(str(form.get("first_trial_time", ""))) if racing else None,
+        last_trial_time=parse_time(str(form.get("last_trial_time", ""))) if trials else None,
+        first_race_time=parse_time(str(form.get("first_race_time", ""))) if race_day else None,
+        last_race_time=parse_time(str(form.get("last_race_time", ""))) if race_day else None,
+        race_count=_optional_int(form.get("race_count")) if race_day else None,
         day_note=str(form.get("day_note", "")),
         change_reason=str(form.get("change_reason", "")),
         start_origin=str(form.get("start_origin", "")),
@@ -634,11 +622,11 @@ def update_workday_status(
         raise HTTPException(400, "Invalid Workday status")
     before = workday.status
     workday.status = status
+    published = db.get(WorkdayRevision, workday.current_published_revision_id)
     generated = db.scalar(
         select(Workday).where(Workday.generated_from_workday_id == workday.id)
     )
     if generated:
-        published = db.get(WorkdayRevision, workday.current_published_revision_id)
         generated_status = (
             status
             if status in {WorkdayStatus.CANCELLED.value, WorkdayStatus.ABANDONED.value}
@@ -679,7 +667,14 @@ def update_workday_status(
         payload={
             "revision_id": str(workday.current_published_revision_id or ""),
             "previous_revision_id": None,
-            "summary": f"Workday status changed from {before} to {status}.",
+            "status": status,
+            "summary": (
+                f"{published.track_name_snapshot or published.title} roster for "
+                f"{published.work_date:%d %b %Y} was "
+                f"{'reinstated' if status == WorkdayStatus.SCHEDULED.value else status.lower()}."
+                if published
+                else f"Roster status changed to {status.lower()}."
+            ),
         },
     )
     workday.lock_version += 1

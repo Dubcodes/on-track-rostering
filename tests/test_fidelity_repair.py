@@ -23,7 +23,15 @@ from app.identity.models import LoginThrottle, Person, RoleGrant, User, UserPers
 from app.notifications.models import NotificationEvent
 from app.notifications.service import _notification_payload
 from app.rostering.conflicts import publication_conflicts
-from app.rostering.models import Assignment, Operation, TravelLeg, Workday, WorkdayRevision
+from app.rostering.models import (
+    Assignment,
+    Operation,
+    PersonalWorkdayEntry,
+    TravelLeg,
+    Workday,
+    WorkdayRevision,
+)
+from app.rostering.participation import active_published_assignments
 from app.rostering.service import (
     DraftAssignmentInput,
     DraftDetailsInput,
@@ -109,6 +117,111 @@ def test_effective_travel_inherits_changed_defaults_and_recalculates_start() -> 
     revision.end_time_is_override = True
     inherited.return_travel_minutes_override = 30
     assert effective_person_travel(revision, inherited).finish == time(18)
+
+
+def test_generated_travel_participation_follows_parent_publication_and_opt_out(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Travel participation")
+    user = _user(db, "travel-participation@example.test")
+    person = Person(display_name="Travelling Crew")
+    db.add_all([region, person])
+    db.flush()
+    parent = Workday(region_id=region.id, category="RACE_DAY", created_by_user_id=user.id)
+    db.add(parent)
+    db.flush()
+    child = Workday(
+        region_id=region.id, category="TRAVEL_DAY",
+        generated_from_workday_id=parent.id, created_by_user_id=user.id,
+    )
+    db.add(child)
+    db.flush()
+    parent_revision = WorkdayRevision(
+        workday_id=parent.id, revision_number=1, state="PUBLISHED",
+        work_date=date(2026, 10, 14), standard_travel_enabled=True,
+        created_by_user_id=user.id,
+    )
+    child_revision = WorkdayRevision(
+        workday_id=child.id, revision_number=1, state="PUBLISHED",
+        work_date=date(2026, 10, 13), standard_travel_enabled=False,
+        created_by_user_id=user.id,
+    )
+    db.add_all([parent_revision, child_revision])
+    db.flush()
+    parent_row = Assignment(
+        revision_id=parent_revision.id, display_name_snapshot="Camera",
+        person_id=person.id, status="ASSIGNED", uses_standard_travel=True,
+    )
+    child_row = Assignment(
+        revision_id=child_revision.id, display_name_snapshot="Travel",
+        person_id=person.id, status="ASSIGNED", accommodation_name="Alternate Lodge",
+    )
+    db.add_all([parent_row, child_row])
+    parent.current_published_revision_id = parent_revision.id
+    child.current_published_revision_id = child_revision.id
+    db.commit()
+    assert active_published_assignments(db, child, child_revision, [child_row]) == [child_row]
+    assert effective_person_travel(child_revision, child_row).accommodation == "Alternate Lodge"
+    entry = PersonalWorkdayEntry(
+        workday_id=parent.id, person_id=person.id, standard_travel_opt_out=True,
+    )
+    db.add(entry)
+    db.commit()
+    assert active_published_assignments(db, child, child_revision, [child_row]) == []
+    entry.standard_travel_opt_out = False
+    parent_row.uses_standard_travel = False
+    db.commit()
+    assert active_published_assignments(db, child, child_revision, [child_row]) == []
+    parent_row.uses_standard_travel = True
+    parent.status = WorkdayStatus.CANCELLED.value
+    db.commit()
+    assert active_published_assignments(db, child, child_revision, [child_row]) == []
+
+
+def test_conflicts_use_effective_hotel_departure_and_return_override(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Effective conflict")
+    user = _user(db, "effective-conflict@example.test")
+    person = Person(display_name="Effective Crew")
+    vehicle = Vehicle(name="Effective Van", lifecycle="ACTIVE")
+    db.add_all([region, person, vehicle])
+    db.flush()
+    other = Workday(region_id=region.id, category="RACE_DAY", created_by_user_id=user.id)
+    target = Workday(region_id=region.id, category="OFFICE_DAY", created_by_user_id=user.id)
+    db.add_all([other, target])
+    db.flush()
+    other_revision = WorkdayRevision(
+        workday_id=other.id, revision_number=1, state="PUBLISHED",
+        work_date=date(2026, 10, 2), title="Effective race", track_name_snapshot="Te Rapa",
+        start_time=time(9), end_time=time(17), on_track_time=time(9),
+        last_race_time=time(16), standard_travel_enabled=True,
+        hotel_to_track_minutes=60, return_travel_minutes=30, pack_up_minutes=60,
+        created_by_user_id=user.id,
+    )
+    draft = WorkdayRevision(
+        workday_id=target.id, revision_number=1, state="DRAFT",
+        work_date=date(2026, 10, 2), title="Late office", track_name_snapshot="Office",
+        start_time=time(18, 30), end_time=time(20), created_by_user_id=user.id,
+    )
+    db.add_all([other_revision, draft])
+    db.flush()
+    db.add_all([
+        Assignment(
+            revision_id=other_revision.id, display_name_snapshot="Camera",
+            person_id=person.id, person_name_snapshot=person.display_name, status="ASSIGNED",
+            transport_mode=TRANSPORT_VEHICLE, vehicle_id=vehicle.id,
+            vehicle_name_snapshot=vehicle.name, return_travel_minutes_override=120,
+        ),
+        Assignment(
+            revision_id=draft.id, display_name_snapshot="Office",
+            person_id=person.id, person_name_snapshot=person.display_name, status="ASSIGNED",
+            transport_mode=TRANSPORT_VEHICLE, vehicle_id=vehicle.id,
+            vehicle_name_snapshot=vehicle.name,
+        ),
+    ])
+    other.current_published_revision_id = other_revision.id
+    target.current_draft_revision_id = draft.id
+    db.commit()
+    conflicts = publication_conflicts(db, target, draft)
+    assert {item.kind for item in conflicts} == {"PERSON", "VEHICLE"}
+    assert all(item.timing.startswith("08:00–19:00") for item in conflicts)
 
 
 def test_standard_plan_generates_one_linked_travel_participation_per_person(db) -> None:  # type: ignore[no-untyped-def]
@@ -585,6 +698,15 @@ def test_workday_notification_tag_and_current_publication_body(db) -> None:  # t
     db.add(digest)
     db.flush()
     assert _notification_payload(db, digest, user.id)["tag"] == "digest:one"
+    cancelled = NotificationEvent(
+        event_key="status:cancelled", event_type="ROSTER_PUBLISHED", workday_id=workday.id,
+        payload={"status": "CANCELLED", "summary": "Ellerslie roster for 02 Oct 2026 was cancelled."},
+    )
+    db.add(cancelled)
+    db.flush()
+    cancelled_payload = _notification_payload(db, cancelled, user.id)
+    assert cancelled_payload["title"] == "Roster cancelled"
+    assert cancelled_payload["body"] == "Ellerslie roster for 02 Oct 2026 was cancelled."
 
 
 def test_source_programme_title_seeds_secondary_meeting_name(db) -> None:  # type: ignore[no-untyped-def]

@@ -1106,7 +1106,10 @@ def publish(
                 region_id=workday.region_id,
                 workday_id=workday.id,
                 slot_key=row.slot_key,
-                payload={"base_position_id": str(row.base_position_id)},
+                payload={
+                    "base_position_id": str(row.base_position_id),
+                    "revision_id": str(draft.id),
+                },
             )
     return draft
 
@@ -1294,6 +1297,10 @@ def decline_published_assignment(
             region_id=workday.region_id,
             workday_id=workday.id,
             slot_key=slot_key,
-            payload={"base_position_id": str(target.base_position_id), "policy": region.decline_policy},
+            payload={
+                "base_position_id": str(target.base_position_id),
+                "policy": region.decline_policy,
+                "revision_id": str(new_revision.id),
+            },
         )
     return new_revision

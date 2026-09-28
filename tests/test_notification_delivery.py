@@ -28,7 +28,13 @@ from app.notifications.service import (
     process_event,
     save_subscription,
 )
-from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
+from app.rostering.models import (
+    Assignment,
+    PersonalWorkdayEntry,
+    PositionCapability,
+    Workday,
+    WorkdayRevision,
+)
 
 
 def _user(db, status: str = "ACTIVE") -> User:  # type: ignore[no-untyped-def]
@@ -629,3 +635,104 @@ def test_superseded_removed_and_late_reminders_are_terminal_without_delivery(db)
     _reminder_roster(db, "ancient", date(2026, 10, 1))
     after_start = datetime(2026, 9, 30, 23, tzinfo=UTC)  # noon NZ on the Workday
     assert generate_reminders(db, now=after_start) == 0
+
+
+def test_generated_travel_opt_out_invalidates_pending_reminder(db) -> None:  # type: ignore[no-untyped-def]
+    user, person, parent, parent_revision, parent_assignment = _reminder_roster(
+        db, "travel-opt-out", date(2026, 10, 20)
+    )
+    parent_revision.standard_travel_enabled = True
+    parent_assignment.uses_standard_travel = True
+    child = Workday(
+        region_id=parent.region_id, category="TRAVEL_DAY",
+        generated_from_workday_id=parent.id, created_by_user_id=user.id,
+    )
+    db.add(child)
+    db.flush()
+    child_revision = WorkdayRevision(
+        workday_id=child.id, revision_number=1, state="PUBLISHED",
+        work_date=date(2026, 10, 19), start_time=time(12), end_time=time(17),
+        created_by_user_id=user.id,
+    )
+    db.add(child_revision)
+    db.flush()
+    db.add(Assignment(
+        revision_id=child_revision.id, display_name_snapshot="Travel",
+        person_id=person.id, status="ASSIGNED",
+    ))
+    child.current_published_revision_id = child_revision.id
+    db.commit()
+    generated_at = datetime(2026, 10, 1, tzinfo=UTC)
+    generate_reminders(db, now=generated_at, horizon_days=30)
+    event = db.get(NotificationEvent, f"reminder:NIGHT_BEFORE:{child_revision.id}:{person.id}")
+    assert event is not None
+    db.add(PersonalWorkdayEntry(
+        workday_id=parent.id, person_id=person.id, standard_travel_opt_out=True,
+    ))
+    db.commit()
+    sent: list[str] = []
+    process_event(db, event, sender=lambda *_: sent.append("sent"), now=event.available_at)
+    assert event.status == "PROCESSED" and sent == []
+
+
+def test_cancelled_workday_invalidates_pending_reminder(db) -> None:  # type: ignore[no-untyped-def]
+    _user_row, person, workday, revision, _assignment = _reminder_roster(
+        db, "cancelled", date(2026, 10, 20)
+    )
+    generate_reminders(db, now=datetime(2026, 10, 1, tzinfo=UTC), horizon_days=30)
+    event = db.get(NotificationEvent, f"reminder:NIGHT_BEFORE:{revision.id}:{person.id}")
+    assert event is not None
+    workday.status = "CANCELLED"
+    db.commit()
+    sent: list[str] = []
+    process_event(db, event, sender=lambda *_: sent.append("sent"), now=event.available_at)
+    assert event.status == "PROCESSED" and sent == []
+
+
+def test_stale_open_position_event_is_terminal_without_delivery(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Stale opening")
+    user = User(
+        email="stale-opening@example.test", display_name="Opening applicant",
+        credential_hash=hash_credential("123456"),
+    )
+    person = Person(display_name="Opening applicant")
+    position = BasePosition(name="Opening camera")
+    db.add_all([region, user, person, position])
+    db.flush()
+    db.add_all([
+        UserPersonLink(user_id=user.id, person_id=person.id),
+        RoleGrant(user_id=user.id, role=Role.EMPLOYEE.value, region_id=region.id),
+        PositionCapability(
+            person_id=person.id, base_position_id=position.id,
+            signal=CapabilitySignal.MANAGER_ALLOW.value,
+        ),
+    ])
+    workday = Workday(region_id=region.id, created_by_user_id=user.id)
+    db.add(workday)
+    db.flush()
+    revision = WorkdayRevision(
+        workday_id=workday.id, revision_number=1, state="PUBLISHED",
+        work_date=date(2026, 10, 20), created_by_user_id=user.id,
+    )
+    db.add(revision)
+    db.flush()
+    opening = Assignment(
+        revision_id=revision.id, base_position_id=position.id,
+        display_name_snapshot="Camera", status="OPEN",
+    )
+    db.add(opening)
+    workday.current_published_revision_id = revision.id
+    db.commit()
+    _subscription(db, user)
+    event = NotificationEvent(
+        event_key="stale-opening:event", event_type="OPEN_POSITION_AVAILABLE",
+        region_id=region.id, workday_id=workday.id, assignment_slot_key=opening.slot_key,
+        payload={"base_position_id": str(position.id), "revision_id": str(revision.id)},
+    )
+    db.add(event)
+    db.commit()
+    opening.status = "TBC"
+    db.commit()
+    sent: list[str] = []
+    process_event(db, event, sender=lambda *_: sent.append("sent"))
+    assert event.status == "PROCESSED" and sent == []

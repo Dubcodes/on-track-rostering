@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.catalog.models import BasePosition, PersonCrewGroup, Region
+from app.core.enums import WorkdayStatus
 from app.identity.models import Person
 from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
@@ -83,6 +84,7 @@ def crew_picker_views(
             .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
             .where(
                 WorkdayRevision.work_date == work_date,
+                Workday.status == WorkdayStatus.SCHEDULED.value,
                 *( [Workday.id != exclude_workday_id] if exclude_workday_id else [] ),
                 Assignment.person_id.is_not(None),
             )

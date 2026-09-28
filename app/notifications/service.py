@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
 from app.branding.service import branding_for
-from app.catalog.models import Region
+from app.catalog.models import BasePosition, Region
 from app.core.config import get_settings
 from app.core.enums import Role, WorkdayStatus
 from app.core.time import local_today, utcnow
@@ -30,7 +30,7 @@ from app.notifications.models import (
 )
 from app.positions.service import eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
-from app.rostering.participation import person_day_participation
+from app.rostering.participation import active_published_assignments, person_day_participation
 
 REMINDER_TYPES = {"ONE_HOUR_BEFORE", "NIGHT_BEFORE", "TWO_DAYS_BEFORE"}
 REMINDER_GRACE = timedelta(minutes=15)
@@ -252,11 +252,9 @@ def _notification_payload(
         "WEEKLY_DIGEST": "Your week ahead",
         "OPEN_POSITIONS_DIGEST": "Open positions this month",
     }
-    body = str(
-        event.payload.get("message")
-        or f"Open {product_name} to view the authoritative roster details."
-    )
-    if event.workday_id and audience_user_id:
+    explicit_body = event.payload.get("message") or event.payload.get("summary")
+    body = str(explicit_body or f"Open {product_name} to view the authoritative roster details.")
+    if event.workday_id and audience_user_id and not explicit_body:
         workday = db.get(Workday, event.workday_id)
         revision = (
             db.get(WorkdayRevision, workday.current_published_revision_id)
@@ -298,8 +296,16 @@ def _notification_payload(
                     f"{revision.track_name_snapshot} · {open_row.display_name_snapshot} · "
                     f"{revision.work_date:%d %b} {start_text}"
                 )
+    status_titles = {
+        WorkdayStatus.CANCELLED.value: "Roster cancelled",
+        WorkdayStatus.ABANDONED.value: "Roster abandoned",
+        WorkdayStatus.SCHEDULED.value: "Roster reinstated",
+    }
     return {
-        "title": titles.get(event.event_type, f"{product_name} update"),
+        "title": status_titles.get(
+            str(event.payload.get("status")),
+            titles.get(event.event_type, f"{product_name} update"),
+        ),
         "body": body,
         "url": str(
             event.payload.get("url")
@@ -331,19 +337,60 @@ def _reminder_is_current(db: Session, event: NotificationEvent, now: datetime) -
     link = db.get(UserPersonLink, event.audience_user_id)
     if (
         not workday
+        or workday.status != WorkdayStatus.SCHEDULED.value
         or workday.current_published_revision_id != revision_id
         or not user
         or user.status != "ACTIVE"
         or not link
     ):
         return False
-    return bool(
-        db.scalar(
-            select(Assignment.id)
-            .where(
+    revision = db.get(WorkdayRevision, revision_id)
+    assignments = list(
+        db.scalars(
+            select(Assignment).where(
                 Assignment.revision_id == revision_id,
                 Assignment.person_id == link.person_id,
                 Assignment.status == "ASSIGNED",
+            )
+        )
+    )
+    return bool(revision and active_published_assignments(db, workday, revision, assignments))
+
+
+def _open_position_is_current(db: Session, event: NotificationEvent) -> bool:
+    if event.event_type != "OPEN_POSITION_AVAILABLE":
+        return True
+    if not event.workday_id or not event.assignment_slot_key:
+        return False
+    workday = db.get(Workday, event.workday_id)
+    if (
+        workday is None
+        or workday.status != WorkdayStatus.SCHEDULED.value
+        or workday.current_published_revision_id is None
+    ):
+        return False
+    payload_revision = event.payload.get("revision_id")
+    if payload_revision:
+        try:
+            if uuid.UUID(str(payload_revision)) != workday.current_published_revision_id:
+                return False
+        except ValueError:
+            return False
+    try:
+        position_id = uuid.UUID(str(event.payload["base_position_id"]))
+    except (KeyError, ValueError):
+        return False
+    position = db.get(BasePosition, position_id)
+    return bool(
+        position
+        and position.lifecycle == "ACTIVE"
+        and db.scalar(
+            select(Assignment.id)
+            .where(
+                Assignment.revision_id == workday.current_published_revision_id,
+                Assignment.slot_key == event.assignment_slot_key,
+                Assignment.status == "OPEN",
+                Assignment.base_position_id == position_id,
             )
             .limit(1)
         )
@@ -385,7 +432,7 @@ def process_event(
     current = now or utcnow()
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
-    if not _reminder_is_current(db, event, current):
+    if not _reminder_is_current(db, event, current) or not _open_position_is_current(db, event):
         return _finish_stale_event(db, event)
     user_ids = audience_user_ids(db, event)
     subscriptions = (
@@ -583,6 +630,8 @@ def generate_reminders(db: Session, *, now: datetime | None = None, horizon_days
     grouped: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], list[Assignment]] = {}
     revisions: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], tuple[Workday, WorkdayRevision]] = {}
     for workday, revision, assignment in rows:
+        if not active_published_assignments(db, workday, revision, [assignment]):
+            continue
         assert assignment.person_id is not None
         key = (workday.id, revision.id, assignment.person_id)
         grouped.setdefault(key, []).append(assignment)
@@ -731,6 +780,11 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
                 )
                 .order_by(WorkdayRevision.work_date, Assignment.display_name_snapshot)
             ).all()
+            rows = [
+                row
+                for row in rows
+                if active_published_assignments(db, row[0], row[1], [row[2]])
+            ]
             if rows:
                 items = []
                 for _workday, revision, assignment in rows[:4]:

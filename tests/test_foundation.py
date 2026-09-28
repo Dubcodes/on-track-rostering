@@ -16,6 +16,7 @@ from app.core.enums import (
     OpenApplicationStatus,
     Role,
     WorkdayCategory,
+    WorkdayStatus,
 )
 from app.core.holidays import holiday_for_date
 from app.core.time import local_today, worked_minutes
@@ -303,6 +304,7 @@ def test_private_assignment_note_not_leaked_to_viewer(db) -> None:  # type: igno
 
 def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-untyped-def]
     region, track, position, person, manager, employee, _viewer = seed_vertical(db)
+    manager_id = manager.id
     set_signal(db, person.id, position.id, CapabilitySignal.MANAGER_ALLOW.value, manager.id)
     workday = create_workday(
         db,
@@ -340,6 +342,29 @@ def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-
     )
     assert duplicate.id == application.id
     draft = ensure_draft(db, workday, manager.id)
+    already_assigned = Assignment(
+        revision_id=draft.id,
+        base_position_id=position.id,
+        display_name_snapshot="Existing assignment",
+        person_id=person.id,
+        person_name_snapshot=person.display_name,
+        status=AssignmentStatus.ASSIGNED.value,
+    )
+    db.add(already_assigned)
+    db.commit()
+    version_before_rejection = workday.lock_version
+    with pytest.raises(ValueError, match="only one position"):
+        select_application(
+            db, workday=workday, draft=draft, application=application,
+            expected_version=version_before_rejection,
+        )
+    db.rollback()
+    db.refresh(workday)
+    db.refresh(application)
+    assert workday.lock_version == version_before_rejection
+    assert application.status == OpenApplicationStatus.APPLIED.value
+    db.delete(already_assigned)
+    db.commit()
     select_application(
         db,
         workday=workday,
@@ -348,7 +373,10 @@ def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-
         expected_version=workday.lock_version,
     )
     db.commit()
-    publish_current(db, workday, draft, manager.id)
+    db.refresh(workday)
+    db.refresh(draft)
+    db.commit()
+    publish_current(db, workday, draft, manager_id)
     db.refresh(application)
     assert application.status == OpenApplicationStatus.ACCEPTED.value
     assigned = db.scalar(
@@ -773,6 +801,23 @@ def test_position_aware_crew_picker_and_duplicate_names_are_id_safe(db) -> None:
         actor_user_id=manager.id,
     )
     draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    cancelled = Workday(
+        region_id=region.id, category=WorkdayCategory.TRIALS.value,
+        status=WorkdayStatus.CANCELLED.value, created_by_user_id=manager.id,
+    )
+    db.add(cancelled)
+    db.flush()
+    cancelled_revision = WorkdayRevision(
+        workday_id=cancelled.id, revision_number=1, state="PUBLISHED",
+        work_date=draft.work_date, created_by_user_id=manager.id,
+    )
+    db.add(cancelled_revision)
+    db.flush()
+    db.add(Assignment(
+        revision_id=cancelled_revision.id, display_name_snapshot="Head On",
+        person_id=remote.id, status=AssignmentStatus.ASSIGNED.value,
+    ))
+    cancelled.current_published_revision_id = cancelled_revision.id
     db.commit()
 
     views = crew_picker_views(
@@ -785,6 +830,7 @@ def test_position_aware_crew_picker_and_duplicate_names_are_id_safe(db) -> None:
     head_relevant = {person.id: person for person in views[head_on.id].relevant}
     director_other = {person.id: person for person in views[director.id].other}
     assert head_relevant[remote.id].hint == "Preferred or approved"
+    assert head_relevant[remote.id].same_date is False
     assert director_other[remote.id].hint == "Manager marked unavailable for this position"
 
     duplicate_options = [

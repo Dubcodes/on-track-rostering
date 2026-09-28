@@ -21,7 +21,7 @@ from app.rostering.models import (
     Workday,
     WorkdayRevision,
 )
-from app.rostering.participation import person_day_participation
+from app.rostering.participation import active_published_assignments, person_day_participation
 
 
 def fortnight_bounds(offset: int = 0, today: date | None = None) -> tuple[date, date]:
@@ -110,8 +110,7 @@ def published_hours(
         tuple[WorkdayRevision, Workday, Person, Region, list[Assignment]],
     ] = {}
     for assignment, revision, workday, person, region in rows:
-        entry = personal_entries.get((workday.generated_from_workday_id or workday.id, person.id))
-        if workday.generated_from_workday_id and entry and entry.standard_travel_opt_out:
+        if not active_published_assignments(db, workday, revision, [assignment]):
             continue
         key = (revision.id, person.id)
         grouped_rows.setdefault(key, (revision, workday, person, region, []))[4].append(assignment)

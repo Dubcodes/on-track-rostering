@@ -65,8 +65,8 @@ def effective_person_travel(
 ) -> EffectivePersonTravel:
     """Resolve immutable revision defaults plus nullable person overrides in one place."""
     uses_standard = bool(revision.standard_travel_enabled and assignment.uses_standard_travel)
-    accommodation = (
-        (assignment.accommodation_name or revision.default_hotel or None) if uses_standard else None
+    accommodation = assignment.accommodation_name or (
+        revision.default_hotel or None if uses_standard else None
     )
     hotel_minutes = (
         assignment.hotel_to_track_minutes_override

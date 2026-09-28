@@ -816,6 +816,13 @@ def test_employee_personal_timing_and_making_own_way_are_stable_and_notify_manag
         follow_redirects=False,
     )
     assert response.status_code == 303
+    day = client.get(f"/day/{workday_id}")
+    assert "08:30" in day.text and "17:45" in day.text
+    api_day = client.get(f"/api/day/{workday_id}")
+    assert api_day.status_code == 200
+    payload = api_day.json()["workday"]
+    assert payload["start"] == "08:30:00" and payload["end"] == "17:45:00"
+    assert "last_trial" in payload
     with factory() as db:
         entry = db.scalar(
             select(PersonalWorkdayEntry).where(
@@ -830,6 +837,11 @@ def test_employee_personal_timing_and_making_own_way_are_stable_and_notify_manag
             select(NotificationEvent).where(NotificationEvent.workday_id == workday_id)
         )
         assert event.event_type == "MANAGER_ACTION_REQUIRED"
+        assert event.payload["person"] == "Amy"
+        assert event.payload["making_own_way"] is True
+        assert event.payload["date"] == "2026-11-02"
+        assert event.payload["url"] == f"/day/{workday_id}"
+        assert "making their own way" in event.payload["message"]
         workday = db.get(Workday, workday_id)
         workday.current_published_revision_id = None
         db.commit()
@@ -1164,12 +1176,12 @@ def test_office_day_builder_uses_category_appropriate_fields_and_warnings(routed
     edit_url = created.headers["location"]
     builder = manager.get(edit_url)
     assert "Office planning" in builder.text
-    assert "First race" not in builder.text and "Race count" not in builder.text
+    assert 'name="first_race_time"' in builder.text and 'name="race_count"' in builder.text
     preview = manager.get(edit_url + "/preview")
     assert "Race Day timing is incomplete" not in preview.text
 
 
-def test_trials_builder_edits_first_trial_without_erasing_omitted_race_fields(routed_db) -> None:  # type: ignore[no-untyped-def]
+def test_trials_builder_renders_switchable_timing_fields_and_clears_race_fields(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, track_id, _position_id, _person_id) = routed_db
     manager = TestClient(app)
     csrf = _login(manager, "manager@example.test", "123456")
@@ -1192,6 +1204,7 @@ def test_trials_builder_edits_first_trial_without_erasing_omitted_race_fields(ro
         draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
         draft.on_track_time = time(8, 30)
         draft.first_trial_time = time(9, 15)
+        draft.last_trial_time = time(11, 30)
         draft.first_race_time = time(12, 45)
         version = workday.lock_version
         db.commit()
@@ -1199,9 +1212,9 @@ def test_trials_builder_edits_first_trial_without_erasing_omitted_race_fields(ro
     builder = manager.get(edit_url)
     assert 'name="on_track_time" value="08:30"' in builder.text
     assert 'name="first_trial_time" value="09:15"' in builder.text
-    assert 'name="first_race_time"' not in builder.text
-    assert 'name="last_race_time"' not in builder.text
-    assert 'name="race_count"' not in builder.text
+    assert 'name="first_race_time" value="12:45"' in builder.text
+    assert 'name="last_race_time"' in builder.text
+    assert 'name="race_count"' in builder.text
     saved = manager.post(
         edit_url + "/draft",
         data={
@@ -1213,6 +1226,7 @@ def test_trials_builder_edits_first_trial_without_erasing_omitted_race_fields(ro
             "start_time": "07:30",
             "on_track_time": "08:30",
             "first_trial_time": "09:45",
+            "last_trial_time": "11:30",
             "end_time": "14:00",
             "day_note": "",
             "change_reason": "",
@@ -1226,7 +1240,29 @@ def test_trials_builder_edits_first_trial_without_erasing_omitted_race_fields(ro
         workday = db.get(Workday, workday_id)
         draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
         assert draft.first_trial_time == time(9, 45)
-        assert draft.first_race_time == time(12, 45)
+        assert draft.first_race_time is None
+        assert draft.last_trial_time == time(11, 30)
+        version = workday.lock_version
+    switched = manager.post(
+        edit_url + "/draft",
+        data={
+            "expected_version": str(version), "csrf_token": csrf,
+            "work_date": "2026-10-21", "track_id": str(track_id),
+            "day_type": "RACE_DAY:THOROUGHBRED", "title": "Race timing",
+            "start_time": "07:30", "on_track_time": "08:30",
+            "first_trial_time": "09:45", "last_trial_time": "11:30",
+            "first_race_time": "12:00", "last_race_time": "16:00",
+            "race_count": "8", "end_time": "18:00", "day_note": "",
+            "change_reason": "",
+        },
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        assert draft.last_trial_time is None
+        assert draft.first_race_time == time(12)
 
 
 def test_position_aware_crew_picker_endpoint_keeps_duplicate_ids_distinct(routed_db) -> None:  # type: ignore[no-untyped-def]

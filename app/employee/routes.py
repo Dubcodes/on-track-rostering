@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import uuid
+from dataclasses import replace
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -56,7 +57,7 @@ from app.rostering.models import (
     Workday,
     WorkdayRevision,
 )
-from app.rostering.participation import person_day_participation
+from app.rostering.participation import active_published_assignments, person_day_participation
 from app.rostering.service import decline_published_assignment
 from app.web import context, month_grid, templates
 
@@ -207,16 +208,6 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
     management = can_view_management_detail(request.state.actor, workday.region_id)
-    if workday.generated_from_workday_id and request.state.actor.person_id and not management:
-        opted_out = db.scalar(
-            select(PersonalWorkdayEntry.id).where(
-                PersonalWorkdayEntry.workday_id == workday.generated_from_workday_id,
-                PersonalWorkdayEntry.person_id == request.state.actor.person_id,
-                PersonalWorkdayEntry.standard_travel_opt_out.is_(True),
-            )
-        )
-        if opted_out:
-            raise HTTPException(404, "Workday not found")
     region = db.get(Region, workday.region_id)
     crew_history = can_crew_view(request.state.actor, workday.region_id)
     own_rows = (
@@ -231,6 +222,10 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         if request.state.actor.person_id
         else []
     )
+    if workday.generated_from_workday_id:
+        own_rows = active_published_assignments(db, workday, revision, own_rows)
+        if request.state.actor.person_id and not management and not own_rows:
+            raise HTTPException(404, "Workday not found")
     self_decline = can_self_decline_assignment(request.state.actor, workday, revision, own_rows)
     personal_entry = (
         db.scalar(
@@ -249,6 +244,7 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         can_view_all_rows=crew_history,
         can_view_private_notes=management,
         can_self_decline=self_decline,
+        workday=workday,
     )
     if personal_entry:
         for row in assignments:
@@ -258,6 +254,21 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
                 if personal_entry.standard_travel_opt_out:
                     row["transport"] = "Making own way"
     participation = person_day_participation(revision, own_rows) if own_rows else None
+    if participation and personal_entry and (
+        personal_entry.start_time is not None or personal_entry.end_time is not None
+    ):
+        personal_start = personal_entry.start_time or participation.start
+        personal_end = personal_entry.end_time or participation.end
+        participation = replace(
+            participation,
+            start=personal_start,
+            end=personal_end,
+            minutes=(
+                worked_minutes(revision.work_date, personal_start, personal_end)
+                if personal_start is not None and personal_end is not None
+                else participation.minutes
+            ),
+        )
     history = (
         list(
             db.scalars(
@@ -381,7 +392,23 @@ async def save_personal_workday_entry(
             event_type="MANAGER_ACTION_REQUIRED",
             region_id=workday.region_id,
             workday_id=workday.id,
-            payload={"kind": "TRAVEL_EXCEPTION", "making_own_way": entry.standard_travel_opt_out},
+            payload={
+                "kind": "TRAVEL_EXCEPTION",
+                "making_own_way": entry.standard_travel_opt_out,
+                "person": request.state.user.display_name,
+                "date": revision.work_date.isoformat(),
+                "context": revision.track_name_snapshot or revision.title,
+                "message": (
+                    f"{request.state.user.display_name} is now making their own way for "
+                    f"{revision.track_name_snapshot or revision.title} on "
+                    f"{revision.work_date:%d %b %Y}."
+                    if entry.standard_travel_opt_out
+                    else f"{request.state.user.display_name} has rejoined standard travel for "
+                    f"{revision.track_name_snapshot or revision.title} on "
+                    f"{revision.work_date:%d %b %Y}."
+                ),
+                "url": f"/day/{workday.id}",
+            },
         )
     db.commit()
     return RedirectResponse(f"/day/{workday.id}?personal=saved#notes-and-timing", status_code=303)
@@ -509,6 +536,7 @@ def crew_view(
                 revision,
                 can_view_all_rows=True,
                 can_view_private_notes=can_view_management_detail(request.state.actor, workday.region_id),
+                workday=workday,
             ),
         }
         for workday, revision, slot in rows
@@ -519,6 +547,7 @@ def crew_view(
         revision = item["revision"]
         assignments = item["assignments"]
         statuses = {row["status"] for row in assignments}
+        active = item["workday"].status == "SCHEDULED"
         by_date.setdefault(revision.work_date, []).append(
             {
                 "id": str(item["workday"].id),
@@ -529,8 +558,13 @@ def crew_view(
                 "presentation": item["presentation"],
                 "start": revision.start_time,
                 "role": f"{len(assignments)} crew",
-                "has_open": "OPEN" in statuses,
-                "status": "TBC" if "TBC" in statuses else "PUBLISHED",
+                "has_open": active and "OPEN" in statuses,
+                "status": (
+                    "TBC" if active and "TBC" in statuses
+                    else "PUBLISHED" if active
+                    else item["workday"].status
+                ),
+                "workday_status": item["workday"].status,
             }
         )
     previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
@@ -574,7 +608,53 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
         revision,
         can_view_all_rows=False,
         can_view_private_notes=False,
+        workday=workday,
     )
+    management = can_view_management_detail(request.state.actor, workday.region_id)
+    if (
+        workday.generated_from_workday_id
+        and request.state.actor.person_id
+        and not management
+        and not personal_assignments
+    ):
+        raise HTTPException(404, "Workday not found")
+    personal_entry = (
+        db.scalar(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id == workday.id,
+                PersonalWorkdayEntry.person_id == request.state.actor.person_id,
+            )
+        )
+        if request.state.actor.person_id and personal_assignments
+        else None
+    )
+    if personal_entry:
+        for row in personal_assignments:
+            if row["is_own"]:
+                row["start"] = personal_entry.start_time or row["start"]
+                row["end"] = personal_entry.end_time or row["end"]
+                if personal_entry.standard_travel_opt_out:
+                    row["transport"] = "Making own way"
+    own_rows = (
+        list(
+            db.scalars(
+                select(Assignment).where(
+                    Assignment.revision_id == revision.id,
+                    Assignment.person_id == request.state.actor.person_id,
+                    Assignment.status == "ASSIGNED",
+                )
+            )
+        )
+        if request.state.actor.person_id
+        else []
+    )
+    own_rows = active_published_assignments(db, workday, revision, own_rows)
+    participation = person_day_participation(revision, own_rows) if own_rows else None
+    personal_start = participation.start if participation else revision.start_time
+    personal_end = participation.end if participation else revision.end_time
+    if personal_entry:
+        personal_start = personal_entry.start_time or personal_start
+        personal_end = personal_entry.end_time or personal_end
     return {
         "product_name": request.state.branding.product_name,
         "user_namespace": str(request.state.user.id),
@@ -588,13 +668,14 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             "category": workday.category,
             "title": revision.title,
             "track": revision.track_name_snapshot,
-            "start": revision.start_time,
+            "start": personal_start,
             "on_track": revision.on_track_time,
             "first_trial": revision.first_trial_time,
+            "last_trial": revision.last_trial_time,
             "first_race": revision.first_race_time,
             "last_race": revision.last_race_time,
             "race_count": revision.race_count,
-            "end": revision.end_time,
+            "end": personal_end,
             "note": revision.day_note,
             "assignments": personal_assignments,
         },
