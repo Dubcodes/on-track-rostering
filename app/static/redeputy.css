@@ -1102,7 +1102,7 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .workday-assignment.is-open { border-left: 4px solid var(--open-shift-border); background: var(--open-shift-bg); }
 .workday-assignment.is-tbc { border-left: 4px solid var(--muted); }
 .workday-assignment.needs-manager-action { border-left-color: var(--warn); background: var(--warn-bg); }
-.workday-assignment-primary { display: grid; grid-template-columns: minmax(150px,.8fr) minmax(220px,1.2fr) 34px; gap: 8px; align-items: end; }
+.workday-assignment-primary { display: grid; grid-template-columns: minmax(130px,.75fr) minmax(190px,1fr) minmax(170px,.85fr) 34px; gap: 8px; align-items: end; }
 .workday-assignment-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
 .workday-assignment-note { grid-column: span 2; }
 .workday-assignment-advanced { margin-top: 7px; }
@@ -1122,11 +1122,15 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .search-picker-option.is-open-position { border-bottom-color: var(--open-shift-border); color: var(--open-shift-text); }
 .search-picker-empty { margin: 0; padding: 12px 9px; color: var(--muted); }
 .compact-check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .78rem; font-weight: 800; }
+.compact-check input[type="checkbox"] { width: auto; min-width: 0; min-height: 0; margin: 0; }
+.builder-preset-controls { display: flex; align-items: end; flex-wrap: wrap; gap: .6rem; margin: .65rem 0; }
+.person-travel-fields { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; padding: .65rem; border: 1px solid var(--line); border-radius: 8px; }
 @media (max-width: 620px) {
   .page-heading.compact-heading, .builder-assignment-heading { align-items: stretch; flex-direction: column; }
   .workday-assignment { padding: 8px; }
-  .workday-assignment-primary { grid-template-columns: minmax(0,1fr) 34px; gap: 6px; }
-  .workday-role-field { grid-column: 1 / -1; }
+  .workday-assignment-primary { grid-template-columns: minmax(0,1fr) minmax(0,1fr) 34px; gap: 6px; }
+  .workday-assignment-primary > label:first-child { grid-column: 1 / -1; }
+  .person-travel-fields { grid-template-columns: 1fr; }
   .workday-assignment-grid { grid-template-columns: 1fr; }
   .workday-assignment-note { grid-column: auto; }
   .search-picker-menu { z-index: 100; }

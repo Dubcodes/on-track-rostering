@@ -20,9 +20,12 @@ class RosterConflict:
     other_title: str
     other_location: str
     timing: str
+    detail_visible: bool = True
 
     @property
     def message(self) -> str:
+        if not self.detail_visible:
+            return f"{self.subject} is already rostered on another Workday ({self.timing})."
         return (
             f"{self.subject} also appears on {self.other_title} at "
             f"{self.other_location} ({self.timing})."
@@ -59,6 +62,7 @@ def publication_conflicts(
     db: Session,
     workday: Workday,
     draft: WorkdayRevision,
+    visible_region_ids: set[uuid.UUID] | None = None,
 ) -> list[RosterConflict]:
     """Compare a draft with authoritative published and active-draft rosters on its date."""
     current_rows = list(
@@ -125,6 +129,10 @@ def publication_conflicts(
                             other_title=other_revision.title,
                             other_location=other_revision.track_name_snapshot,
                             timing=timing,
+                            detail_visible=(
+                                visible_region_ids is None
+                                or other_workday.region_id in visible_region_ids
+                            ),
                         )
                     )
     return conflicts

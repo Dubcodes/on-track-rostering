@@ -328,6 +328,7 @@ def adopt_external_event(
         track_id=track.id,
         title=meeting_name,
         actor_user_id=actor.user_id,
+        racing_discipline=event.discipline,
         commit=False,
     )
     workday.external_event_id = event.id

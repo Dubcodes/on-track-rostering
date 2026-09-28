@@ -22,7 +22,7 @@
 - Private assignment notes are visible to the assigned person and scoped Manager/Sub-Manager/Viewer oversight roles. Viewer remains read-only.
 - Multiple assignments on one publication form one person/day participation: earliest effective start, latest effective finish, deterministic de-duplicated role summary, and one non-duplicated span, including overnight work. No automatic half-hour or meal-break deduction occurs.
 - Allowances and public holidays are informational and never payroll calculations.
-- Operations group related days without enforcing hotel, vehicle, or travel continuity. Explicit individual exceptions must remain possible.
+- Operations group related days and explicit TravelLegs. An enabled standard overnight plan generates a linked previous-day Travel Day and publishes it atomically with its Race Day; published revision/assignment snapshots remain historical truth. Explicit individual hotel, timing, vehicle, and no-standard-travel exceptions remain possible.
 - Master records are archived instead of casually deleted once historically referenced.
 - Notification generation is an idempotent event-outbox concern. Roster-change audience includes both removed and newly assigned users. Reminder keys bind publication, person, and reminder kind. Push delivery failure must never roll back roster publication or employee decline.
 - Employee and Manager capability preferences are independent decision families. Clearing either family never removes the other family or published `WORKED` history.

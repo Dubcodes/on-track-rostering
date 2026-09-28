@@ -41,6 +41,7 @@ class Workday(Base):
         ForeignKey("external_calendar_events.id"), nullable=True, unique=True
     )
     category: Mapped[str] = mapped_column(String(32), default=WorkdayCategory.RACE_DAY.value)
+    racing_discipline: Mapped[str | None] = mapped_column(String(24), nullable=True)
     current_published_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("workday_revisions.id", use_alter=True), nullable=True
     )
@@ -75,6 +76,13 @@ class WorkdayRevision(Base):
     race_count: Mapped[int | None] = mapped_column(nullable=True)
     start_origin: Mapped[str] = mapped_column(String(160), default="")
     finish_destination: Mapped[str] = mapped_column(String(160), default="")
+    standard_travel_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    travel_departure_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    travel_to_hotel_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    default_hotel: Mapped[str] = mapped_column(String(160), default="")
+    hotel_to_track_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    return_travel_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    pack_up_minutes: Mapped[int] = mapped_column(default=60)
     day_note: Mapped[str] = mapped_column(Text, default="")
     change_reason: Mapped[str] = mapped_column(String(500), default="")
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
@@ -106,6 +114,8 @@ class Assignment(Base):
     transport_mode: Mapped[str] = mapped_column(String(24), default="UNASSIGNED")
     custom_transport_text: Mapped[str] = mapped_column(String(160), default="")
     accommodation_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    uses_standard_travel: Mapped[bool] = mapped_column(Boolean, default=True)
+    hotel_to_track_minutes_override: Mapped[int | None] = mapped_column(nullable=True)
 
 
 class OpenPositionApplication(Base):

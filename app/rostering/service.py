@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -15,7 +15,9 @@ from app.core.enums import (
     CapabilitySignal,
     DeclinePolicy,
     OpenApplicationStatus,
+    RacingDiscipline,
     RevisionState,
+    WorkdayCategory,
 )
 from app.core.time import utcnow
 from app.identity.models import Person, User
@@ -27,7 +29,9 @@ from app.rostering.models import (
     AllowanceIndicator,
     Assignment,
     OpenPositionApplication,
+    Operation,
     ProgrammeItem,
+    TravelLeg,
     Workday,
     WorkdayRevision,
 )
@@ -36,6 +40,7 @@ from app.rostering.travel import (
     TRANSPORT_MODES,
     TRANSPORT_UNASSIGNED,
     TRANSPORT_VEHICLE,
+    calculate_standard_travel,
 )
 
 
@@ -64,6 +69,8 @@ class AssignmentInput:
     vehicle_id: uuid.UUID | None = None
     custom_transport_text: str = ""
     accommodation_name: str = ""
+    uses_standard_travel: bool = True
+    hotel_to_track_minutes_override: int | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,15 @@ class DraftDetailsInput:
     change_reason: str
     start_origin: str = ""
     finish_destination: str = ""
+    category: str = WorkdayCategory.RACE_DAY.value
+    racing_discipline: str | None = RacingDiscipline.THOROUGHBRED.value
+    standard_travel_enabled: bool = False
+    travel_departure_time: time | None = None
+    travel_to_hotel_minutes: int | None = None
+    default_hotel: str = ""
+    hotel_to_track_minutes: int | None = None
+    return_travel_minutes: int | None = None
+    pack_up_minutes: int = 60
 
 
 def _validated_track(db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID) -> str:
@@ -107,13 +123,23 @@ def create_workday(
     track_id: uuid.UUID | None,
     title: str,
     actor_user_id: uuid.UUID,
+    racing_discipline: str | None = None,
     commit: bool = True,
 ) -> Workday:
     region = db.get(Region, region_id)
     if not region or region.lifecycle != "ACTIVE":
         raise ValueError("Select an active region.")
     track_name = _validated_track(db, track_id, region_id)
-    workday = Workday(region_id=region_id, category=category, created_by_user_id=actor_user_id)
+    if category in {WorkdayCategory.RACE_DAY.value, WorkdayCategory.TRIALS.value}:
+        racing_discipline = racing_discipline or RacingDiscipline.THOROUGHBRED.value
+    else:
+        racing_discipline = None
+    workday = Workday(
+        region_id=region_id,
+        category=category,
+        racing_discipline=racing_discipline,
+        created_by_user_id=actor_user_id,
+    )
     db.add(workday)
     db.flush()
     draft = WorkdayRevision(
@@ -135,7 +161,9 @@ def create_workday(
     return workday
 
 
-def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> WorkdayRevision:
+def ensure_draft(
+    db: Session, workday: Workday, actor_user_id: uuid.UUID, *, commit: bool = True
+) -> WorkdayRevision:
     workday = db.scalar(
         select(Workday)
         .where(Workday.id == workday.id)
@@ -167,6 +195,13 @@ def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> Wor
         race_count=published.race_count,
         start_origin=published.start_origin,
         finish_destination=published.finish_destination,
+        standard_travel_enabled=published.standard_travel_enabled,
+        travel_departure_time=published.travel_departure_time,
+        travel_to_hotel_minutes=published.travel_to_hotel_minutes,
+        default_hotel=published.default_hotel,
+        hotel_to_track_minutes=published.hotel_to_track_minutes,
+        return_travel_minutes=published.return_travel_minutes,
+        pack_up_minutes=published.pack_up_minutes,
         day_note=published.day_note,
         created_by_user_id=actor_user_id,
     )
@@ -192,11 +227,14 @@ def ensure_draft(db: Session, workday: Workday, actor_user_id: uuid.UUID) -> Wor
                 transport_mode=old.transport_mode,
                 custom_transport_text=old.custom_transport_text,
                 accommodation_name=old.accommodation_name,
+                uses_standard_travel=old.uses_standard_travel,
+                hotel_to_track_minutes_override=old.hotel_to_track_minutes_override,
             )
         )
     workday.current_draft_revision_id = draft.id
     workday.lock_version += 1
-    db.commit()
+    if commit:
+        db.commit()
     return draft
 
 
@@ -227,6 +265,178 @@ def lock_current_draft(
     if draft.state != RevisionState.DRAFT.value:
         raise DraftConflict("Published revisions are immutable. Refresh the builder.")
     return workday, draft
+
+
+def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision) -> None:
+    """Project the editable standard plan into Operation, legs and one generated Travel Day."""
+    if not draft.standard_travel_enabled:
+        if workday.operation_id and workday.current_published_revision_id is None:
+            operation = db.get(Operation, workday.operation_id)
+            generated = db.scalar(
+                select(Workday).where(
+                    Workday.operation_id == workday.operation_id,
+                    Workday.category == WorkdayCategory.TRAVEL_DAY.value,
+                    Workday.id != workday.id,
+                )
+            )
+            if generated and generated.current_published_revision_id is None:
+                db.delete(generated)
+                db.flush()
+            workday.operation_id = None
+            if operation:
+                db.delete(operation)
+        return
+    if workday.category not in {WorkdayCategory.RACE_DAY.value, WorkdayCategory.TRIALS.value}:
+        raise ValueError("Standard overnight travel is available only for Race Days and Trials.")
+    required = (
+        draft.on_track_time,
+        draft.last_race_time,
+        draft.travel_departure_time,
+        draft.travel_to_hotel_minutes,
+        draft.hotel_to_track_minutes,
+        draft.return_travel_minutes,
+    )
+    if any(value is None for value in required):
+        raise ValueError("Complete the overnight travel timing before saving.")
+    if not draft.start_origin or not draft.default_hotel or not draft.finish_destination:
+        raise ValueError("Enter the travel origin, default hotel and return destination.")
+    calculation = calculate_standard_travel(
+        race_date=draft.work_date,
+        on_track_time=draft.on_track_time,  # type: ignore[arg-type]
+        last_race_time=draft.last_race_time,  # type: ignore[arg-type]
+        departure_time=draft.travel_departure_time,  # type: ignore[arg-type]
+        travel_to_hotel_minutes=draft.travel_to_hotel_minutes,  # type: ignore[arg-type]
+        hotel_to_track_minutes=draft.hotel_to_track_minutes,  # type: ignore[arg-type]
+        pack_up_minutes=draft.pack_up_minutes,
+        return_travel_minutes=draft.return_travel_minutes,  # type: ignore[arg-type]
+    )
+    draft.start_time = calculation.race_start
+    draft.end_time = calculation.race_finish
+    operation = db.get(Operation, workday.operation_id) if workday.operation_id else None
+    if operation is None:
+        operation = Operation(
+            name=f"{draft.track_name_snapshot} {draft.work_date.isoformat()}",
+            region_id=workday.region_id,
+            starts_on=calculation.travel_date,
+            ends_on=draft.work_date,
+        )
+        db.add(operation)
+        db.flush()
+        workday.operation_id = operation.id
+    else:
+        operation.name = f"{draft.track_name_snapshot} {draft.work_date.isoformat()}"
+        operation.starts_on = calculation.travel_date
+        operation.ends_on = draft.work_date
+    for leg in db.scalars(select(TravelLeg).where(TravelLeg.operation_id == operation.id)):
+        db.delete(leg)
+    db.add_all(
+        [
+            TravelLeg(
+                operation_id=operation.id,
+                travel_date=calculation.travel_date,
+                origin=draft.start_origin,
+                destination=draft.default_hotel,
+                starts_at=calculation.travel_start,
+                ends_at=calculation.travel_finish,
+                notes="Generated standard travel to hotel",
+            ),
+            TravelLeg(
+                operation_id=operation.id,
+                travel_date=draft.work_date,
+                origin=draft.default_hotel,
+                destination=draft.track_name_snapshot,
+                starts_at=calculation.race_start,
+                ends_at=draft.on_track_time,
+                notes="Race-day hotel to track",
+            ),
+            TravelLeg(
+                operation_id=operation.id,
+                travel_date=draft.work_date,
+                origin=draft.track_name_snapshot,
+                destination=draft.finish_destination,
+                starts_at=calculation.pack_up_done,
+                ends_at=calculation.race_finish,
+                notes="Return after pack-up",
+            ),
+        ]
+    )
+    travel_workday = db.scalar(
+        select(Workday).where(
+            Workday.operation_id == operation.id,
+            Workday.category == WorkdayCategory.TRAVEL_DAY.value,
+            Workday.id != workday.id,
+        )
+    )
+    if travel_workday is None:
+        travel_workday = Workday(
+            region_id=workday.region_id,
+            operation_id=operation.id,
+            category=WorkdayCategory.TRAVEL_DAY.value,
+            created_by_user_id=draft.created_by_user_id,
+        )
+        db.add(travel_workday)
+        db.flush()
+        travel_draft = WorkdayRevision(
+            workday_id=travel_workday.id,
+            revision_number=1,
+            state=RevisionState.DRAFT.value,
+            work_date=calculation.travel_date,
+            track_name_snapshot=draft.default_hotel,
+            title="Travel Day",
+            start_time=calculation.travel_start,
+            end_time=calculation.travel_finish,
+            start_origin=draft.start_origin,
+            finish_destination=draft.default_hotel,
+            day_note=f"Standard travel for {draft.track_name_snapshot}",
+            created_by_user_id=draft.created_by_user_id,
+        )
+        db.add(travel_draft)
+        db.flush()
+        travel_workday.current_draft_revision_id = travel_draft.id
+    else:
+        travel_draft = db.get(WorkdayRevision, travel_workday.current_draft_revision_id)
+        if travel_draft is None:
+            travel_draft = ensure_draft(db, travel_workday, draft.created_by_user_id, commit=False)
+        travel_draft.work_date = calculation.travel_date
+        travel_draft.track_name_snapshot = draft.default_hotel
+        travel_draft.start_time = calculation.travel_start
+        travel_draft.end_time = calculation.travel_finish
+        travel_draft.start_origin = draft.start_origin
+        travel_draft.finish_destination = draft.default_hotel
+    for row in db.scalars(select(Assignment).where(Assignment.revision_id == travel_draft.id)):
+        db.delete(row)
+    race_rows = list(
+        db.scalars(
+            select(Assignment).where(
+                Assignment.revision_id == draft.id,
+                Assignment.status == AssignmentStatus.ASSIGNED.value,
+                Assignment.person_id.is_not(None),
+                Assignment.uses_standard_travel.is_(True),
+            )
+        )
+    )
+    seen_people: set[uuid.UUID] = set()
+    for row in race_rows:
+        if row.person_id in seen_people:
+            continue
+        seen_people.add(row.person_id)  # type: ignore[arg-type]
+        db.add(
+            Assignment(
+                revision_id=travel_draft.id,
+                display_name_snapshot="Travel",
+                person_id=row.person_id,
+                person_name_snapshot=row.person_name_snapshot,
+                status=AssignmentStatus.ASSIGNED.value,
+                start_time=calculation.travel_start,
+                end_time=calculation.travel_finish,
+                transport_mode=row.transport_mode,
+                vehicle_id=row.vehicle_id,
+                vehicle_name_snapshot=row.vehicle_name_snapshot,
+                custom_transport_text=row.custom_transport_text,
+                accommodation_name=row.accommodation_name or draft.default_hotel,
+                uses_standard_travel=True,
+            )
+        )
 
 
 def update_draft_details(
@@ -376,6 +586,7 @@ def save_draft(
     expected_version: int,
     details: DraftDetailsInput,
     assignments: list[DraftAssignmentInput],
+    commit: bool = True,
 ) -> WorkdayRevision:
     """Atomically replace the editable draft state while preserving stable slot identities."""
     workday, draft = lock_current_draft(
@@ -402,14 +613,23 @@ def save_draft(
         )
     ]
     hotels_by_person: dict[uuid.UUID, str] = {}
+    travel_plan_by_person: dict[uuid.UUID, tuple[bool, int | None]] = {}
     for item in assignments:
-        hotel = item.accommodation_name.strip()
-        if not item.person_id or not hotel:
+        hotel = item.accommodation_name.strip() or (
+            details.default_hotel.strip() if item.uses_standard_travel else ""
+        )
+        if not item.person_id:
             continue
-        existing_hotel = hotels_by_person.get(item.person_id)
-        if existing_hotel and existing_hotel.casefold() != hotel.casefold():
-            raise ValueError("Use one consistent hotel for each person on this workday.")
-        hotels_by_person[item.person_id] = hotel
+        if hotel:
+            existing_hotel = hotels_by_person.get(item.person_id)
+            if existing_hotel and existing_hotel.casefold() != hotel.casefold():
+                raise ValueError("Use one consistent hotel for each person on this workday.")
+            hotels_by_person[item.person_id] = hotel
+        plan = (item.uses_standard_travel, item.hotel_to_track_minutes_override)
+        existing_plan = travel_plan_by_person.get(item.person_id)
+        if existing_plan is not None and existing_plan != plan:
+            raise ValueError("Use one consistent standard-travel plan for each person.")
+        travel_plan_by_person[item.person_id] = plan
 
     active_positions = {
         row.id: row
@@ -432,6 +652,21 @@ def save_draft(
         raise ValueError("One or more assignment rows do not belong to this draft.")
 
     track_name = _validated_track(db, details.track_id, workday.region_id)
+    valid_categories = {item.value for item in WorkdayCategory}
+    valid_disciplines = {item.value for item in RacingDiscipline}
+    if details.category not in valid_categories:
+        raise ValueError("Select a valid day type.")
+    discipline = details.racing_discipline if details.category in {"RACE_DAY", "TRIALS"} else None
+    if discipline not in valid_disciplines | {None}:
+        raise ValueError("Select a valid racing discipline.")
+    if details.category in {"RACE_DAY", "TRIALS"} and discipline is None:
+        raise ValueError("Select Thoroughbred or Harness.")
+    if workday.current_published_revision_id and (
+        details.category != workday.category or discipline != workday.racing_discipline
+    ):
+        raise ValueError("Day type is fixed after first publication.")
+    workday.category = details.category
+    workday.racing_discipline = discipline
     normal_statuses = {
         AssignmentStatus.ASSIGNED.value,
         AssignmentStatus.OPEN.value,
@@ -488,6 +723,13 @@ def save_draft(
     draft.change_reason = details.change_reason.strip()
     draft.start_origin = details.start_origin.strip()
     draft.finish_destination = details.finish_destination.strip()
+    draft.standard_travel_enabled = details.standard_travel_enabled
+    draft.travel_departure_time = details.travel_departure_time
+    draft.travel_to_hotel_minutes = details.travel_to_hotel_minutes
+    draft.default_hotel = details.default_hotel.strip()
+    draft.hotel_to_track_minutes = details.hotel_to_track_minutes
+    draft.return_travel_minutes = details.return_travel_minutes
+    draft.pack_up_minutes = details.pack_up_minutes
 
     kept_ids = set(submitted_ids)
     for assignment_id, assignment in current.items():
@@ -522,8 +764,24 @@ def save_draft(
             if item.person_id
             else item.accommodation_name.strip()
         ) or None
+        assignment.uses_standard_travel = item.uses_standard_travel
+        assignment.hotel_to_track_minutes_override = item.hotel_to_track_minutes_override
+        if (
+            item.person_id
+            and item.uses_standard_travel
+            and item.start_time is None
+            and details.on_track_time
+            and (item.hotel_to_track_minutes_override is not None or details.hotel_to_track_minutes is not None)
+        ):
+            minutes = item.hotel_to_track_minutes_override
+            if minutes is None:
+                minutes = details.hotel_to_track_minutes
+            start_at = datetime.combine(details.work_date, details.on_track_time) - timedelta(minutes=minutes or 0)
+            assignment.start_time = start_at.time()
     workday.lock_version += 1
-    db.commit()
+    _sync_standard_travel(db, workday, draft)
+    if commit:
+        db.commit()
     return draft
 
 
@@ -583,7 +841,18 @@ def publish(
             raise PublishConflict("This revision has already been published.")
         if draft.based_on_revision_id != workday.current_published_revision_id:
             raise PublishConflict("The published roster changed while this draft was being edited.")
-        conflicts = publication_conflicts(db, workday, draft)
+        from app.auth.policy import actor_for, can_manage_region
+
+        actor_record = db.get(User, actor_user_id)
+        actor = actor_for(db, actor_record) if actor_record else None
+        visible_regions = None if actor and actor.is_admin else {
+            region_id
+            for region_id in (actor.regional_roles if actor else {})
+            if actor and can_manage_region(actor, region_id)
+        }
+        conflicts = publication_conflicts(
+            db, workday, draft, visible_region_ids=visible_regions
+        )
         if conflicts and not confirm_conflicts:
             raise PublishConflict(
                 "Roster conflicts changed or remain unresolved. Return to Preview and explicitly confirm Publish anyway."
@@ -600,6 +869,32 @@ def publish(
         workday.current_published_revision_id = draft.id
         workday.current_draft_revision_id = None
         workday.lock_version += 1
+        linked_travel: tuple[Workday, WorkdayRevision] | None = None
+        if workday.operation_id:
+            travel_workday = db.scalar(
+                select(Workday)
+                .where(
+                    Workday.operation_id == workday.operation_id,
+                    Workday.category == WorkdayCategory.TRAVEL_DAY.value,
+                    Workday.id != workday.id,
+                )
+                .with_for_update()
+            )
+            travel_draft = (
+                db.get(WorkdayRevision, travel_workday.current_draft_revision_id)
+                if travel_workday and travel_workday.current_draft_revision_id
+                else None
+            )
+            if travel_workday and travel_draft:
+                if travel_draft.state != RevisionState.DRAFT.value:
+                    raise PublishConflict("The generated Travel Day is no longer an editable draft.")
+                travel_draft.state = RevisionState.PUBLISHED.value
+                travel_draft.published_at = utcnow()
+                travel_draft.published_by_user_id = actor_user_id
+                travel_workday.current_published_revision_id = travel_draft.id
+                travel_workday.current_draft_revision_id = None
+                travel_workday.lock_version += 1
+                linked_travel = (travel_workday, travel_draft)
         assigned = list(
             db.scalars(
                 select(Assignment).where(
@@ -682,6 +977,33 @@ def publish(
                 "summary": summaries[0],
             },
         )
+        if linked_travel:
+            travel_workday, travel_draft = linked_travel
+            record_audit(
+                db,
+                "workday.published",
+                "workday",
+                travel_workday.id,
+                actor_user_id,
+                region_id=travel_workday.region_id,
+                detail={"revision": travel_draft.revision_number, "generated": True},
+            )
+            record_event(
+                db,
+                event_key=f"roster-published:{travel_workday.id}:{travel_draft.id}",
+                event_type="ROSTER_PUBLISHED",
+                region_id=travel_workday.region_id,
+                workday_id=travel_workday.id,
+                payload={
+                    "revision_id": str(travel_draft.id),
+                    "previous_revision_id": (
+                        str(travel_draft.based_on_revision_id)
+                        if travel_draft.based_on_revision_id
+                        else None
+                    ),
+                    "summary": "Generated Travel Day published with its Race Day.",
+                },
+            )
         for row in db.scalars(
             select(Assignment).where(
                 Assignment.revision_id == draft.id,
@@ -752,6 +1074,13 @@ def decline_published_assignment(
             race_count=published.race_count,
             start_origin=published.start_origin,
             finish_destination=published.finish_destination,
+            standard_travel_enabled=published.standard_travel_enabled,
+            travel_departure_time=published.travel_departure_time,
+            travel_to_hotel_minutes=published.travel_to_hotel_minutes,
+            default_hotel=published.default_hotel,
+            hotel_to_track_minutes=published.hotel_to_track_minutes,
+            return_travel_minutes=published.return_travel_minutes,
+            pack_up_minutes=published.pack_up_minutes,
             day_note=published.day_note,
             change_reason="Employee declined assignment",
             created_by_user_id=actor_user_id,
@@ -786,6 +1115,8 @@ def decline_published_assignment(
                     transport_mode=old.transport_mode,
                     custom_transport_text=old.custom_transport_text,
                     accommodation_name=old.accommodation_name,
+                    uses_standard_travel=old.uses_standard_travel,
+                    hotel_to_track_minutes_override=old.hotel_to_track_minutes_override,
                 )
             )
         for item in db.scalars(select(ProgrammeItem).where(ProgrammeItem.revision_id == published.id)):

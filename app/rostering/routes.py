@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, time
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -12,7 +13,7 @@ from app.auth.policy import can_manage_region, require_manage_region
 from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.database import get_db
-from app.core.enums import AssignmentStatus, WorkdayCategory
+from app.core.enums import AssignmentStatus, RacingDiscipline, WorkdayCategory
 from app.core.time import parse_time
 from app.identity.models import Person, UserPersonLink
 from app.positions.ordering import position_order
@@ -47,6 +48,139 @@ def _editable_regions(db: Session, request: Request) -> list[Region]:
     return [region for region in regions if can_manage_region(request.state.actor, region.id)]
 
 
+def _day_type_options() -> tuple[tuple[str, str], ...]:
+    return (
+        ("RACE_DAY:THOROUGHBRED", "Thoroughbred Race Day"),
+        ("RACE_DAY:HARNESS", "Harness Race Day"),
+        ("TRIALS:THOROUGHBRED", "Thoroughbred Trials"),
+        ("TRIALS:HARNESS", "Harness Trials"),
+        ("TRAVEL_DAY:", "Travel Day"),
+        ("RIG_DAY:", "Rig Day"),
+        ("OFFICE_DAY:", "Office Day"),
+        ("TRAINING_DAY:", "Training Day"),
+        ("OTHER:", "Other"),
+    )
+
+
+def _parse_day_type(value: str) -> tuple[str, str | None]:
+    category, separator, discipline = value.partition(":")
+    if not separator or category not in {item.value for item in WorkdayCategory}:
+        raise ValueError("Select a valid day type.")
+    discipline_value = discipline or None
+    if category in {WorkdayCategory.RACE_DAY.value, WorkdayCategory.TRIALS.value}:
+        if discipline_value not in {item.value for item in RacingDiscipline}:
+            raise ValueError("Select a racing discipline.")
+    elif discipline_value is not None:
+        raise ValueError("Non-racing days cannot have a racing discipline.")
+    return category, discipline_value
+
+
+def _optional_uuid(value: object) -> uuid.UUID | None:
+    text = str(value or "").strip()
+    return uuid.UUID(text) if text else None
+
+
+def _optional_int(value: object) -> int | None:
+    text = str(value or "").strip()
+    return int(text) if text else None
+
+
+def _draft_payload(  # type: ignore[no-untyped-def]
+    form, *, category: str, discipline: str | None, draft: WorkdayRevision | None = None
+):
+    assignment_ids = form.getlist("assignment_id")
+    row_count = len(assignment_ids)
+    field_names = (
+        "base_position_id",
+        "slot_index",
+        "person_id",
+        "status",
+        "note",
+        "note_private",
+        "assignment_start_time",
+        "assignment_end_time",
+        "transport_mode",
+        "vehicle_id",
+        "custom_transport_text",
+        "accommodation_name",
+        "uses_standard_travel",
+        "hotel_to_track_minutes_override",
+    )
+    values = {name: form.getlist(name) for name in field_names}
+    for name in field_names:
+        if not values[name] and row_count:
+            values[name] = [""] * row_count
+    for name in ("transport_mode", "note_private", "uses_standard_travel"):
+        if all(not value for value in values[name]) and row_count:
+            default = "UNASSIGNED" if name == "transport_mode" else "1"
+            values[name] = [default] * row_count
+    if any(len(items) != row_count for items in values.values()):
+        raise ValueError("The assignment rows were incomplete. Refresh and try again.")
+    assignments = [
+        DraftAssignmentInput(
+            assignment_id=_optional_uuid(assignment_ids[index]),
+            base_position_id=_optional_uuid(values["base_position_id"][index]),
+            slot_index=_optional_int(values["slot_index"][index]),
+            person_id=_optional_uuid(values["person_id"][index]),
+            status=str(values["status"][index]),
+            note=str(values["note"][index]),
+            note_private=str(values["note_private"][index]) == "1",
+            start_time=parse_time(str(values["assignment_start_time"][index])),
+            end_time=parse_time(str(values["assignment_end_time"][index])),
+            transport_mode=str(values["transport_mode"][index] or TRANSPORT_UNASSIGNED),
+            vehicle_id=_optional_uuid(values["vehicle_id"][index]),
+            custom_transport_text=str(values["custom_transport_text"][index]),
+            accommodation_name=str(values["accommodation_name"][index]),
+            uses_standard_travel=str(values["uses_standard_travel"][index]) == "1",
+            hotel_to_track_minutes_override=_optional_int(
+                values["hotel_to_track_minutes_override"][index]
+            ),
+        )
+        for index in range(row_count)
+    ]
+    details = DraftDetailsInput(
+        work_date=date.fromisoformat(str(form["work_date"])),
+        track_id=_optional_uuid(form.get("track_id")),
+        title=str(form.get("title", "")),
+        start_time=parse_time(str(form.get("start_time", ""))),
+        end_time=parse_time(str(form.get("end_time", ""))),
+        on_track_time=(
+            parse_time(str(form.get("on_track_time", "")))
+            if "on_track_time" in form else (draft.on_track_time if draft else None)
+        ),
+        first_trial_time=(
+            parse_time(str(form.get("first_trial_time", "")))
+            if "first_trial_time" in form else (draft.first_trial_time if draft else None)
+        ),
+        first_race_time=(
+            parse_time(str(form.get("first_race_time", "")))
+            if "first_race_time" in form else (draft.first_race_time if draft else None)
+        ),
+        last_race_time=(
+            parse_time(str(form.get("last_race_time", "")))
+            if "last_race_time" in form else (draft.last_race_time if draft else None)
+        ),
+        race_count=(
+            _optional_int(form.get("race_count"))
+            if "race_count" in form else (draft.race_count if draft else None)
+        ),
+        day_note=str(form.get("day_note", "")),
+        change_reason=str(form.get("change_reason", "")),
+        start_origin=str(form.get("start_origin", "")),
+        finish_destination=str(form.get("finish_destination", "")),
+        category=category,
+        racing_discipline=discipline,
+        standard_travel_enabled=str(form.get("standard_travel_enabled", "")) == "1",
+        travel_departure_time=parse_time(str(form.get("travel_departure_time", ""))),
+        travel_to_hotel_minutes=_optional_int(form.get("travel_to_hotel_minutes")),
+        default_hotel=str(form.get("default_hotel", "")),
+        hotel_to_track_minutes=_optional_int(form.get("hotel_to_track_minutes")),
+        return_travel_minutes=_optional_int(form.get("return_travel_minutes")),
+        pack_up_minutes=_optional_int(form.get("pack_up_minutes")) or 60,
+    )
+    return details, assignments
+
+
 @router.get("/workdays/new", response_class=HTMLResponse)
 def new_workday_page(request: Request, db: Session = Depends(get_db)):
     regions = _editable_regions(db, request)
@@ -59,40 +193,116 @@ def new_workday_page(request: Request, db: Session = Depends(get_db)):
             .order_by(Track.name)
         )
     )
+    positions = sorted(
+        db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE")),
+        key=lambda position: position_order(position.name),
+    )
+    vehicles = sorted(
+        db.scalars(select(Vehicle).where(Vehicle.lifecycle == "ACTIVE")),
+        key=lambda vehicle: (vehicle.home_region_id != regions[0].id, vehicle.name.casefold()),
+    )
+    workday = SimpleNamespace(
+        id=None,
+        region_id=regions[0].id,
+        category=WorkdayCategory.RACE_DAY.value,
+        racing_discipline=RacingDiscipline.THOROUGHBRED.value,
+        current_published_revision_id=None,
+        lock_version=0,
+    )
+    draft = SimpleNamespace(
+        revision_number=1,
+        work_date=None,
+        track_id=None,
+        track_name_snapshot="Choose a Track",
+        title="Race Day",
+        start_time=None,
+        end_time=None,
+        on_track_time=None,
+        first_trial_time=None,
+        first_race_time=None,
+        last_race_time=None,
+        race_count=None,
+        start_origin="",
+        finish_destination="",
+        standard_travel_enabled=False,
+        travel_departure_time=time(12),
+        travel_to_hotel_minutes=None,
+        default_hotel="",
+        hotel_to_track_minutes=None,
+        return_travel_minutes=None,
+        pack_up_minutes=60,
+        day_note="",
+        change_reason="",
+    )
     return templates.TemplateResponse(
-        "workday_new.html",
-        context(request, regions=regions, tracks=tracks, categories=[item.value for item in WorkdayCategory]),
+        "workday_builder.html",
+        context(
+            request,
+            new_mode=True,
+            workday=workday,
+            draft=draft,
+            regions=regions,
+            tracks=tracks,
+            positions=positions,
+            assignments=[],
+            people_groups_by_assignment={},
+            applications_by_slot={},
+            vehicles=vehicles,
+            transport_labels=TRANSPORT_LABELS,
+            day_type_options=_day_type_options(),
+        ),
     )
 
 
 @router.post("/workdays")
-def new_workday(
-    request: Request,
-    region_id: uuid.UUID = Form(...),
-    category: str = Form(...),
-    work_date: date = Form(...),
-    track_id: str = Form(""),
-    title: str = Form(""),
-    csrf_token: str = Form(...),
-    db: Session = Depends(get_db),
-):
-    verify_csrf(request, csrf_token)
-    require_manage_region(request.state.actor, region_id)
-    if category not in {item.value for item in WorkdayCategory}:
-        raise HTTPException(400, "Invalid workday category")
+async def new_workday(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
     try:
+        region_id = uuid.UUID(str(form["region_id"]))
+        require_manage_region(request.state.actor, region_id)
+        if "day_type" not in form:
+            category = str(form.get("category", ""))
+            if category not in {item.value for item in WorkdayCategory}:
+                raise ValueError("Select a valid day type.")
+            workday = create_workday(
+                db,
+                region_id=region_id,
+                category=category,
+                work_date=date.fromisoformat(str(form["work_date"])),
+                track_id=_optional_uuid(form.get("track_id")),
+                title=str(form.get("title", "")),
+                actor_user_id=request.state.user.id,
+            )
+            return RedirectResponse(f"/manage/workdays/{workday.id}", status_code=303)
+        category, discipline = _parse_day_type(str(form.get("day_type", "")))
+        details, assignments = _draft_payload(form, category=category, discipline=discipline)
         workday = create_workday(
             db,
             region_id=region_id,
             category=category,
-            work_date=work_date,
-            track_id=uuid.UUID(track_id) if track_id else None,
-            title=title,
+            racing_discipline=discipline,
+            work_date=details.work_date,
+            track_id=details.track_id,
+            title=details.title,
             actor_user_id=request.state.user.id,
+            commit=False,
         )
-    except ValueError as exc:
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        save_draft(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=workday.lock_version,
+            details=details,
+            assignments=assignments,
+            commit=False,
+        )
+        db.commit()
+    except (KeyError, TypeError, ValueError) as exc:
+        db.rollback()
         raise HTTPException(400, str(exc)) from exc
-    return RedirectResponse(f"/manage/workdays/{workday.id}", status_code=303)
+    return RedirectResponse(f"/manage/workdays/{workday.id}/preview", status_code=303)
 
 
 def _builder_context(
@@ -114,8 +324,9 @@ def _builder_context(
             forced_relevant.setdefault(assignment.base_position_id, set()).add(assignment.person_id)
     picker_views = crew_picker_views(
         db,
-        workday=workday,
-        draft=draft,
+        region_id=workday.region_id,
+        work_date=draft.work_date,
+        exclude_workday_id=workday.id,
         position_ids=position_ids,
         forced_relevant=forced_relevant,
     )
@@ -157,10 +368,28 @@ def _builder_context(
                 "same_date": picker_person.same_date if picker_person else False,
             }
         )
+    generated_travel = None
+    if workday.operation_id:
+        generated_workday = db.scalar(
+            select(Workday).where(
+                Workday.operation_id == workday.operation_id,
+                Workday.category == WorkdayCategory.TRAVEL_DAY.value,
+                Workday.id != workday.id,
+            )
+        )
+        if generated_workday:
+            generated_travel = db.get(
+                WorkdayRevision,
+                generated_workday.current_draft_revision_id
+                or generated_workday.current_published_revision_id,
+            )
     return context(
         request,
+        new_mode=False,
         workday=workday,
         draft=draft,
+        regions=_editable_regions(db, request),
+        day_type_options=_day_type_options(),
         tracks=list(
             db.scalars(
                 select(Track)
@@ -185,6 +414,7 @@ def _builder_context(
             ),
         ),
         transport_labels=TRANSPORT_LABELS,
+        generated_travel=generated_travel,
         **extra,
     )
 
@@ -207,8 +437,51 @@ def workday_crew_picker(
     try:
         view = crew_picker_views(
             db,
-            workday=workday,
-            draft=draft,
+            region_id=workday.region_id,
+            work_date=draft.work_date,
+            exclude_workday_id=workday.id,
+            position_ids={position_id},
+            forced_relevant={position_id: {person_id}} if person_id else None,
+        )[position_id]
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return JSONResponse(
+        {
+            "groups": [
+                {
+                    "label": label,
+                    "people": [
+                        {
+                            "id": str(person.id),
+                            "label": person.display_name,
+                            "hint": person.hint,
+                            "context": person.context_label,
+                            "same_date": person.same_date,
+                        }
+                        for person in people
+                    ],
+                }
+                for label, people in view.groups
+            ]
+        }
+    )
+
+
+@router.get("/new-workday/crew-picker", response_class=JSONResponse)
+def new_workday_crew_picker(
+    region_id: uuid.UUID,
+    work_date: date,
+    position_id: uuid.UUID,
+    request: Request,
+    person_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+):
+    require_manage_region(request.state.actor, region_id)
+    try:
+        view = crew_picker_views(
+            db,
+            region_id=region_id,
+            work_date=work_date,
             position_ids={position_id},
             forced_relevant={position_id: {person_id}} if person_id else None,
         )[position_id]
@@ -308,6 +581,13 @@ def _publication_warnings(
     return warnings
 
 
+def _managed_region_ids(request: Request) -> set[uuid.UUID] | None:
+    actor = request.state.actor
+    return None if actor.is_admin else {
+        region_id for region_id in actor.regional_roles if can_manage_region(actor, region_id)
+    }
+
+
 @router.get("/workdays/{workday_id}", response_class=HTMLResponse)
 def edit_workday(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
     workday = db.get(Workday, workday_id)
@@ -332,87 +612,12 @@ async def save_workday_draft(
     if not draft:
         raise HTTPException(409, "Open the editor again to create a draft")
 
-    def optional_uuid(value: object) -> uuid.UUID | None:
-        text = str(value or "").strip()
-        return uuid.UUID(text) if text else None
-
-    def optional_int(value: object) -> int | None:
-        text = str(value or "").strip()
-        return int(text) if text else None
-
-    def submitted_time(name: str, current: time | None) -> time | None:
-        return parse_time(str(form.get(name, ""))) if name in form else current
-
     try:
-        assignment_ids = form.getlist("assignment_id")
-        row_count = len(assignment_ids)
-        position_ids = form.getlist("base_position_id")
-        slot_indexes = form.getlist("slot_index")
-        person_ids = form.getlist("person_id")
-        statuses = form.getlist("status")
-        notes = form.getlist("note")
-        private_values = form.getlist("note_private")
-        starts = form.getlist("assignment_start_time")
-        ends = form.getlist("assignment_end_time")
-        transport_modes = form.getlist("transport_mode") or [TRANSPORT_UNASSIGNED] * row_count
-        vehicle_ids = form.getlist("vehicle_id") or [""] * row_count
-        custom_transports = form.getlist("custom_transport_text") or [""] * row_count
-        accommodation_names = form.getlist("accommodation_name") or [""] * row_count
-        lengths = {
-            len(values)
-            for values in (
-                assignment_ids,
-                position_ids,
-                slot_indexes,
-                person_ids,
-                statuses,
-                notes,
-                private_values,
-                starts,
-                ends,
-                transport_modes,
-                vehicle_ids,
-                custom_transports,
-                accommodation_names,
-            )
-        }
-        if len(lengths) != 1:
-            raise ValueError("The assignment rows were incomplete. Refresh and try again.")
-        items = [
-            DraftAssignmentInput(
-                assignment_id=optional_uuid(assignment_ids[index]),
-                base_position_id=optional_uuid(position_ids[index]),
-                slot_index=optional_int(slot_indexes[index]),
-                person_id=optional_uuid(person_ids[index]),
-                status=str(statuses[index]),
-                note=str(notes[index]),
-                note_private=str(private_values[index]) == "1",
-                start_time=parse_time(str(starts[index])),
-                end_time=parse_time(str(ends[index])),
-                transport_mode=str(transport_modes[index] or TRANSPORT_UNASSIGNED),
-                vehicle_id=optional_uuid(vehicle_ids[index]),
-                custom_transport_text=str(custom_transports[index]),
-                accommodation_name=str(accommodation_names[index]),
-            )
-            for index in range(len(assignment_ids))
-        ]
-        details = DraftDetailsInput(
-            work_date=date.fromisoformat(str(form["work_date"])),
-            track_id=optional_uuid(form.get("track_id")),
-            title=str(form.get("title", "")),
-            start_time=parse_time(str(form.get("start_time", ""))),
-            end_time=parse_time(str(form.get("end_time", ""))),
-            on_track_time=submitted_time("on_track_time", draft.on_track_time),
-            first_trial_time=submitted_time("first_trial_time", draft.first_trial_time),
-            first_race_time=submitted_time("first_race_time", draft.first_race_time),
-            last_race_time=submitted_time("last_race_time", draft.last_race_time),
-            race_count=(
-                optional_int(form.get("race_count")) if "race_count" in form else draft.race_count
-            ),
-            day_note=str(form.get("day_note", "")),
-            change_reason=str(form.get("change_reason", "")),
-            start_origin=str(form.get("start_origin", "")),
-            finish_destination=str(form.get("finish_destination", "")),
+        category, discipline = _parse_day_type(
+            str(form.get("day_type", f"{workday.category}:{workday.racing_discipline or ''}"))
+        )
+        details, items = _draft_payload(
+            form, category=category, discipline=discipline, draft=draft
         )
         save_draft(
             db,
@@ -630,7 +835,9 @@ def preview(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             draft,
             changes=preview_diff(db, workday, draft),
             warnings=_publication_warnings(db, workday, draft),
-            conflicts=publication_conflicts(db, workday, draft),
+            conflicts=publication_conflicts(
+                db, workday, draft, visible_region_ids=_managed_region_ids(request)
+            ),
         ),
     )
 

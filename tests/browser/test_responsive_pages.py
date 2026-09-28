@@ -687,23 +687,23 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
     page.goto(base_url + "/settings")
     page.get_by_role("link", name="Build", exact=True).click()
     page.wait_for_url("**/manage/workdays/new")
-    assert page.locator(".builder-start-card").count() == 1
-    assert page.get_by_role("heading", name="Start a private draft").count() == 1
-    assert page.get_by_role("button", name="Start private draft").count() == 1
-    assert page.locator("section.panel > form.form-grid").count() == 0
+    assert page.locator(".builder-form").count() == 1
+    assert page.get_by_text("Unsaved Builder", exact=True).count() == 1
+    assert page.get_by_role("button", name="Save & Preview").count() == 1
+    assert page.get_by_text("Step 1", exact=False).count() == 0
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"build-new-{width}.png")
     page.locator('input[name="work_date"]').fill(
         "2030-01-10" if width == 1280 else "2030-01-11"
     )
-    page.locator('select[name="category"]').select_option("OFFICE_DAY")
+    page.locator('select[name="day_type"]').select_option("OFFICE_DAY:")
     page.locator('select[name="region_id"]').select_option(values["region_id"])
     page.locator('select[name="track_id"]').select_option(values["track_id"])
+    page.locator('details:has(input[name="title"]) > summary').click()
     page.locator('input[name="title"]').fill(f"Browser private draft {width}")
-    page.get_by_role("button", name="Start private draft").click()
-    page.wait_for_url("**/manage/workdays/*")
-    assert page.locator(".builder-form").count() == 1
-    assert page.get_by_text("Private draft", exact=False).count() >= 1
+    page.get_by_role("button", name="Save & Preview").click()
+    page.wait_for_url("**/manage/workdays/*/preview")
+    assert page.get_by_text("Publication preview", exact=True).count() == 1
 
     for context_key, heading in (
         ("settings", "Settings"),
@@ -1538,10 +1538,10 @@ def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type:
     page = context.new_page()
     _login(page, base_url, values["manager"])
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
-    assert page.get_by_text("Travel & hotels", exact=False).is_visible()
+    assert page.get_by_text("Travel & hotel", exact=False).is_visible()
     assert page.locator('input[name="start_origin"]').is_visible()
-    assert page.locator('[data-picker-kind="transport"]').first.count() == 1
     assert page.locator('[data-picker-kind="vehicle"]').first.count() == 1
+    assert page.locator("[data-standard-travel-check]").first.count() == 1
     _assert_no_horizontal_overflow(page)
     _capture_page(page, "builder-travel-375.png")
 

@@ -280,10 +280,9 @@ archived Regions and their Tracks are excluded from operational selectors.
 is checked transactionally, referenced records are rejected, and audit history
 is retained. No lifecycle or deletion schema was added.
 
-The manual Build entry now uses the same private-draft and compact component
-language as the existing roster Builder. It remains a small identity step and
-does not persist anything until submitted. External-event adoption continues to
-open the same Builder and retains its duplicate guard.
+The manual Build entry now opens the complete shared Builder in unsaved mode and
+does not persist anything until Save & Preview succeeds. External-event adoption
+continues to open the same Builder and retains its duplicate guard.
 
 Help content is centralized as structured topics with concise tasks, rules, and
 authorization-filtered workspace links. Unknown contexts resolve to a useful
@@ -334,8 +333,8 @@ python scripts/create_staging_accounts.py --bundle seed\redeputy-staging-neutral
 ```
 
 No credential is stored in the neutral import. No deployment is performed by
-either command. Operations/Travel remains deferred; Love Racing and HRNZ adapters
-already exist but still require deployment-environment qualification.
+either command. Love Racing and HRNZ adapters already exist but still require
+deployment-environment qualification.
 
 ## Race Day fidelity repair — 2026-09-28
 
@@ -351,3 +350,13 @@ Day P/N navigation follows rostered dates and mobile navigation requires a
 deliberate double swipe. Visible push notifications replace older notifications
 for the same User + Workday without collapsing database event history. The HRNZ
 race-source TAB NZ fallback remains the next bounded external-source task.
+
+## Unified Builder and operational travel — 2026-09-28
+
+The same Builder now serves unsaved creation and existing drafts. Race/Trial
+discipline is explicit, canonical position presets remain Master-Data-backed,
+and compact rows expose Position, Person, Vehicle and More. Optional standard
+overnight travel projects the existing Operation/TravelLeg domain into a linked
+previous-day Travel Day, while per-person no-standard-travel, hotel, timing and
+vehicle exceptions remain explicit publication snapshots. No Deputy runtime or
+source state is involved.

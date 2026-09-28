@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -44,9 +45,10 @@ HINT_LABELS = {
 def crew_picker_views(
     db: Session,
     *,
-    workday: Workday,
-    draft: WorkdayRevision,
+    region_id: uuid.UUID,
+    work_date: date,
     position_ids: set[uuid.UUID | None],
+    exclude_workday_id: uuid.UUID | None = None,
     forced_relevant: dict[uuid.UUID | None, set[uuid.UUID]] | None = None,
 ) -> dict[uuid.UUID | None, CrewPickerView]:
     """Build canonical position-aware crew groups without moving policy into JavaScript."""
@@ -80,8 +82,8 @@ def crew_picker_views(
             .join(WorkdayRevision, WorkdayRevision.id == Assignment.revision_id)
             .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
             .where(
-                WorkdayRevision.work_date == draft.work_date,
-                Workday.id != workday.id,
+                WorkdayRevision.work_date == work_date,
+                *( [Workday.id != exclude_workday_id] if exclude_workday_id else [] ),
                 Assignment.person_id.is_not(None),
             )
         )
@@ -133,7 +135,7 @@ def crew_picker_views(
             is_relevant = bool(
                 person.id in forced_relevant.get(position_id, set())
                 or eligible
-                or person.home_region_id == workday.region_id
+                or person.home_region_id == region_id
                 or (
                     position
                     and position.crew_group_id

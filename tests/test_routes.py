@@ -58,14 +58,34 @@ def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None: 
         db.commit()
     client = TestClient(app)
     csrf = _login(client, "manager@example.test", "123456")
+    with factory() as db:
+        counts_before = (
+            len(list(db.scalars(select(Workday.id)))),
+            len(list(db.scalars(select(WorkdayRevision.id)))),
+        )
     create_page = client.get("/manage/workdays/new")
+    assert create_page.status_code == 200
+    assert "Unsaved Builder" in create_page.text
+    assert "Save &amp; Preview" in create_page.text
+    assert "Step 1" not in create_page.text
     assert "Outside Track" not in create_page.text
     assert "Archived Track" not in create_page.text
+    with factory() as db:
+        assert counts_before == (
+            len(list(db.scalars(select(Workday.id)))),
+            len(list(db.scalars(select(WorkdayRevision.id)))),
+        )
     forged = client.post("/manage/workdays", data={
         "region_id": str(region_id), "track_id": str(outside_track.id),
-        "work_date": "2026-09-20", "category": "RACE_DAY", "csrf_token": csrf,
+        "work_date": "2026-09-20", "day_type": "RACE_DAY:THOROUGHBRED",
+        "csrf_token": csrf,
     })
     assert forged.status_code == 400
+    with factory() as db:
+        assert counts_before == (
+            len(list(db.scalars(select(Workday.id)))),
+            len(list(db.scalars(select(WorkdayRevision.id)))),
+        )
     created = client.post("/manage/workdays", data={
         "region_id": str(region_id), "track_id": str(track_id),
         "work_date": "2026-09-20", "category": "RACE_DAY", "csrf_token": csrf,
@@ -89,6 +109,70 @@ def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None: 
         assert draft.start_time == draft.on_track_time == draft.first_trial_time == draft.first_race_time == time(9, 30)
         assert draft.end_time == time(17, 30)
         assert wd.lock_version == version + 1
+
+
+def test_unified_new_builder_saves_complete_harness_draft_atomically(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, position_id, person_id) = routed_db
+    client = TestClient(app)
+    csrf = _login(client, "manager@example.test", "123456")
+    picker = client.get(
+        "/manage/new-workday/crew-picker",
+        params={
+            "region_id": str(region_id),
+            "work_date": "2026-09-22",
+            "position_id": str(position_id),
+            "person_id": str(person_id),
+        },
+    )
+    assert picker.status_code == 200
+    assert any(
+        person["id"] == str(person_id)
+        for group in picker.json()["groups"]
+        for person in group["people"]
+    )
+    saved = client.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "track_id": str(track_id),
+            "work_date": "2026-09-22",
+            "day_type": "RACE_DAY:HARNESS",
+            "title": "Harness programme",
+            "start_time": "08:00",
+            "end_time": "18:00",
+            "assignment_id": "",
+            "base_position_id": str(position_id),
+            "slot_index": "1",
+            "person_id": str(person_id),
+            "status": "ASSIGNED",
+            "note": "",
+            "note_private": "1",
+            "assignment_start_time": "",
+            "assignment_end_time": "",
+            "transport_mode": "UNASSIGNED",
+            "vehicle_id": "",
+            "custom_transport_text": "",
+            "accommodation_name": "",
+            "uses_standard_travel": "0",
+            "hotel_to_track_minutes_override": "",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    assert saved.headers["location"].endswith("/preview")
+    workday_id = uuid.UUID(saved.headers["location"].split("/")[-2])
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        rows = list(db.scalars(select(Assignment).where(Assignment.revision_id == draft.id)))
+        assert (workday.category, workday.racing_discipline) == ("RACE_DAY", "HARNESS")
+        assert (draft.title, draft.start_time, draft.end_time) == (
+            "Harness programme",
+            time(8),
+            time(18),
+        )
+        assert len(rows) == 1 and rows[0].person_id == person_id
 
 
 def test_track_edit_region_authority_palette_and_history(routed_db) -> None:  # type: ignore[no-untyped-def]

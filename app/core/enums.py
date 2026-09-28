@@ -25,6 +25,11 @@ class WorkdayCategory(StrEnum):
     OTHER = "OTHER"
 
 
+class RacingDiscipline(StrEnum):
+    THOROUGHBRED = "THOROUGHBRED"
+    HARNESS = "HARNESS"
+
+
 class RevisionState(StrEnum):
     DRAFT = "DRAFT"
     PUBLISHED = "PUBLISHED"

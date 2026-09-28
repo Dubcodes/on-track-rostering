@@ -163,6 +163,16 @@
   const loadCrewPicker = async (row, positionId) => {
     const picker = row.querySelector('[data-picker-kind="person"]');
     const empty = picker.querySelector("[data-picker-empty]");
+    if (form.dataset.newMode === "1") {
+      const regionId = form.querySelector('[name="region_id"]').value;
+      const workDate = form.querySelector('[name="work_date"]').value;
+      if (!regionId || !workDate) {
+        renderCrewGroups(picker, []);
+        empty.textContent = "Choose a region and date for crew suggestions.";
+        empty.hidden = false;
+        return;
+      }
+    }
     const requestKey = `${positionId}-${Date.now()}`;
     row.dataset.crewPickerRequest = requestKey;
     renderCrewGroups(picker, []);
@@ -171,6 +181,10 @@
     const selectedPersonId = row.querySelector("[data-person-value]").value;
     const url = new URL(form.dataset.crewPickerUrl, window.location.origin);
     url.searchParams.set("position_id", positionId);
+    if (form.dataset.newMode === "1") {
+      url.searchParams.set("region_id", form.querySelector('[name="region_id"]').value);
+      url.searchParams.set("work_date", form.querySelector('[name="work_date"]').value);
+    }
     if (selectedPersonId) url.searchParams.set("person_id", selectedPersonId);
     try {
       const response = await fetch(url, {headers: {Accept: "application/json"}});
@@ -196,22 +210,11 @@
     } else if (picker.dataset.pickerKind === "person") {
       row.querySelector("[data-person-value]").value = option.dataset.value || "";
       row.querySelector("[data-assignment-state]").value = option.dataset.state || "ASSIGNED";
-    } else if (picker.dataset.pickerKind === "transport") {
-      row.querySelector("[data-transport-value]").value = option.dataset.value || "UNASSIGNED";
-      if (option.dataset.value !== "VEHICLE") {
-        row.querySelector("[data-vehicle-value]").value = "";
-        const vehicleInput = row.querySelector('[data-picker-kind="vehicle"] [data-picker-input]');
-        if (vehicleInput) vehicleInput.value = "Select vehicle";
-      }
-      if (option.dataset.value !== "CUSTOM") {
-        const customInput = row.querySelector('input[name="custom_transport_text"]');
-        if (customInput) customInput.value = "";
-      }
     } else if (picker.dataset.pickerKind === "vehicle") {
-      row.querySelector("[data-vehicle-value]").value = option.dataset.value || "";
-      row.querySelector("[data-transport-value]").value = option.dataset.value ? "VEHICLE" : "UNASSIGNED";
-      const transportInput = row.querySelector('[data-picker-kind="transport"] [data-picker-input]');
-      if (transportInput) transportInput.value = option.dataset.value ? "Vehicle" : "No transport assigned yet";
+      const mode = option.dataset.transportMode || (option.dataset.value ? "VEHICLE" : "UNASSIGNED");
+      row.querySelector("[data-vehicle-value]").value = mode === "VEHICLE" ? option.dataset.value || "" : "";
+      row.querySelector("[data-transport-value]").value = mode;
+      if (mode !== "CUSTOM") row.querySelector('input[name="custom_transport_text"]').value = "";
     }
     closePicker(picker);
     refreshRow(row);
@@ -276,6 +279,25 @@
     row.querySelector("[data-remove-row]")?.addEventListener("click", () => row.remove());
     const privateCheck = row.querySelector("[data-private-check]");
     privateCheck?.addEventListener("change", () => { row.querySelector("[data-private-value]").value = privateCheck.checked ? "1" : "0"; });
+    const projectPersonTravel = () => {
+      const personId = row.querySelector("[data-person-value]").value;
+      if (!personId) return;
+      list.querySelectorAll("[data-assignment-row]").forEach((other) => {
+        if (other === row || other.querySelector("[data-person-value]").value !== personId) return;
+        const standard = row.querySelector("[data-standard-travel-check]").checked;
+        other.querySelector("[data-standard-travel-check]").checked = standard;
+        other.querySelector("[data-standard-travel-value]").value = standard ? "1" : "0";
+        other.querySelector('input[name="accommodation_name"]').value = row.querySelector('input[name="accommodation_name"]').value;
+        other.querySelector('input[name="hotel_to_track_minutes_override"]').value = row.querySelector('input[name="hotel_to_track_minutes_override"]').value;
+      });
+    };
+    const standardTravel = row.querySelector("[data-standard-travel-check]");
+    standardTravel?.addEventListener("change", () => {
+      row.querySelector("[data-standard-travel-value]").value = standardTravel.checked ? "1" : "0";
+      projectPersonTravel();
+    });
+    row.querySelector('input[name="accommodation_name"]')?.addEventListener("change", projectPersonTravel);
+    row.querySelector('input[name="hotel_to_track_minutes_override"]')?.addEventListener("change", projectPersonTravel);
     refreshRow(row);
   };
   list.querySelectorAll("[data-assignment-row]").forEach(wireRow);
@@ -286,5 +308,40 @@
     wireRow(row);
     row.querySelector('[data-picker-kind="position"] [data-picker-input]').focus();
   });
+  const presets = {
+    THOROUGHBRED: ["Side 1", "Side 2", "Start", "Head On", "Back", "Turn", "RTS", "Director", "Sound", "VT", "CCU1", "CCU2", "FM", "ENG"],
+    HARNESS: ["Side 1", "Side 2", "Head On", "Back", "Director", "Sound/VT", "CCU1", "CCU2", "FM", "ENG"],
+    TRIALS: ["Side 1", "Side 2", "Head On", "Back", "Director", "Sound/VT", "ENG"],
+    BLANK: [],
+  };
+  const positionKey = (value) => normalize(value).replace(/[^a-z0-9]/g, "");
+  const applyPreset = (allowReplace) => {
+    if (list.children.length && !allowReplace) return;
+    if (list.children.length && !window.confirm("Replace the current assignment rows with these defaults?")) return;
+    list.replaceChildren();
+    const unresolved = [];
+    (presets[form.querySelector("[data-position-preset]").value] || []).forEach((label) => {
+      const fragment = template.content.cloneNode(true);
+      list.append(fragment);
+      const row = list.lastElementChild;
+      wireRow(row);
+      const option = [...row.querySelectorAll('[data-picker-kind="position"] [data-picker-option]')]
+        .find((item) => positionKey(item.dataset.label) === positionKey(label));
+      if (option) choose(row.querySelector('[data-picker-kind="position"]'), option);
+      else { unresolved.push(label); row.remove(); }
+    });
+    form.querySelector("[data-preset-warning]").textContent = unresolved.length ? `Missing from Master Data: ${unresolved.join(", ")}` : "";
+  };
+  form.querySelector("[data-apply-preset]")?.addEventListener("click", () => applyPreset(true));
+  const dayType = form.querySelector("[data-day-type]");
+  const syncDayType = () => {
+    const [category, discipline] = dayType.value.split(":");
+    form.querySelectorAll("[data-racing-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
+    form.querySelectorAll("[data-race-time]").forEach((field) => { field.hidden = category !== "RACE_DAY"; });
+    form.querySelector("[data-position-preset]").value = category === "TRIALS" ? "TRIALS" : (category === "RACE_DAY" ? discipline : "BLANK");
+  };
+  dayType?.addEventListener("change", syncDayType);
+  syncDayType();
+  if (form.dataset.newMode === "1" && !list.children.length) applyPreset(false);
   document.addEventListener("pointerdown", (event) => document.querySelectorAll("[data-search-picker]").forEach((picker) => { if (!picker.contains(event.target)) closePicker(picker); }));
 })();

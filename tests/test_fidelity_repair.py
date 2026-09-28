@@ -6,13 +6,14 @@ import zipfile
 from datetime import date, time, timedelta
 
 import pytest
+from sqlalchemy import select
 
 from app.admin.data_export import safe_data_export
 from app.auth.policy import Actor, actor_for, can_manage_region
 from app.auth.security import hash_credential
 from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.config import get_settings
-from app.core.enums import Role
+from app.core.enums import RacingDiscipline, Role, WorkdayCategory
 from app.core.time import utcnow
 from app.employee.read_models import adjacent_published_workdays
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
@@ -22,7 +23,7 @@ from app.identity.models import LoginThrottle, Person, RoleGrant, User, UserPers
 from app.notifications.models import NotificationEvent
 from app.notifications.service import _notification_payload
 from app.rostering.conflicts import publication_conflicts
-from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.rostering.models import Assignment, Operation, TravelLeg, Workday, WorkdayRevision
 from app.rostering.service import (
     DraftAssignmentInput,
     DraftDetailsInput,
@@ -31,7 +32,113 @@ from app.rostering.service import (
     publish,
     save_draft,
 )
-from app.rostering.travel import TRANSPORT_VEHICLE
+from app.rostering.travel import TRANSPORT_VEHICLE, calculate_standard_travel
+
+
+def test_ruakaka_standard_travel_rounds_last_race_without_extra_allowance(db) -> None:  # type: ignore[no-untyped-def]
+    calculation = calculate_standard_travel(
+        race_date=date(2026, 10, 14),
+        on_track_time=time(9),
+        last_race_time=time(16, 24),
+        departure_time=time(12),
+        travel_to_hotel_minutes=300,
+        hotel_to_track_minutes=30,
+        pack_up_minutes=60,
+        return_travel_minutes=300,
+    )
+    assert calculation.travel_date == date(2026, 10, 13)
+    assert (calculation.travel_start, calculation.travel_finish) == (time(12), time(17))
+    assert calculation.race_start == time(8, 30)
+    assert calculation.race_clear == time(16, 30)
+    assert calculation.pack_up_done == time(17, 30)
+    assert calculation.race_finish == time(22, 30)
+
+
+def test_standard_plan_generates_one_linked_travel_participation_per_person(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Northern")
+    db.add(region)
+    db.flush()
+    track = Track(name="Ruakaka", region_id=region.id, palette_slot=1)
+    manager = _user(db, "travel-manager@example.test")
+    person = Person(display_name="Multi-role Crew", home_region_id=region.id)
+    local_person = Person(display_name="Local Crew", home_region_id=region.id)
+    eng, ccu = BasePosition(name="ENG"), BasePosition(name="CCU1")
+    db.add_all([track, person, local_person, eng, ccu])
+    db.commit()
+    workday = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.RACE_DAY.value,
+        racing_discipline=RacingDiscipline.THOROUGHBRED.value,
+        work_date=date(2026, 10, 14),
+        track_id=track.id,
+        title="Ruakaka",
+        actor_user_id=manager.id,
+    )
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=draft.id,
+        expected_version=workday.lock_version,
+        details=DraftDetailsInput(
+            work_date=date(2026, 10, 14), track_id=track.id, title="Ruakaka",
+            start_time=None, end_time=None, on_track_time=time(9), first_trial_time=None,
+            first_race_time=None, last_race_time=time(16, 24), race_count=None,
+            day_note="", change_reason="", start_origin="Clow Place",
+            finish_destination="Clow Place", category="RACE_DAY",
+            racing_discipline="THOROUGHBRED", standard_travel_enabled=True,
+            travel_departure_time=time(12), travel_to_hotel_minutes=300,
+            default_hotel="Beachfront Hotel", hotel_to_track_minutes=30,
+            return_travel_minutes=300, pack_up_minutes=60,
+        ),
+        assignments=[
+            DraftAssignmentInput(
+                base_position_id=position.id,
+                slot_index=None,
+                person_id=person.id,
+                status="ASSIGNED",
+                accommodation_name="Alternative Lodge",
+                hotel_to_track_minutes_override=15,
+            )
+            for position in (eng, ccu)
+        ]
+        + [
+            DraftAssignmentInput(
+                base_position_id=eng.id,
+                slot_index=2,
+                person_id=local_person.id,
+                status="ASSIGNED",
+                uses_standard_travel=False,
+                start_time=time(8, 50),
+                end_time=time(18),
+            )
+        ],
+    )
+    db.refresh(workday)
+    assert workday.operation_id is not None
+    assert db.get(Operation, workday.operation_id)
+    assert len(list(db.scalars(select(TravelLeg).where(TravelLeg.operation_id == workday.operation_id)))) == 3
+    travel_day = db.scalar(select(Workday).where(
+        Workday.operation_id == workday.operation_id, Workday.category == "TRAVEL_DAY"))
+    travel_revision = db.get(WorkdayRevision, travel_day.current_draft_revision_id)
+    assert (travel_revision.work_date, travel_revision.start_time, travel_revision.end_time) == (
+        date(2026, 10, 13), time(12), time(17))
+    travel_rows = list(db.scalars(select(Assignment).where(
+        Assignment.revision_id == travel_revision.id)))
+    assert len(travel_rows) == 1
+    assert travel_rows[0].person_id == person.id
+    assert travel_rows[0].accommodation_name == "Alternative Lodge"
+    race_rows = list(db.scalars(select(Assignment).where(Assignment.revision_id == draft.id)))
+    assert len([row for row in race_rows if row.person_id == person.id]) == 2
+    assert {row.start_time for row in race_rows if row.person_id == person.id} == {time(8, 45)}
+    assert next(row for row in race_rows if row.person_id == local_person.id).start_time == time(8, 50)
+    assert (draft.start_time, draft.end_time) == (time(8, 30), time(22, 30))
+    db.commit()
+    publish(db, workday.id, draft.id, manager.id, workday.lock_version)
+    db.refresh(travel_day)
+    assert travel_day.current_published_revision_id == travel_revision.id
+    assert travel_day.current_draft_revision_id is None
 
 
 def _user(db, email: str) -> User:  # type: ignore[no-untyped-def]
@@ -197,6 +304,9 @@ def test_conflicts_require_server_side_publish_override_and_allow_same_workday_r
     conflicts = publication_conflicts(db, target, draft)
     assert {item.kind for item in conflicts} == {"PERSON", "VEHICLE"}
     assert all("potential same-day conflict" in item.timing for item in conflicts)
+    redacted = publication_conflicts(db, target, draft, visible_region_ids=set())
+    assert all("another Workday" in item.message for item in redacted)
+    assert all("Cambridge" not in item.message for item in redacted)
     version = target.lock_version
     target_id, draft_id, user_id = target.id, draft.id, user.id
     db.commit()
@@ -310,7 +420,13 @@ def test_retention_defaults_export_excludes_secrets_and_housekeeping_dry_run(db,
     with zipfile.ZipFile(io.BytesIO(export)) as archive:
         names = set(archive.namelist())
         contents = b"".join(archive.read(name) for name in names)
-    assert {"accounts.csv", "workdays.csv", "audit_events.csv"} <= names
+    assert {
+        "accounts.csv",
+        "workdays.csv",
+        "operations.csv",
+        "travel_legs.csv",
+        "audit_events.csv",
+    } <= names
     assert secret_hash.encode() not in contents
     assert b"credential_hash" not in contents and b"encrypted_subscription" not in contents
     get_settings.cache_clear()
@@ -318,11 +434,25 @@ def test_retention_defaults_export_excludes_secrets_and_housekeeping_dry_run(db,
 
 def test_staging_build_id_optional_but_production_explicit() -> None:
     staging = open("compose.staging.yaml", encoding="utf-8").read()
+    staging_example = open(".env.staging.example", encoding="utf-8").read()
     production = open("compose.yaml", encoding="utf-8").read()
     dockerfile = open("Dockerfile", encoding="utf-8").read()
     assert "${STAGING_ONTRACK_BUILD_ID:-}" in staging
+    assert "\nSTAGING_ONTRACK_BUILD_ID=" not in staging_example
+    assert "# STAGING_ONTRACK_BUILD_ID=<qualified-git-sha>" in staging_example
     assert "${ONTRACK_BUILD_ID:?" in production
     assert ".ontrack-build-id" in dockerfile and "sha256sum" in dockerfile
+
+
+def test_admin_retention_copy_and_compact_checkbox_remain_concise() -> None:
+    template = open("app/templates/admin.html", encoding="utf-8").read()
+    stylesheet = open("app/static/redeputy.css", encoding="utf-8").read()
+    assert "Retention days set to" in template
+    assert "Download data" in template
+    assert "Housekeeping defaults to a dry run" not in template
+    assert '.compact-check input[type="checkbox"]' in stylesheet
+    assert "width: auto" in stylesheet
+    assert "min-height: 0" in stylesheet
 
 
 def test_day_navigation_javascript_requires_two_matching_swipes() -> None:

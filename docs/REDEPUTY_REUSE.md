@@ -5,7 +5,7 @@ Reference examined read-only at local commit `20d65d9` (`Re-Deputy 0.5.5`) on 20
 | Area | Classification | On Track treatment |
 |---|---|---|
 | Month/List/Day/Settings visual language | Directly reuse where appropriate, then adapt | Re-Deputy's calendar/list, compact cards, mobile navigation, holiday marker, theme picker, published-Day detail hierarchy and crew table are adapted onto On Track read models. No Deputy state is referenced. |
-| Manual roster builder | Directly reuse interaction language, then adapt | The one-page Race Day Builder now combines day details, friendly timing, Re-Deputy-derived travel/hotel/transport controls, canonical Position/Person pickers, notes, and atomic Save & Preview. Meeting title is secondary and Preview deliberately remains separate. |
+| Manual roster builder | Directly reuse interaction language, then adapt | One shared unsaved/existing Builder combines day identity, friendly timing, canonical presets, Position + Person + Vehicle + More rows, operational travel/hotel controls, notes, and atomic Save & Preview. Meeting title is secondary and Preview deliberately remains separate. |
 | Public holidays | Copy then adapt | Adapted the deterministic NZ national holiday/Matariki calculation into `app/core/holidays.py`; operational regions remain separate from statutory geography. |
 | Trusted devices and invitations | Conceptually reuse/rewrite | Preserved hash-only random tokens, expiry/single use/revocation concepts and sliding device trust; rewritten for Argon2id, role-sensitive lifetimes, CSRF, auth epochs, and PostgreSQL. |
 | Same-origin/security headers/redirect safety | Conceptually reuse/rewrite | Central middleware/policy implementation replaces Re-Deputy route-specific checks. |
@@ -58,6 +58,6 @@ The Month/List, Builder, dedicated Preview and published Day transplants are com
 
 On narrow and touch layouts, Builder pickers improve on Re-Deputy's fixed-top mobile menu. JavaScript measures the active Position or Person input against `visualViewport`, chooses an anchored below/above placement, clamps width and height to the usable viewport, and uses a labelled compact sheet only when neither side has useful space. Placement is recomputed for visual-viewport resize/scroll so a reduced keyboard viewport does not leave an unexplained menu under the application header. Desktop uses the same measured anchoring and may flip above when required.
 
-## Deferred to Operations/Travel
+## Operational travel adaptation
 
-The Race Day Builder now owns roster-level start/finish points plus per-person transport and accommodation snapshots. Larger multi-day operation coordination and TravelLeg planning remain deferred.
+An optional standard overnight plan now uses On Track's own Operation and TravelLeg records, produces a linked previous-day Travel Day, and snapshots published timing, vehicle, hotel and person exceptions. This is provider-neutral operational data; it has no Deputy dependency or inferred Deputy travel state.

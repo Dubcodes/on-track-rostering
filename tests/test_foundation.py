@@ -753,8 +753,9 @@ def test_position_aware_crew_picker_and_duplicate_names_are_id_safe(db) -> None:
 
     views = crew_picker_views(
         db,
-        workday=workday,
-        draft=draft,
+        region_id=workday.region_id,
+        work_date=draft.work_date,
+        exclude_workday_id=workday.id,
         position_ids={head_on.id, director.id},
     )
     head_relevant = {person.id: person for person in views[head_on.id].relevant}
