@@ -161,6 +161,7 @@ def create_workday(
     db.add(draft)
     db.flush()
     workday.current_draft_revision_id = draft.id
+    db.flush()
     record_audit(db, "workday.created", "workday", workday.id, actor_user_id, region_id=region_id)
     if commit:
         db.commit()

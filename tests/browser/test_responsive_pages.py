@@ -410,6 +410,7 @@ def browser_site():  # type: ignore[no-untyped-def]
         trial_workday = Workday(
             region_id=region.id,
             category="TRIALS",
+            racing_discipline="THOROUGHBRED",
             created_by_user_id=manager.id,
             external_event_id=trial_event.id,
         )
@@ -703,8 +704,11 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
     crew_option = preset_row.locator(
         '[data-picker-kind="person"] [data-picker-groups] [data-picker-option]:not([disabled])'
     ).first
-    crew_option.wait_for()
-    preset_row.locator('[data-picker-kind="person"] [data-picker-input]').click()
+    crew_option.wait_for(state="attached")
+    person_input = preset_row.locator('[data-picker-kind="person"] [data-picker-input]')
+    person_input.click()
+    person_input.fill("")
+    crew_option.wait_for(state="visible")
     crew_option.click()
     assert preset_row.locator("[data-person-value]").input_value()
     preset_row.locator('[data-picker-kind="person"] [data-picker-input]').fill("not selected")
@@ -720,7 +724,14 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
         "form => [...form.querySelectorAll(':invalid')].map(field => `${field.name}:${field.value}`)"
     )
     assert invalid == []
-    page.get_by_role("button", name="Save & Preview").click()
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url.endswith("/manage/workdays")
+    ) as save_response:
+        page.get_by_role("button", name="Save & Preview").click()
+    response = save_response.value
+    if response.status >= 400:
+        pytest.fail(f"New Workday save returned {response.status}: {response.text()}")
     page.wait_for_url("**/manage/workdays/*/preview")
     assert page.get_by_text("Publication preview", exact=True).count() == 1
 
@@ -1113,7 +1124,6 @@ def test_builder_picker_tracks_active_field_geometry(browser_site, width: int) -
     crew_option.wait_for(state="visible")
     _assert_picker_geometry(page, person_input, person_menu)
     _capture_viewport(page, f"builder-person-picker-open-{width}.png")
-    crew_option.click()
     page.keyboard.press("Escape")
     assert person_menu.is_hidden()
 
@@ -1531,7 +1541,14 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
         "form => [...form.querySelectorAll(':invalid')].map(field => `${field.name}:${field.value}`)"
     )
     assert invalid == []
-    page.get_by_role("button", name="Save & Preview").click()
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url.endswith(f"/manage/workdays/{values['trial_workday_id']}/draft")
+    ) as save_response:
+        page.get_by_role("button", name="Save & Preview").click()
+    response = save_response.value
+    if response.status >= 400:
+        pytest.fail(f"Trials draft save returned {response.status}: {response.text()}")
     page.wait_for_url(f"**/manage/workdays/{values['trial_workday_id']}/preview")
     assert page.get_by_text(updated_time, exact=True).first.is_visible()
     _capture_page(page, f"trials-preview-{width}.png")
@@ -1842,7 +1859,7 @@ def test_specific_personal_day_renders_from_cache_while_physically_offline(
     assert page.get_by_text("Offline — showing this Day as cached at").is_visible()
     assert page.get_by_text("Browser normal Day note").is_visible()
     assert page.get_by_text("Browser private roster detail").is_visible()
-    assert page.get_by_text("07:30").is_visible()
+    assert page.get_by_text("07:30", exact=True).is_visible()
     assert page.get_by_text("10", exact=True).is_visible()
     assert page.get_by_text("Unrelated Browser Crew").count() == 0
     assert page.get_by_text("Unrelated private browser detail").count() == 0

@@ -42,6 +42,10 @@ function timing(label, value) {
   return `<div><dt>${html(label)}</dt><dd>${html(shown)}</dd></div>`;
 }
 
+function clock(value) {
+  return /^\d{2}:\d{2}/.test(String(value ?? "")) ? String(value).slice(0, 5) : (value || "TBC");
+}
+
 async function offlineDayPage(workdayId) {
   const cache = await activeRosterCache();
   const response = cache ? await cache.match(`/api/day/${workdayId}`) : null;
@@ -58,7 +62,7 @@ async function offlineDayPage(workdayId) {
   ].join("") : "";
   const assignments = (day.assignments || []).map((row) => `
     <div class="crew-roster-row own" role="row"><span role="cell">${html(row.role)}</span>
-    <strong class="crew-name" role="cell"><span>${html(row.person)}</span><small>${html(row.start || "TBC")}–${html(row.end || "TBC")}</small>${row.note ? `<small>${html(row.note)}</small>` : ""}</strong><span role="cell">—</span></div>`).join("");
+    <strong class="crew-name" role="cell"><span>${html(row.person)}</span><small>${html(clock(row.start))}–${html(clock(row.end))}</small>${row.note ? `<small>${html(row.note)}</small>` : ""}</strong><span role="cell">—</span></div>`).join("");
   const cached = html(payload.cached_at ? new Date(payload.cached_at).toLocaleString() : "unknown");
   return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>${html(day.title || "Day")} · ${productName}</title><link rel="stylesheet" href="${assetUrl("/static/style.css")}"><link rel="stylesheet" href="${assetUrl("/static/redeputy.css")}"><link rel="stylesheet" href="${assetUrl("/static/branding.css")}"><link rel="stylesheet" href="${assetUrl("/static/track-palette.css")}"></head><body><main class="page-shell"><a class="back-link" href="/month">← Back to Month</a><section class="page-heading compact-heading date-heading"><div><p class="eyebrow">${html(String(day.category || "Workday").replaceAll("_", " "))} · Offline</p><h1>${html(day.date)}</h1><p class="muted">${html(day.track || day.title || "Saved workday")}</p></div></section><div class="offline-banner">Offline — showing this Day as cached at ${cached}</div><section class="detail-list"><article class="detail-card published-roster-card"><div class="detail-card-heading"><div><p class="eyebrow">Saved personal roster</p><h2>${html(day.title || day.track || "Saved workday")}</h2></div></div><section class="race-day-panel race-day-panel-plain"><div class="section-heading"><h3>${day.category === "RACE_DAY" ? "Race Day" : "Timing"}</h3></div><dl class="race-day-rows">${timing("Start", day.start)}${raceTiming}${timing("Finish", day.end)}</dl></section><section class="race-day-panel published-crew-panel"><div class="section-heading"><h3>Your assignment${(day.assignments || []).length === 1 ? "" : "s"}</h3></div>${assignments ? `<div class="crew-roster" role="table" aria-label="Saved personal roster"><div class="crew-roster-row crew-roster-head" role="row"><span role="columnheader">Position</span><span role="columnheader">Name</span><span role="columnheader">Vehicle</span></div>${assignments}</div>` : "<p>No personal assignment was saved.</p>"}</section>${day.note ? `<section class="description-block"><h3>Important notes</h3><p>${html(day.note)}</p></section>` : ""}</article></section><p>Reconnect for the authoritative live roster and any available actions.</p></main></body></html>`, {headers: {"Content-Type": "text/html; charset=utf-8"}});
 }
