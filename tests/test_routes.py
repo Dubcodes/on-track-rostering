@@ -837,11 +837,39 @@ def test_employee_personal_timing_and_making_own_way_are_stable_and_notify_manag
             select(NotificationEvent).where(NotificationEvent.workday_id == workday_id)
         )
         assert event.event_type == "MANAGER_ACTION_REQUIRED"
-        assert event.payload["person"] == "Amy"
+        assert event.payload["person"] == "Amy Crew"
         assert event.payload["making_own_way"] is True
         assert event.payload["date"] == "2026-11-02"
         assert event.payload["url"] == f"/day/{workday_id}"
         assert "making their own way" in event.payload["message"]
+        assignment = db.scalar(
+            select(Assignment).where(
+                Assignment.revision_id == workday.current_published_revision_id,
+                Assignment.person_id == person_id,
+            )
+        )
+        assignment.uses_standard_travel = False
+        db.commit()
+    day = client.get(f"/day/{workday_id}")
+    assert 'name="standard_travel_opt_out"' not in day.text
+    response = client.post(
+        f"/day/{workday_id}/personal",
+        data={
+            "csrf_token": csrf,
+            "note": "Private employee note",
+            "standard_travel_opt_out": "1",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with factory() as db:
+        entry = db.scalar(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id == workday_id,
+                PersonalWorkdayEntry.person_id == person_id,
+            )
+        )
+        assert entry.standard_travel_opt_out is False
         workday = db.get(Workday, workday_id)
         workday.current_published_revision_id = None
         db.commit()
@@ -1262,7 +1290,38 @@ def test_trials_builder_renders_switchable_timing_fields_and_clears_race_fields(
         workday = db.get(Workday, workday_id)
         draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
         assert draft.last_trial_time is None
+        assert draft.first_trial_time is None
         assert draft.first_race_time == time(12)
+        version = workday.lock_version
+    switched = manager.post(
+        edit_url + "/draft",
+        data={
+            "expected_version": str(version), "csrf_token": csrf,
+            "work_date": "2026-10-21", "track_id": str(track_id),
+            "day_type": "OFFICE_DAY:", "title": "Office timing",
+            "start_time": "07:30", "on_track_time": "08:30",
+            "first_trial_time": "09:45", "last_trial_time": "11:30",
+            "first_race_time": "12:00", "last_race_time": "16:00",
+            "race_count": "8", "end_time": "18:00",
+            "standard_travel_enabled": "1", "start_origin": "Office",
+            "finish_destination": "Office", "day_note": "",
+            "change_reason": "",
+        },
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        assert workday.category == "OFFICE_DAY"
+        assert draft.standard_travel_enabled is False
+        assert (draft.on_track_time, draft.first_trial_time, draft.last_trial_time) == (
+            None, None, None,
+        )
+        assert (draft.first_race_time, draft.last_race_time, draft.race_count) == (
+            None, None, None,
+        )
+        assert (draft.start_origin, draft.finish_destination) == ("Office", "Office")
 
 
 def test_position_aware_crew_picker_endpoint_keeps_duplicate_ids_distinct(routed_db) -> None:  # type: ignore[no-untyped-def]

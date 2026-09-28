@@ -34,7 +34,7 @@ from app.auth.security import (
 from app.catalog.models import BasePosition, Region, Track
 from app.catalog.presentation import track_token
 from app.core.database import get_db
-from app.core.enums import CapabilitySignal, Role
+from app.core.enums import CapabilitySignal, Role, WorkdayCategory
 from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_VALUES, normalize_theme
 from app.core.time import local_today, parse_time, utcnow, worked_minutes
@@ -254,6 +254,11 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
                 if personal_entry.standard_travel_opt_out:
                     row["transport"] = "Making own way"
     participation = person_day_participation(revision, own_rows) if own_rows else None
+    can_opt_out_standard_travel = bool(
+        workday.category in {WorkdayCategory.RACE_DAY.value, WorkdayCategory.TRIALS.value}
+        and revision.standard_travel_enabled
+        and any(row.status == "ASSIGNED" and row.uses_standard_travel for row in own_rows)
+    )
     if participation and personal_entry and (
         personal_entry.start_time is not None or personal_entry.end_time is not None
     ):
@@ -333,6 +338,7 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             next_workday_id=next_workday_id,
             personal_entry=personal_entry,
             can_personalize=bool(own_rows and request.state.actor.person_id),
+            can_opt_out_standard_travel=can_opt_out_standard_travel,
         ),
     )
 
@@ -346,19 +352,26 @@ async def save_personal_workday_entry(
     person_id = request.state.actor.person_id
     workday = db.get(Workday, workday_id)
     revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
-    assigned = (
-        db.scalar(
-            select(Assignment.id).where(
-                Assignment.revision_id == revision.id,
-                Assignment.person_id == person_id,
-                Assignment.status == "ASSIGNED",
+    assigned_rows = (
+        list(
+            db.scalars(
+                select(Assignment).where(
+                    Assignment.revision_id == revision.id,
+                    Assignment.person_id == person_id,
+                    Assignment.status == "ASSIGNED",
+                )
             )
         )
         if revision and person_id
-        else None
+        else []
     )
-    if not workday or not revision or not person_id or not assigned:
+    if not workday or not revision or not person_id or not assigned_rows:
         raise HTTPException(404, "Published assignment not found")
+    can_opt_out_standard_travel = bool(
+        workday.category in {WorkdayCategory.RACE_DAY.value, WorkdayCategory.TRIALS.value}
+        and revision.standard_travel_enabled
+        and any(row.uses_standard_travel for row in assigned_rows)
+    )
     entry = db.scalar(
         select(PersonalWorkdayEntry).where(
             PersonalWorkdayEntry.workday_id == workday.id,
@@ -374,7 +387,9 @@ async def save_personal_workday_entry(
     entry.end_time = parse_time(str(form.get("personal_finish_time", "")))
     entry.last_race_time_changed = bool(form.get("last_race_time_changed"))
     entry.finished_back_at_office = bool(form.get("finished_back_at_office"))
-    entry.standard_travel_opt_out = bool(form.get("standard_travel_opt_out"))
+    entry.standard_travel_opt_out = bool(
+        can_opt_out_standard_travel and form.get("standard_travel_opt_out")
+    )
     entry.updated_at = utcnow()
     if previous_opt_out != entry.standard_travel_opt_out:
         record_audit(
@@ -386,6 +401,8 @@ async def save_personal_workday_entry(
             region_id=workday.region_id,
             detail={"making_own_way": entry.standard_travel_opt_out},
         )
+        person = db.get(Person, person_id)
+        person_name = person.display_name if person else request.state.user.display_name
         record_event(
             db,
             event_key=f"travel-exception:{workday.id}:{person_id}:{entry.updated_at.isoformat()}",
@@ -395,15 +412,15 @@ async def save_personal_workday_entry(
             payload={
                 "kind": "TRAVEL_EXCEPTION",
                 "making_own_way": entry.standard_travel_opt_out,
-                "person": request.state.user.display_name,
+                "person": person_name,
                 "date": revision.work_date.isoformat(),
                 "context": revision.track_name_snapshot or revision.title,
                 "message": (
-                    f"{request.state.user.display_name} is now making their own way for "
+                    f"{person_name} is now making their own way for "
                     f"{revision.track_name_snapshot or revision.title} on "
                     f"{revision.work_date:%d %b %Y}."
                     if entry.standard_travel_opt_out
-                    else f"{request.state.user.display_name} has rejoined standard travel for "
+                    else f"{person_name} has rejoined standard travel for "
                     f"{revision.track_name_snapshot or revision.title} on "
                     f"{revision.work_date:%d %b %Y}."
                 ),

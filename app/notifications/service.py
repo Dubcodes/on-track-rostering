@@ -275,13 +275,21 @@ def _notification_payload(
             if revision and link
             else []
         )
-        if revision and assignments:
-            roles = ", ".join(sorted({row.display_name_snapshot for row in assignments}))
-            start = next(
-                (row.start_time for row in assignments if row.start_time), revision.start_time
+        active_assignments = (
+            active_published_assignments(db, workday, revision, assignments)
+            if workday and revision
+            else []
+        )
+        if revision and active_assignments:
+            participation = person_day_participation(revision, active_assignments)
+            start_text = (
+                participation.start.strftime("%I:%M %p").lstrip("0")
+                if participation.start
+                else "time TBC"
             )
-            start_text = start.strftime("%I:%M %p").lstrip("0") if start else "time TBC"
-            body = f"{revision.track_name_snapshot} · {roles} · {start_text}"
+            body = (
+                f"{revision.track_name_snapshot} · {participation.role_summary} · {start_text}"
+            )
         elif revision and event.assignment_slot_key:
             open_row = db.scalar(
                 select(Assignment).where(
@@ -780,24 +788,43 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
                 )
                 .order_by(WorkdayRevision.work_date, Assignment.display_name_snapshot)
             ).all()
-            rows = [
-                row
-                for row in rows
-                if active_published_assignments(db, row[0], row[1], [row[2]])
-            ]
-            if rows:
+            grouped_rows: dict[
+                tuple[uuid.UUID, uuid.UUID],
+                tuple[Workday, WorkdayRevision, list[Assignment]],
+            ] = {}
+            for workday, revision, assignment in rows:
+                group = grouped_rows.setdefault(
+                    (workday.id, revision.id), (workday, revision, [])
+                )
+                group[2].append(assignment)
+            weekly_rows = []
+            for workday, revision, assignments in grouped_rows.values():
+                active_assignments = active_published_assignments(
+                    db, workday, revision, assignments
+                )
+                if active_assignments:
+                    weekly_rows.append(
+                        (
+                            revision,
+                            person_day_participation(revision, active_assignments),
+                        )
+                    )
+            if weekly_rows:
                 items = []
-                for _workday, revision, assignment in rows[:4]:
-                    starts = assignment.start_time or revision.start_time
-                    start_label = starts.strftime("%H:%M") if starts else "time TBC"
+                for revision, participation in weekly_rows[:4]:
+                    start_label = (
+                        participation.start.strftime("%H:%M")
+                        if participation.start
+                        else "time TBC"
+                    )
                     items.append(
                         f"{revision.work_date:%a} {revision.work_date.day} "
                         f"{revision.work_date:%b} · {revision.track_name_snapshot} · "
-                        f"{assignment.display_name_snapshot} · {start_label}"
+                        f"{participation.role_summary} · {start_label}"
                     )
                 message = "; ".join(items)
-                if len(rows) > len(items):
-                    message += f"; plus {len(rows) - len(items)} more"
+                if len(weekly_rows) > len(items):
+                    message += f"; plus {len(weekly_rows) - len(items)} more"
                 if _insert_digest_event(
                     db,
                     event_key=f"digest:weekly:{user_id}:{week_start.isoformat()}",

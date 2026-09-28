@@ -31,7 +31,6 @@ from app.rostering.models import (
     Assignment,
     OpenPositionApplication,
     Operation,
-    PersonalWorkdayEntry,
     ProgrammeItem,
     TravelLeg,
     Workday,
@@ -423,16 +422,8 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
         )
     )
     seen_people: set[uuid.UUID] = set()
-    opted_out_people = set(
-        db.scalars(
-            select(PersonalWorkdayEntry.person_id).where(
-                PersonalWorkdayEntry.workday_id == workday.id,
-                PersonalWorkdayEntry.standard_travel_opt_out.is_(True),
-            )
-        )
-    )
     for row in race_rows:
-        if row.person_id in seen_people or row.person_id in opted_out_people:
+        if row.person_id in seen_people:
             continue
         seen_people.add(row.person_id)  # type: ignore[arg-type]
         db.add(

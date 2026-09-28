@@ -22,6 +22,7 @@ from app.notifications.models import (
     PushSubscription,
 )
 from app.notifications.service import (
+    _notification_payload,
     audience_user_ids,
     generate_periodic_digests,
     generate_reminders,
@@ -468,7 +469,10 @@ def test_periodic_digests_use_published_authorised_state_and_are_idempotent(db) 
         state="PUBLISHED",
         work_date=date(2026, 10, 8),
         track_name_snapshot="Harbour Park",
-        start_time=time(8),
+        start_time=time(8, 30),
+        on_track_time=time(9),
+        hotel_to_track_minutes=30,
+        standard_travel_enabled=True,
         created_by_user_id=user.id,
     )
     stale = WorkdayRevision(
@@ -490,7 +494,8 @@ def test_periodic_digests_use_published_authorised_state_and_are_idempotent(db) 
                 person_id=person.id,
                 person_name_snapshot=person.display_name,
                 status="ASSIGNED",
-                start_time=time(7, 30),
+                uses_standard_travel=True,
+                hotel_to_track_minutes_override=60,
                 note="private detail",
             ),
             Assignment(
@@ -532,7 +537,18 @@ def test_periodic_digests_use_published_authorised_state_and_are_idempotent(db) 
     assert "Camera 2" in open_message
     assert "Audio" not in open_message and "Stale opening" not in open_message
     assert "Camera 1" in weekly_message and "Harbour Park" in weekly_message
+    assert "08:00" in weekly_message and "08:30" not in weekly_message
     assert "private detail" not in weekly_message and "Private draft" not in weekly_message
+    body_event = NotificationEvent(
+        event_key="effective-start-body",
+        event_type="NIGHT_BEFORE",
+        region_id=region.id,
+        workday_id=workday.id,
+    )
+    db.add(body_event)
+    db.commit()
+    body = _notification_payload(db, body_event, user.id)["body"]
+    assert "8:00 AM" in body and "8:30 AM" not in body
 
 
 def _reminder_roster(db, suffix: str, work_date: date):  # type: ignore[no-untyped-def]
@@ -651,7 +667,8 @@ def test_generated_travel_opt_out_invalidates_pending_reminder(db) -> None:  # t
     db.flush()
     child_revision = WorkdayRevision(
         workday_id=child.id, revision_number=1, state="PUBLISHED",
-        work_date=date(2026, 10, 19), start_time=time(12), end_time=time(17),
+        work_date=date(2026, 10, 19), track_name_snapshot="Generated Travel Day",
+        start_time=time(12), end_time=time(17),
         created_by_user_id=user.id,
     )
     db.add(child_revision)
@@ -669,10 +686,20 @@ def test_generated_travel_opt_out_invalidates_pending_reminder(db) -> None:  # t
     db.add(PersonalWorkdayEntry(
         workday_id=parent.id, person_id=person.id, standard_travel_opt_out=True,
     ))
+    db.add_all([
+        RoleGrant(user_id=user.id, role=Role.EMPLOYEE.value, region_id=parent.region_id),
+        NotificationPreference(user_id=user.id, weekly_digest=True),
+    ])
     db.commit()
     sent: list[str] = []
     process_event(db, event, sender=lambda *_: sent.append("sent"), now=event.available_at)
     assert event.status == "PROCESSED" and sent == []
+    assert generate_periodic_digests(
+        db, now=datetime(2026, 10, 19, tzinfo=UTC)
+    ) == 1
+    digest = db.get(NotificationEvent, f"digest:weekly:{user.id}:2026-10-19")
+    assert digest is not None
+    assert "Generated Travel Day" not in str(digest.payload["message"])
 
 
 def test_cancelled_workday_invalidates_pending_reminder(db) -> None:  # type: ignore[no-untyped-def]

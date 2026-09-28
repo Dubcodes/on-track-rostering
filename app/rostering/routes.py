@@ -160,7 +160,7 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         end_time=parse_time(str(form.get("end_time", ""))),
         end_time_is_override=str(form.get("end_time_is_override", "")) == "1",
         on_track_time=parse_time(str(form.get("on_track_time", ""))) if racing else None,
-        first_trial_time=parse_time(str(form.get("first_trial_time", ""))) if racing else None,
+        first_trial_time=parse_time(str(form.get("first_trial_time", ""))) if trials else None,
         last_trial_time=parse_time(str(form.get("last_trial_time", ""))) if trials else None,
         first_race_time=parse_time(str(form.get("first_race_time", ""))) if race_day else None,
         last_race_time=parse_time(str(form.get("last_race_time", ""))) if race_day else None,
@@ -171,7 +171,9 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         finish_destination=str(form.get("finish_destination", "")),
         category=category,
         racing_discipline=discipline,
-        standard_travel_enabled=str(form.get("standard_travel_enabled", "")) == "1",
+        standard_travel_enabled=(
+            racing and str(form.get("standard_travel_enabled", "")) == "1"
+        ),
         travel_departure_time=parse_time(str(form.get("travel_departure_time", ""))),
         travel_to_hotel_minutes=_optional_int(form.get("travel_to_hotel_minutes")),
         default_hotel=str(form.get("default_hotel", "")),

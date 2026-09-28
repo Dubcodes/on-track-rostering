@@ -370,6 +370,14 @@
     form.querySelectorAll("[data-racing-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
     form.querySelectorAll("[data-race-time]").forEach((field) => { field.hidden = category !== "RACE_DAY"; });
     form.querySelectorAll("[data-trial-time]").forEach((field) => { field.hidden = category !== "TRIALS"; });
+    const standardTravelAvailable = ["RACE_DAY", "TRIALS"].includes(category);
+    const standardTravel = form.querySelector("[data-standard-plan]");
+    form.querySelector("[data-standard-plan-control]")?.toggleAttribute("hidden", !standardTravelAvailable);
+    form.querySelector("[data-standard-plan-unavailable]")?.toggleAttribute("hidden", standardTravelAvailable);
+    if (standardTravel) {
+      standardTravel.disabled = !standardTravelAvailable;
+      if (!standardTravelAvailable) standardTravel.checked = false;
+    }
     form.querySelector("[data-position-preset]").value = category === "TRIALS" ? "TRIALS" : (category === "RACE_DAY" ? discipline : "BLANK");
   };
   dayType?.addEventListener("change", syncDayType);

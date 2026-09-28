@@ -474,6 +474,40 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     assert db.scalar(
         select(Workday.id).where(Workday.generated_from_workday_id == workday.id)
     ) == travel_day.id
+    opt_out = PersonalWorkdayEntry(
+        workday_id=workday.id,
+        person_id=person.id,
+        standard_travel_opt_out=True,
+    )
+    db.add(opt_out)
+    db.commit()
+    parent_draft = ensure_draft(db, workday, manager.id)
+    parent_rows = list(
+        db.scalars(select(Assignment).where(Assignment.revision_id == parent_draft.id))
+    )
+    db.refresh(workday)
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=parent_draft.id,
+        expected_version=workday.lock_version,
+        details=details(True),
+        assignments=inputs(),
+    )
+    db.refresh(workday)
+    version = workday.lock_version
+    db.commit()
+    publish(db, workday.id, parent_draft.id, manager.id, version)
+    db.refresh(travel_day)
+    travel_revision = db.get(WorkdayRevision, travel_day.current_published_revision_id)
+    travel_rows = list(
+        db.scalars(select(Assignment).where(Assignment.revision_id == travel_revision.id))
+    )
+    assert [row.person_id for row in travel_rows] == [person.id]
+    assert active_published_assignments(db, travel_day, travel_revision, travel_rows) == []
+    opt_out.standard_travel_opt_out = False
+    db.commit()
+    assert active_published_assignments(db, travel_day, travel_revision, travel_rows) == travel_rows
 
 
 def _user(db, email: str) -> User:  # type: ignore[no-untyped-def]
