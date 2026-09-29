@@ -1576,7 +1576,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         _capture_page(page, f"new-position-picker-{width}.png")
         page.keyboard.press("Escape")
     page.keyboard.press("Escape")
-    rows.last.locator("[data-toggle-advanced]").click()
+    rows.last.locator("[data-assignment-advanced]").evaluate("element => element.open = true")
     rows.last.locator("[data-remove-row]").click()
     assert rows.count() == before_add
     applications = page.locator(".builder-application-panel")
