@@ -214,6 +214,31 @@
       empty.hidden = false;
     }
   };
+  const copyPersonTravel = (source, target) => {
+    const standard = source.querySelector("[data-standard-travel-check]").checked;
+    target.querySelector("[data-standard-travel-check]").checked = standard;
+    target.querySelector("[data-standard-travel-value]").value = standard ? "1" : "0";
+    ["transport_mode", "vehicle_id"].forEach((name) => {
+      target.querySelector(`[name="${name}"]`).value = source.querySelector(`[name="${name}"]`).value;
+    });
+    ["custom_transport_text", "accommodation_name", "hotel_to_track_minutes_override", "finish_destination_override", "return_travel_minutes_override"].forEach((name) => {
+      target.querySelector(`[name="${name}"]`).value = source.querySelector(`[name="${name}"]`).value;
+    });
+    const sourceVehicle = source.querySelector('[data-picker-kind="vehicle"] [data-picker-input]');
+    const targetVehicle = target.querySelector('[data-picker-kind="vehicle"] [data-picker-input]');
+    const selectedLabel = sourceVehicle.dataset.selectedLabel ?? sourceVehicle.value;
+    targetVehicle.value = selectedLabel;
+    targetVehicle.dataset.selectedLabel = selectedLabel;
+  };
+  const projectPersonTravel = (row) => {
+    const personId = row.querySelector("[data-person-value]").value;
+    if (!personId) return;
+    list.querySelectorAll("[data-assignment-row]").forEach((other) => {
+      if (other !== row && other.querySelector("[data-person-value]").value === personId) {
+        copyPersonTravel(row, other);
+      }
+    });
+  };
   const applyPersonChoice = (picker, option) => {
     const row = picker.closest("[data-assignment-row]");
     const input = picker.querySelector("[data-picker-input]");
@@ -230,6 +255,7 @@
       row.querySelector("[data-vehicle-value]").value = mode === "VEHICLE" ? option.dataset.value || "" : "";
       row.querySelector("[data-transport-value]").value = mode;
       if (mode !== "CUSTOM") row.querySelector('input[name="custom_transport_text"]').value = "";
+      projectPersonTravel(row);
     }
     closePicker(picker);
     refreshRow(row);
@@ -248,12 +274,7 @@
     if (action === "move") resetPersonRow(existingRow);
     if (action === "keep") {
       const targetRow = picker.closest("[data-assignment-row]");
-      const standard = existingRow.querySelector("[data-standard-travel-check]").checked;
-      targetRow.querySelector("[data-standard-travel-check]").checked = standard;
-      targetRow.querySelector("[data-standard-travel-value]").value = standard ? "1" : "0";
-      ["accommodation_name", "hotel_to_track_minutes_override"].forEach((name) => {
-        targetRow.querySelector(`[name="${name}"]`).value = existingRow.querySelector(`[name="${name}"]`).value;
-      });
+      copyPersonTravel(existingRow, targetRow);
     }
     if (action !== "cancel") applyPersonChoice(picker, option);
     pendingConflict = null;
@@ -297,6 +318,8 @@
       } else if (picker.dataset.pickerKind === "vehicle") {
         row.querySelector("[data-vehicle-value]").value = "";
         row.querySelector("[data-transport-value]").value = "UNASSIGNED";
+        input.dataset.selectedLabel = "";
+        projectPersonTravel(row);
       }
       input.dataset.selectedLabel = "";
       refreshRow(row);
@@ -359,25 +382,14 @@
     row.querySelector("[data-remove-row]")?.addEventListener("click", () => row.remove());
     const privateCheck = row.querySelector("[data-private-check]");
     privateCheck?.addEventListener("change", () => { row.querySelector("[data-private-value]").value = privateCheck.checked ? "1" : "0"; });
-    const projectPersonTravel = () => {
-      const personId = row.querySelector("[data-person-value]").value;
-      if (!personId) return;
-      list.querySelectorAll("[data-assignment-row]").forEach((other) => {
-        if (other === row || other.querySelector("[data-person-value]").value !== personId) return;
-        const standard = row.querySelector("[data-standard-travel-check]").checked;
-        other.querySelector("[data-standard-travel-check]").checked = standard;
-        other.querySelector("[data-standard-travel-value]").value = standard ? "1" : "0";
-        other.querySelector('input[name="accommodation_name"]').value = row.querySelector('input[name="accommodation_name"]').value;
-        other.querySelector('input[name="hotel_to_track_minutes_override"]').value = row.querySelector('input[name="hotel_to_track_minutes_override"]').value;
-      });
-    };
     const standardTravel = row.querySelector("[data-standard-travel-check]");
     standardTravel?.addEventListener("change", () => {
       row.querySelector("[data-standard-travel-value]").value = standardTravel.checked ? "1" : "0";
-      projectPersonTravel();
+      projectPersonTravel(row);
     });
-    row.querySelector('input[name="accommodation_name"]')?.addEventListener("change", projectPersonTravel);
-    row.querySelector('input[name="hotel_to_track_minutes_override"]')?.addEventListener("change", projectPersonTravel);
+    ["custom_transport_text", "accommodation_name", "hotel_to_track_minutes_override", "finish_destination_override", "return_travel_minutes_override"].forEach((name) => {
+      row.querySelector(`input[name="${name}"]`)?.addEventListener("change", () => projectPersonTravel(row));
+    });
     refreshRow(row);
   };
   list.querySelectorAll("[data-assignment-row]").forEach(wireRow);

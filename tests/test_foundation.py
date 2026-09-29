@@ -305,6 +305,7 @@ def test_private_assignment_note_not_leaked_to_viewer(db) -> None:  # type: igno
 def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-untyped-def]
     region, track, position, person, manager, employee, _viewer = seed_vertical(db)
     manager_id = manager.id
+    position.name = "Turn"
     set_signal(db, person.id, position.id, CapabilitySignal.MANAGER_ALLOW.value, manager.id)
     workday = create_workday(
         db,
@@ -342,28 +343,18 @@ def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-
     )
     assert duplicate.id == application.id
     draft = ensure_draft(db, workday, manager.id)
+    back = BasePosition(name="Back")
+    db.add(back)
+    db.flush()
     already_assigned = Assignment(
         revision_id=draft.id,
-        base_position_id=position.id,
-        display_name_snapshot="Existing assignment",
+        base_position_id=back.id,
+        display_name_snapshot="Back",
         person_id=person.id,
         person_name_snapshot=person.display_name,
         status=AssignmentStatus.ASSIGNED.value,
     )
     db.add(already_assigned)
-    db.commit()
-    version_before_rejection = workday.lock_version
-    with pytest.raises(ValueError, match="only one position"):
-        select_application(
-            db, workday=workday, draft=draft, application=application,
-            expected_version=version_before_rejection,
-        )
-    db.rollback()
-    db.refresh(workday)
-    db.refresh(application)
-    assert workday.lock_version == version_before_rejection
-    assert application.status == OpenApplicationStatus.APPLIED.value
-    db.delete(already_assigned)
     db.commit()
     select_application(
         db,
@@ -372,6 +363,16 @@ def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-
         application=application,
         expected_version=workday.lock_version,
     )
+    selected_positions = list(
+        db.scalars(
+            select(Assignment).where(
+                Assignment.revision_id == draft.id,
+                Assignment.person_id == person.id,
+                Assignment.status == AssignmentStatus.ASSIGNED.value,
+            )
+        )
+    )
+    assert {row.display_name_snapshot for row in selected_positions} == {"Back", "Turn 2"}
     db.commit()
     db.refresh(workday)
     db.refresh(draft)

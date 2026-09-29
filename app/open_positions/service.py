@@ -138,18 +138,6 @@ def select_application(
     person = db.get(Person, application.person_id)
     if not published_slot or not draft_slot or not person or person.lifecycle != "ACTIVE":
         raise ValueError("The position or applicant is no longer available.")
-    existing_assignment = db.scalar(
-        select(Assignment.id)
-        .where(
-            Assignment.revision_id == draft.id,
-            Assignment.person_id == person.id,
-            Assignment.status == AssignmentStatus.ASSIGNED.value,
-            Assignment.id != draft_slot.id,
-        )
-        .limit(1)
-    )
-    if existing_assignment:
-        raise ValueError(f"{person.display_name} can hold only one position on this Workday.")
     draft_slot.person_id = person.id
     draft_slot.person_name_snapshot = person.display_name
     draft_slot.status = AssignmentStatus.ASSIGNED.value

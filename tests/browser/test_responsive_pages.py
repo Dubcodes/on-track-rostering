@@ -1455,9 +1455,30 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         original_person_row = page.locator(
             f'[data-assignment-row]:has([data-person-value][value="{values["browser_person_id"]}"])'
         ).first
+        original_assignment_id = original_person_row.locator('[name="assignment_id"]').input_value()
+        original_person_row = page.locator(
+            f'[data-assignment-row]:has([name="assignment_id"][value="{original_assignment_id}"])'
+        )
         original_position = original_person_row.locator(
             '[data-picker-kind="position"] [data-picker-input]'
         ).input_value()
+        if width == 1280:
+            original_person_row.locator("[data-assignment-advanced]").evaluate("element => element.open = true")
+            original_person_row.locator("[data-standard-travel-check]").uncheck()
+            original_person_row.locator("[data-standard-travel-check]").dispatch_event("change")
+            original_vehicle_picker = original_person_row.locator('[data-picker-kind="vehicle"]')
+            original_vehicle_picker.locator("[data-picker-input]").click()
+            original_vehicle_picker.locator(
+                '[data-picker-option][data-transport-mode="SELF_TRAVEL"]'
+            ).click()
+            for name, value in {
+                "accommodation_name": "Shared hotel",
+                "hotel_to_track_minutes_override": "25",
+                "finish_destination_override": "Shared return",
+                "return_travel_minutes_override": "90",
+            }.items():
+                original_person_row.locator(f'input[name="{name}"]').fill(value)
+                original_person_row.locator(f'input[name="{name}"]').dispatch_event("change")
         new_person_input.click()
         new_person_input.fill("Browser Crew Member")
         new_person_picker.locator(
@@ -1482,6 +1503,29 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
                 "nodes => nodes.map(node => node.value)"
             )
             assert selected_values.count(values["browser_person_id"]) == 2
+            assert not new_row.locator("[data-standard-travel-check]").is_checked()
+            assert new_row.locator("[data-transport-value]").input_value() == "SELF_TRAVEL"
+            assert new_row.locator('input[name="accommodation_name"]').input_value() == "Shared hotel"
+            assert new_row.locator('input[name="hotel_to_track_minutes_override"]').input_value() == "25"
+            assert new_row.locator('input[name="finish_destination_override"]').input_value() == "Shared return"
+            assert new_row.locator('input[name="return_travel_minutes_override"]').input_value() == "90"
+            vehicle_picker = new_row.locator('[data-picker-kind="vehicle"]')
+            vehicle_input = vehicle_picker.locator("[data-picker-input]")
+            vehicle_input.click()
+            vehicle_option = vehicle_picker.locator('[data-picker-option][data-transport-mode="VEHICLE"]').first
+            vehicle_option.click()
+            assert original_person_row.locator("[data-vehicle-value]").input_value() == new_row.locator(
+                "[data-vehicle-value]"
+            ).input_value()
+            new_row.locator("[data-toggle-advanced]").click()
+            new_row.locator('input[name="finish_destination_override"]').fill("Alternative return")
+            new_row.locator('input[name="finish_destination_override"]').dispatch_event("change")
+            new_row.locator('input[name="return_travel_minutes_override"]').fill("75")
+            new_row.locator('input[name="return_travel_minutes_override"]').dispatch_event("change")
+            assert original_person_row.locator('input[name="finish_destination_override"]').input_value() == (
+                "Alternative return"
+            )
+            assert original_person_row.locator('input[name="return_travel_minutes_override"]').input_value() == "75"
             new_person_input.click()
             new_person_input.fill("Unassigned")
             new_person_picker.get_by_text("Unassigned", exact=True).click()
@@ -1489,6 +1533,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             conflict_dialog.get_by_role("button", name="Move to this position").click()
             assert original_person_row.locator("[data-person-value]").input_value() == ""
             assert original_person_row.locator("[data-assignment-state]").input_value() == "TBC"
+            assert original_person_row.locator(
+                '[data-picker-kind="position"] [data-picker-input]'
+            ).input_value() == original_position
             assert new_row.locator("[data-person-value]").input_value() == values[
                 "browser_person_id"
             ]
@@ -1640,7 +1687,10 @@ def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type:
     page = context.new_page()
     _login(page, base_url, values["manager"])
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
-    assert page.get_by_text("Travel & hotel", exact=False).is_visible()
+    travel_panel = page.locator(".builder-travel-panel")
+    assert travel_panel.locator("summary").is_visible()
+    assert not travel_panel.get_attribute("open")
+    travel_panel.locator("summary").click()
     assert page.locator('input[name="start_origin"]').is_visible()
     assert page.locator('[data-picker-kind="vehicle"]').first.count() == 1
     assert page.locator("[data-standard-travel-check]").first.count() == 1
@@ -1872,7 +1922,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert page.get_by_text("Active Regions", exact=True).is_visible()
     assert page.get_by_role("heading", name="Vehicles", exact=True).is_visible()
-    assert page.get_by_text("Add vehicle", exact=True).is_visible()
+    assert page.locator('#vehicles details > summary').filter(has_text="Add vehicle").is_visible()
     _assert_no_horizontal_overflow(page)
     page.goto(base_url + "/manage/audit")
     assert page.get_by_role("heading", name="Audit", exact=True).is_visible()
@@ -1956,6 +2006,7 @@ def test_unpublished_builder_switches_timing_fields_without_reload(browser_site,
     assert not page.locator('input[name="first_race_time"]').is_visible()
     assert not page.locator('[data-standard-plan-control]').is_visible()
     assert page.locator('[data-standard-plan]').is_disabled()
+    page.locator(".builder-travel-panel > summary").click()
     assert page.locator('[data-standard-plan-unavailable]').is_visible()
     day_type.select_option("RACE_DAY:THOROUGHBRED")
     assert page.locator('input[name="on_track_time"]').is_visible()

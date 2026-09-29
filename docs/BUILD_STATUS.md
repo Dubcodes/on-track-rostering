@@ -10,7 +10,7 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 
 - Authoritative Workdays with private optimistic-versioned drafts, immutable publications, Preview → Publish, stable assignment slots, redacted human history, Open applications, direct immutable decline, cancellation lifecycle, and safe deletion of never-published drafts.
 - Unified Builder with Day identity, native time controls, Notes before collapsed Travel, live Position/Person/Vehicle search, standard Travel/hotel planning, assignment details, and HTML validation recovery.
-- A Person may hold multiple Positions on one Workday. The Builder presents Move, Keep both, or Cancel immediately; ordinary same-Workday duplication is no longer a server error.
+- A Person may hold multiple Positions on one Workday, including through Open Position selection. The Builder presents Move, Keep both, or Cancel immediately; Position timing/notes remain independent while one authoritative person-level travel plan is shared across the Person's rows.
 - Person/day Hours, reminder timing, personal timing, and generated Travel aggregate multiple Position rows once using earliest effective start and latest effective finish.
 - Persistent Base Position display order with deterministic legacy backfill/fallback and configured operational picker order.
 - Region-owned reusable Vehicle management for Admin and authorized Managers, including rental-style records, lifecycle, audit, and immutable assignment name snapshots.

@@ -1183,6 +1183,37 @@ def test_combined_builder_save_updates_rows_once_then_previews(routed_db) -> Non
             person_id,
             True,
         )
+        current_version = workday.lock_version
+        assignment_id = row.id
+    inconsistent = manager.post(
+        f"/manage/workdays/{workday_id}/draft",
+        data={
+            **data,
+            "expected_version": str(current_version),
+            "assignment_id": [str(assignment_id), ""],
+            "base_position_id": [str(position_id), str(position_id)],
+            "slot_index": ["2", "3"],
+            "person_id": [str(person_id), str(person_id)],
+            "status": ["ASSIGNED", "ASSIGNED"],
+            "note": ["Private row note", "Second position"],
+            "note_private": ["1", "1"],
+            "assignment_start_time": ["08:00", "09:00"],
+            "assignment_end_time": ["17:30", "16:30"],
+            "transport_mode": ["UNASSIGNED", "UNASSIGNED"],
+            "vehicle_id": ["", ""],
+            "custom_transport_text": ["", ""],
+            "accommodation_name": ["", ""],
+            "uses_standard_travel": ["1", "1"],
+            "hotel_to_track_minutes_override": ["", ""],
+            "finish_destination_override": ["Home", "Elsewhere"],
+            "return_travel_minutes_override": ["60", "60"],
+        },
+        follow_redirects=False,
+    )
+    assert inconsistent.status_code == 400
+    assert "Roster not saved" in inconsistent.text
+    assert "Use one consistent travel plan for each person" in inconsistent.text
+    assert '"detail"' not in inconsistent.text
     stale = manager.post(
         f"/manage/workdays/{workday_id}/draft", data=data, follow_redirects=False
     )

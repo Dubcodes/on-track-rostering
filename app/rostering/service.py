@@ -477,12 +477,14 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
         db.delete(row)
     race_rows = list(
         db.scalars(
-            select(Assignment).where(
+            select(Assignment)
+            .where(
                 Assignment.revision_id == draft.id,
                 Assignment.status == AssignmentStatus.ASSIGNED.value,
                 Assignment.person_id.is_not(None),
                 Assignment.uses_standard_travel.is_(True),
             )
+            .order_by(Assignment.person_id, Assignment.id)
         )
     )
     seen_people: set[uuid.UUID] = set()
@@ -505,6 +507,9 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
                 custom_transport_text=row.custom_transport_text,
                 accommodation_name=row.accommodation_name,
                 uses_standard_travel=True,
+                hotel_to_track_minutes_override=row.hotel_to_track_minutes_override,
+                finish_destination_override=row.finish_destination_override,
+                return_travel_minutes_override=row.return_travel_minutes_override,
             )
         )
 
@@ -684,21 +689,26 @@ def save_draft(
             and not item.accommodation_name.strip()
         )
     ]
-    hotels_by_person: dict[uuid.UUID, str] = {}
-    travel_plan_by_person: dict[uuid.UUID, tuple[bool, int | None]] = {}
+    travel_plan_by_person: dict[
+        uuid.UUID,
+        tuple[bool, str, uuid.UUID | None, str, str, int | None, str, int | None],
+    ] = {}
     for item in assignments:
-        hotel = item.accommodation_name.strip()
         if not item.person_id:
             continue
-        if hotel:
-            existing_hotel = hotels_by_person.get(item.person_id)
-            if existing_hotel and existing_hotel.casefold() != hotel.casefold():
-                raise ValueError("Use one consistent hotel for each person on this workday.")
-            hotels_by_person[item.person_id] = hotel
-        plan = (item.uses_standard_travel, item.hotel_to_track_minutes_override)
+        plan = (
+            item.uses_standard_travel,
+            item.transport_mode,
+            item.vehicle_id,
+            item.custom_transport_text.strip(),
+            item.accommodation_name.strip(),
+            item.hotel_to_track_minutes_override,
+            item.finish_destination_override.strip(),
+            item.return_travel_minutes_override,
+        )
         existing_plan = travel_plan_by_person.get(item.person_id)
         if existing_plan is not None and existing_plan != plan:
-            raise ValueError("Use one consistent standard-travel plan for each person.")
+            raise ValueError("Use one consistent travel plan for each person on this workday.")
         travel_plan_by_person[item.person_id] = plan
 
     active_positions = {
@@ -831,11 +841,7 @@ def save_draft(
             active_vehicles[item.vehicle_id].name if item.vehicle_id else None
         )
         assignment.custom_transport_text = item.custom_transport_text.strip()
-        assignment.accommodation_name = (
-            hotels_by_person.get(item.person_id)
-            if item.person_id
-            else item.accommodation_name.strip()
-        ) or None
+        assignment.accommodation_name = item.accommodation_name.strip() or None
         assignment.uses_standard_travel = item.uses_standard_travel
         assignment.hotel_to_track_minutes_override = item.hotel_to_track_minutes_override
         assignment.finish_destination_override = item.finish_destination_override.strip() or None

@@ -232,8 +232,9 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     manager = _user(db, "travel-manager@example.test")
     person = Person(display_name="Multi-role Crew", home_region_id=region.id)
     local_person = Person(display_name="Local Crew", home_region_id=region.id)
+    vehicle = Vehicle(name="Northern Van", home_region_id=region.id, lifecycle="ACTIVE")
     eng, ccu = BasePosition(name="ENG"), BasePosition(name="CCU1")
-    db.add_all([track, person, local_person, eng, ccu])
+    db.add_all([track, person, local_person, vehicle, eng, ccu])
     db.commit()
     workday = create_workday(
         db,
@@ -337,9 +338,13 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
                     slot_index=None,
                     person_id=person.id,
                     status="ASSIGNED",
-                        uses_standard_travel=True,
-                        accommodation_name="Alternative Lodge",
-                        hotel_to_track_minutes_override=15,
+                    transport_mode=TRANSPORT_VEHICLE,
+                    vehicle_id=vehicle.id,
+                    uses_standard_travel=True,
+                    accommodation_name="Alternative Lodge",
+                    hotel_to_track_minutes_override=15,
+                    finish_destination_override="Alternative return",
+                    return_travel_minutes_override=75,
                 )
                 for position in (eng, ccu)
             ],
@@ -349,10 +354,15 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     assert {row.display_name_snapshot for row in multi_rows} == {"ENG", "CCU1"}
     participation = person_day_participation(draft, multi_rows)
     assert participation.role_summary == "CCU1 + ENG"
-    assert participation.minutes == 825
+    assert participation.minutes == 600
     travel_rows = list(db.scalars(select(Assignment).where(
         Assignment.revision_id == travel_revision.id, Assignment.person_id == person.id)))
     assert len(travel_rows) == 1
+    assert travel_rows[0].transport_mode == TRANSPORT_VEHICLE
+    assert travel_rows[0].vehicle_id == vehicle.id
+    assert travel_rows[0].vehicle_name_snapshot == vehicle.name
+    assert travel_rows[0].finish_destination_override == "Alternative return"
+    assert travel_rows[0].return_travel_minutes_override == 75
     db.commit()
     conflicting_travel = Workday(
         region_id=region.id,

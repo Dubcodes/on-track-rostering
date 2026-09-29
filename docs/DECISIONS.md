@@ -67,7 +67,7 @@ Fortnight views calculate from the configured anchor and current published assig
 
 ## Flexible multi-Position participation
 
-A Person may deliberately hold multiple Positions on one Workday. The Builder warns at selection time instead of prohibiting the save and requires an explicit Move, Keep both, or Cancel decision. Stable assignment slots remain independent roster facts, while Person/day participation is aggregated once from the earliest effective start to latest effective finish. Hours, reminders, personal timing, and generated Travel therefore never sum duplicate Position rows as separate worked days.
+A Person may deliberately hold multiple Positions on one Workday, whether assigned directly or selected for an Open Position. The Builder warns at selection time instead of prohibiting the save and requires an explicit Move, Keep both, or Cancel decision. Stable assignment slots retain independent timing and notes, while all rows for one Person share a single authoritative travel plan. Person/day participation is aggregated once from the earliest effective start to latest effective finish. Hours, reminders, personal timing, and generated Travel therefore never sum duplicate Position rows as separate worked days.
 
 ## Catalogue ordering and regional operational records
 
