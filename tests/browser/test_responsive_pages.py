@@ -668,13 +668,17 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
     _login(page, base_url, values["admin"])
 
     page.goto(base_url + "/admin")
-    assert page.get_by_text("Active Regions", exact=True).count() == 1
-    assert page.get_by_text("Active Tracks", exact=True).count() == 1
-    assert page.get_by_text("Remove unused", exact=True).count() >= 2
+    assert page.get_by_role("heading", name="System branding").count() == 1
+    assert page.get_by_role("heading", name="Operational settings").count() == 1
+    assert page.get_by_role("heading", name="Backup & recovery").count() == 1
+    assert page.get_by_text("Active Regions", exact=True).count() == 0
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"admin-{width}.png")
 
     page.goto(base_url + "/manage/catalog")
+    assert page.get_by_text("Active Regions", exact=True).count() == 1
+    assert page.get_by_text("Active Tracks", exact=True).count() == 1
+    assert page.get_by_text("Remove unused", exact=True).count() >= 2
     assert page.locator("details.archived-records > summary").filter(
         has_text="Archived Regions"
     ).count() == 1
@@ -1405,7 +1409,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     person_picker = rows.first.locator('[data-picker-kind="person"]')
     assert person_picker.get_by_text("Open position", exact=True).is_visible()
     assert person_picker.get_by_text("Unassigned", exact=True).is_visible()
-    assert person_picker.locator(".search-picker-group > span").first.inner_text().endswith(" crew")
+    assert person_picker.locator(
+        ".search-picker-group > span"
+    ).first.inner_text().casefold().endswith(" crew")
     assert person_picker.get_by_text("Other regions", exact=True).is_visible()
     assert person_picker.get_by_text(
         "No position history recorded; also rostered this date", exact=True
