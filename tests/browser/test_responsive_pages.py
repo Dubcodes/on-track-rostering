@@ -1484,7 +1484,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         assert "Manager marked unavailable for this position" in position_aware_option.inner_text()
         assert position_aware_option.locator(
             "xpath=ancestor::div[contains(@class, 'search-picker-group')]/span"
-        ).inner_text().casefold() == "other crew"
+        ).inner_text().casefold() == "other regions"
         _capture_page(page, f"new-position-picker-{width}.png")
         page.keyboard.press("Escape")
     page.keyboard.press("Escape")
