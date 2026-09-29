@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -52,7 +52,8 @@ def crew_management(
     if not show_archived:
         statement = statement.where(Person.lifecycle == Lifecycle.ACTIVE.value)
     if q.strip():
-        statement = statement.where(Person.display_name.ilike(f"%{q.strip()}%"))
+        term = f"%{q.strip()}%"
+        statement = statement.where(or_(Person.display_name.ilike(term), Person.email.ilike(term)))
     people = list(db.scalars(statement.order_by(Person.display_name)))
     person_ids = [person.id for person in people]
     memberships: dict[uuid.UUID, set[uuid.UUID]] = {person.id: set() for person in people}
@@ -94,6 +95,7 @@ def crew_management(
             memberships=memberships,
             capabilities=capabilities,
             linked=linked,
+            region_names={region.id: region.name for region in regions},
             query=q,
             show_archived=show_archived,
         ),
@@ -136,6 +138,58 @@ def create_crew_member(
     )
     db.commit()
     return RedirectResponse(f"/manage/crew?region_id={region_id}", status_code=303)
+
+
+@router.post("/{person_id}/profile")
+def update_crew_profile(
+    person_id: uuid.UUID,
+    request: Request,
+    display_name: str = Form(...),
+    email: str = Form(""),
+    home_region_id: uuid.UUID = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    person = _person_in_scope(db, request, person_id)
+    destination = db.get(Region, home_region_id)
+    if not destination or destination.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active Primary region.")
+    if not can_administer_region(request.state.actor, destination.id):
+        raise HTTPException(403, "Regional administration authority required.")
+    clean_name = display_name.strip()
+    if not 2 <= len(clean_name) <= 120:
+        raise HTTPException(400, "Enter a crew name between 2 and 120 characters.")
+    try:
+        clean_email = validated_email(email) if email.strip() else None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    previous = {
+        "display_name": person.display_name,
+        "email": person.email,
+        "home_region_id": str(person.home_region_id),
+    }
+    person.display_name = clean_name
+    person.email = clean_email
+    person.home_region_id = destination.id
+    record_audit(
+        db,
+        "person.profile.updated",
+        "person",
+        person.id,
+        request.state.user.id,
+        region_id=destination.id,
+        detail={
+            "previous": previous,
+            "display_name": clean_name,
+            "email": clean_email,
+            "home_region_id": str(destination.id),
+        },
+    )
+    db.commit()
+    return RedirectResponse(
+        f"/manage/crew?region_id={destination.id}#{person.id}", status_code=303
+    )
 
 
 @router.post("/{person_id}/groups")

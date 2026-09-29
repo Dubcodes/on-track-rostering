@@ -1357,6 +1357,23 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             _capture_page(page, f"manager-{slug}-{width}.png")
         if width <= 760:
             assert page.locator(".brand > strong:first-child").is_visible()
+    page.goto(base_url + "/manage/crew")
+    crew_search = page.locator("[data-live-search-input]")
+    crew_search.fill("Browser Roster Manager")
+    assert page.locator("[data-live-search-item]:visible").count() == 1
+    assert page.get_by_role("heading", name="Browser Roster Manager").is_visible()
+    crew_search.fill("")
+    assert page.locator("[data-live-search-item]:visible").count() >= 2
+    icon_offsets = page.locator(".site-nav .icon-button:has(svg)").evaluate_all(
+        "elements => elements.map(element => { const button = element.getBoundingClientRect(); const icon = element.querySelector('svg').getBoundingClientRect(); return [Math.abs((icon.left + icon.width / 2) - (button.left + button.width / 2)), Math.abs((icon.top + icon.height / 2) - (button.top + button.height / 2))]; })"
+    )
+    assert icon_offsets and all(x <= 1 and y <= 1 for x, y in icon_offsets)
+    page.goto(base_url + "/month?year=2040&month=1")
+    empty_day = page.locator('[data-empty-build-url="/manage/workdays/new?date=2040-01-15"]')
+    assert empty_day.count() == 1
+    empty_day.click()
+    page.wait_for_url("**/manage/workdays/new?date=2040-01-15")
+    assert page.locator('input[name="work_date"]').input_value() == "2040-01-15"
     page.goto(base_url + "/month")
     assert page.get_by_text("Operations Transit", exact=True).count() == 1
     assert page.get_by_text("Travel lead", exact=True).count() == 1
@@ -1388,8 +1405,8 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     person_picker = rows.first.locator('[data-picker-kind="person"]')
     assert person_picker.get_by_text("Open position", exact=True).is_visible()
     assert person_picker.get_by_text("Unassigned", exact=True).is_visible()
-    assert person_picker.get_by_text("Relevant crew", exact=True).is_visible()
-    assert person_picker.get_by_text("Other crew", exact=True).is_visible()
+    assert person_picker.locator(".search-picker-group > span").first.inner_text().endswith(" crew")
+    assert person_picker.get_by_text("Other regions", exact=True).is_visible()
     assert person_picker.get_by_text(
         "No position history recorded; also rostered this date", exact=True
     ).is_visible()
@@ -1728,7 +1745,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
         assert device
         device.primary_authenticated_at = utcnow() - timedelta(hours=1)
         db.commit()
-    page.goto(base_url + "/admin#branding")
+    page.goto(base_url + "/manage/accounts#invitations")
     page.get_by_text("Send a one-time invitation", exact=True).click()
     invitation_form = page.locator('form[action="/admin/invitations"]')
     invitation_form.locator('input[name="display_name"]').fill("Fresh auth candidate")
@@ -1740,8 +1757,8 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     assert page.get_by_text("The privileged action will not be replayed automatically.").is_visible()
     page.locator('#reauthenticate input[name="credential"]').fill(values["admin"][1])
     page.locator("#reauthenticate button", has_text="Re-authenticate").click()
-    page.wait_for_url("**/admin", wait_until="domcontentloaded")
-    assert page.locator('input[name="product_name"]').input_value() == "Demo it"
+    page.wait_for_url("**/manage/accounts", wait_until="domcontentloaded")
+    assert page.get_by_role("heading", name="Accounts & access").is_visible()
     assert page.get_by_text("Fresh auth candidate", exact=True).count() == 0
     assert not errors
     admin_context.close()

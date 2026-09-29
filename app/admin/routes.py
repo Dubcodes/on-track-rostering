@@ -328,7 +328,7 @@ def create_user(
             detail={"role": role},
         )
         db.commit()
-    return RedirectResponse("/admin#users", status_code=303)
+    return RedirectResponse("/manage/accounts#accounts", status_code=303)
 
 
 @router.post("/invitations")
@@ -362,7 +362,7 @@ def invite_user(
         context(
             request,
             invitation_url=f"/invite#token={raw}",
-            destination="/admin#invitations",
+            destination="/manage/accounts#invitations",
         ),
         headers={"Cache-Control": "no-store"},
     )
@@ -425,7 +425,7 @@ def update_user_status(
         detail={"status": account_status},
     )
     db.commit()
-    return RedirectResponse("/admin#users", status_code=303)
+    return RedirectResponse("/manage/accounts#accounts", status_code=303)
 
 
 @router.post("/users/{user_id}/devices/revoke")
@@ -450,7 +450,7 @@ def revoke_user_devices(
         device.revoked_at = now
     record_audit(db, "user.devices.revoked", "user", user.id, request.state.user.id)
     db.commit()
-    return RedirectResponse("/admin#users", status_code=303)
+    return RedirectResponse("/manage/accounts#accounts", status_code=303)
 
 
 @router.post("/invitations/{invitation_id}/revoke")
@@ -471,7 +471,7 @@ def revoke_invitation(
         db, "invitation.revoked", "invitation", invitation.id, request.state.user.id
     )
     db.commit()
-    return RedirectResponse("/admin#invitations", status_code=303)
+    return RedirectResponse("/manage/accounts#invitations", status_code=303)
 
 
 @router.post("/signup-requests/{signup_id}/reject")

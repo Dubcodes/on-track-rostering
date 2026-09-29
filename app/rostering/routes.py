@@ -4,7 +4,7 @@ import uuid
 from datetime import date, time
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -31,6 +31,7 @@ from app.rostering.service import (
     PublishConflict,
     add_assignment,
     create_workday,
+    delete_never_published_workday,
     ensure_draft,
     preview_diff,
     publish,
@@ -189,7 +190,12 @@ def _draft_payload(  # type: ignore[no-untyped-def]
 
 
 @router.get("/workdays/new", response_class=HTMLResponse)
-def new_workday_page(request: Request, db: Session = Depends(get_db)):
+def new_workday_page(
+    request: Request,
+    work_date: date | None = Query(None, alias="date"),
+    region_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+):
     regions = _editable_regions(db, request)
     if not regions:
         raise HTTPException(403, "Regional roster authority required")
@@ -208,9 +214,13 @@ def new_workday_page(request: Request, db: Session = Depends(get_db)):
         db.scalars(select(Vehicle).where(Vehicle.lifecycle == "ACTIVE")),
         key=lambda vehicle: (vehicle.home_region_id != regions[0].id, vehicle.name.casefold()),
     )
+    selected_region = next(
+        (region for region in regions if region.id == region_id),
+        regions[0],
+    )
     workday = SimpleNamespace(
         id=None,
-        region_id=regions[0].id,
+        region_id=selected_region.id,
         category=WorkdayCategory.RACE_DAY.value,
         racing_discipline=RacingDiscipline.THOROUGHBRED.value,
         current_published_revision_id=None,
@@ -218,7 +228,7 @@ def new_workday_page(request: Request, db: Session = Depends(get_db)):
     )
     draft = SimpleNamespace(
         revision_number=1,
-        work_date=None,
+        work_date=work_date,
         track_id=None,
         track_name_snapshot="Choose a Track",
         title="Race Day",
@@ -258,6 +268,35 @@ def new_workday_page(request: Request, db: Session = Depends(get_db)):
             transport_labels=TRANSPORT_LABELS,
             day_type_options=_day_type_options(),
         ),
+    )
+
+
+@router.post("/workdays/{workday_id}/delete")
+def delete_draft_workday(
+    workday_id: uuid.UUID,
+    request: Request,
+    confirm_delete: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    workday = db.get(Workday, workday_id)
+    if not workday:
+        raise HTTPException(404)
+    require_manage_region(request.state.actor, workday.region_id)
+    if confirm_delete != "yes":
+        raise HTTPException(400, "Confirm permanent draft deletion.")
+    try:
+        work_date = delete_never_published_workday(
+            db,
+            workday_id=workday.id,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(
+        f"/month?year={work_date.year}&month={work_date.month}", status_code=303
     )
 
 
@@ -325,17 +364,12 @@ def _builder_context(
     )
     assignments.sort(key=lambda row: (position_order(row.display_name_snapshot), str(row.slot_key)))
     position_ids = {assignment.base_position_id for assignment in assignments}
-    forced_relevant: dict[uuid.UUID | None, set[uuid.UUID]] = {}
-    for assignment in assignments:
-        if assignment.person_id:
-            forced_relevant.setdefault(assignment.base_position_id, set()).add(assignment.person_id)
     picker_views = crew_picker_views(
         db,
         region_id=workday.region_id,
         work_date=draft.work_date,
         exclude_workday_id=workday.id,
         position_ids=position_ids,
-        forced_relevant=forced_relevant,
     )
     people_groups_by_assignment = {
         assignment.id: picker_views[assignment.base_position_id].groups
@@ -431,7 +465,6 @@ def workday_crew_picker(
     workday_id: uuid.UUID,
     position_id: uuid.UUID,
     request: Request,
-    person_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
 ):
     workday = db.get(Workday, workday_id)
@@ -448,7 +481,6 @@ def workday_crew_picker(
             work_date=draft.work_date,
             exclude_workday_id=workday.id,
             position_ids={position_id},
-            forced_relevant={position_id: {person_id}} if person_id else None,
         )[position_id]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -480,7 +512,6 @@ def new_workday_crew_picker(
     work_date: date,
     position_id: uuid.UUID,
     request: Request,
-    person_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
 ):
     require_manage_region(request.state.actor, region_id)
@@ -490,7 +521,6 @@ def new_workday_crew_picker(
             region_id=region_id,
             work_date=work_date,
             position_ids={position_id},
-            forced_relevant={position_id: {person_id}} if person_id else None,
         )[position_id]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

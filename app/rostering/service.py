@@ -167,6 +167,70 @@ def create_workday(
     return workday
 
 
+def delete_never_published_workday(
+    db: Session,
+    *,
+    workday_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+) -> date:
+    """Permanently remove a private draft and only its unpublished generated travel."""
+    workday = db.scalar(select(Workday).where(Workday.id == workday_id).with_for_update())
+    if workday is None:
+        raise ValueError("Draft Workday not found.")
+    if workday.generated_from_workday_id is not None:
+        raise ValueError("Delete generated Travel from its parent Workday.")
+    generated = db.scalar(
+        select(Workday)
+        .where(Workday.generated_from_workday_id == workday.id)
+        .with_for_update()
+    )
+    targets = [workday, *([generated] if generated else [])]
+    target_ids = [row.id for row in targets]
+    revisions = list(
+        db.scalars(select(WorkdayRevision).where(WorkdayRevision.workday_id.in_(target_ids)))
+    )
+    if any(row.current_published_revision_id for row in targets) or any(
+        revision.state == RevisionState.PUBLISHED.value or revision.published_at is not None
+        for revision in revisions
+    ):
+        raise ValueError("A Workday that has ever been published cannot be deleted.")
+    work_date = next(
+        (revision.work_date for revision in revisions if revision.workday_id == workday.id),
+        date.today(),
+    )
+    operation_id = workday.operation_id
+    record_audit(
+        db,
+        "workday.private_draft.deleted",
+        "workday",
+        workday.id,
+        actor_user_id,
+        region_id=workday.region_id,
+        detail={
+            "work_date": work_date.isoformat(),
+            "generated_travel_deleted": generated is not None,
+            "external_event_id": str(workday.external_event_id) if workday.external_event_id else None,
+        },
+    )
+    for row in targets:
+        row.current_draft_revision_id = None
+        row.current_published_revision_id = None
+    db.flush()
+    if generated:
+        db.delete(generated)
+        db.flush()
+    db.delete(workday)
+    db.flush()
+    if operation_id and not db.scalar(
+        select(Workday.id).where(Workday.operation_id == operation_id).limit(1)
+    ):
+        operation = db.get(Operation, operation_id)
+        if operation:
+            db.delete(operation)
+    db.commit()
+    return work_date
+
+
 def ensure_draft(
     db: Session, workday: Workday, actor_user_id: uuid.UUID, *, commit: bool = True
 ) -> WorkdayRevision:

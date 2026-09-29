@@ -8,14 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
-from app.auth.security import require_fresh_auth, verify_csrf
+from app.auth.security import active_device_count, require_fresh_auth, verify_csrf
 from app.auth.service import approve_signup, grant_role, revoke_role_grant
 from app.catalog.models import Region
 from app.core.database import get_db
 from app.core.enums import Role
 from app.core.forms import optional_uuid
 from app.core.time import utcnow
-from app.identity.models import Person, RoleGrant, SignupRequest, User, UserPersonLink
+from app.identity.models import Invitation, Person, RoleGrant, SignupRequest, User, UserPersonLink
 from app.web import context, templates
 
 router = APIRouter(prefix="/manage/accounts")
@@ -49,8 +49,9 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
             RoleGrant.region_id.in_(region_ids), RoleGrant.role == Role.SUB_MANAGER.value
         )
     linked_people = select(UserPersonLink.person_id)
-    users_query = select(User).where(User.status == "ACTIVE")
+    users_query = select(User)
     if not request.state.actor.is_admin:
+        users_query = users_query.where(User.status == "ACTIVE")
         linked_user_ids = (
             select(UserPersonLink.user_id)
             .join(Person, Person.id == UserPersonLink.person_id)
@@ -62,6 +63,7 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
         users_query = users_query.where(
             User.id.in_(linked_user_ids) | User.id.in_(granted_user_ids)
         )
+    users = list(db.scalars(users_query.order_by(User.display_name)))
     return templates.TemplateResponse(
         "accounts.html",
         context(
@@ -79,7 +81,18 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                     .order_by(Person.display_name)
                 )
             ),
-            users=list(db.scalars(users_query.order_by(User.display_name))),
+            users=users,
+            device_counts=(
+                {user.id: active_device_count(db, user.id) for user in users}
+                if request.state.actor.is_admin
+                else {}
+            ),
+            invitations=(
+                list(db.scalars(select(Invitation).order_by(Invitation.created_at.desc()).limit(50)))
+                if request.state.actor.is_admin
+                else []
+            ),
+            account_roles=[role.value for role in Role],
             grants=list(db.scalars(grants_query.order_by(RoleGrant.granted_at.desc()))),
             grant_roles=(
                 [role.value for role in Role]

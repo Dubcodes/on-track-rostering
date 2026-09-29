@@ -1224,3 +1224,29 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
   filter: grayscale(1);
   opacity: 0.68;
 }
+
+/* Shared management controls and calendar creation affordances. */
+.site-nav .icon-button { padding: 0; line-height: 0; }
+.site-nav .icon-button svg { display: block; margin: 0; }
+.help-tip { position: relative; display: inline-grid; width: 1.15rem; height: 1.15rem; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font-size: .72rem; font-weight: 900; line-height: 1; cursor: help; vertical-align: middle; }
+.help-tip-content { position: absolute; z-index: 30; left: 50%; bottom: calc(100% + .45rem); display: none; width: min(280px, 75vw); padding: .55rem .65rem; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); box-shadow: var(--shadow); color: var(--text); font-size: .78rem; font-weight: 500; line-height: 1.35; text-transform: none; letter-spacing: normal; transform: translateX(-50%); }
+.help-tip:hover .help-tip-content, .help-tip:focus .help-tip-content, .help-tip:focus-within .help-tip-content { display: block; }
+.capability-table { display: grid; gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
+.capability-heading, .capability-row { display: grid; grid-template-columns: minmax(8rem, 1.5fr) minmax(6rem, 1fr) minmax(9rem, 1.2fr) auto; gap: .5rem; align-items: center; padding: .45rem .55rem; background: var(--surface); }
+.capability-heading { color: var(--muted); font-size: .72rem; font-weight: 800; text-transform: uppercase; }
+.capability-row select, .capability-row button { min-height: 34px; padding-block: .35rem; }
+.workspace-groups { display: grid; gap: 1rem; }
+.workspace-groups > div { display: grid; gap: .5rem; }
+.workspace-link-grid { display: flex; flex-wrap: wrap; gap: .65rem; }
+.lifecycle-action { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .78rem; font-weight: 800; }
+.buildable-empty-day { cursor: pointer; }
+.buildable-empty-day:hover, .buildable-empty-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--surface-soft); }
+.empty-build-hint { align-self: center; color: var(--muted); font-size: .72rem; font-weight: 800; opacity: 0; text-transform: uppercase; transition: opacity .15s ease; }
+.buildable-empty-day:hover .empty-build-hint, .buildable-empty-day:focus-visible .empty-build-hint { opacity: 1; }
+.danger-zone { border-color: var(--danger, #b42318); }
+.danger-button { background: var(--danger, #b42318); }
+@media (max-width: 700px) {
+  .capability-heading { display: none; }
+  .capability-row { grid-template-columns: minmax(7rem, 1fr) minmax(8rem, 1fr) auto; }
+  .capability-row small { display: none; }
+}

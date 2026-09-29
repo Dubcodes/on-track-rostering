@@ -46,6 +46,7 @@ from app.main import app
 from app.notifications.models import NotificationEvent
 from app.rostering.models import (
     Assignment,
+    Operation,
     PersonalWorkdayEntry,
     PositionCapability,
     Workday,
@@ -1418,10 +1419,10 @@ def test_builder_groups_relevant_crew_before_other_active_people(routed_db) -> N
     )
     assert added.status_code == 303
     html = manager.get(edit_url).text
-    assert '<div class="search-picker-group"><span>Relevant crew</span>' in html
-    assert '<div class="search-picker-group"><span>Other crew</span>' in html
-    assert html.index("Relevant crew") < html.index("Amy Crew")
-    assert html.index("Amy Crew") < html.index("Other crew")
+    assert '<div class="search-picker-group"><span>Northern crew</span>' in html
+    assert '<div class="search-picker-group"><span>Other regions</span>' in html
+    assert html.index("Northern crew") < html.index("Amy Crew")
+    assert html.index("Amy Crew") < html.index("Other regions")
     assert "No position history recorded" in html
     assert "Move up" not in html and "Move down" not in html
 
@@ -1882,8 +1883,11 @@ def test_admin_catalog_archive_restore_and_remove_unused_guards(routed_db) -> No
     csrf = _login(admin, "admin@example.test", "99887766")
     admin_page = admin.get("/admin")
     assert admin_page.status_code == 200
-    assert f'/manage/catalog/regions/{spare_region_id}' in admin_page.text
-    assert f'/manage/catalog/tracks/{spare_track_id}' in admin_page.text
+    assert 'href="/manage/catalog"' in admin_page.text
+    assert f'/manage/catalog/regions/{spare_region_id}' not in admin_page.text
+    catalog_page = admin.get("/manage/catalog")
+    assert f'/manage/catalog/regions/{spare_region_id}' in catalog_page.text
+    assert f'/manage/catalog/tracks/{spare_track_id}' in catalog_page.text
 
     archived_track = admin.post(
         f"/manage/catalog/tracks/{spare_track_id}/lifecycle",
@@ -2344,3 +2348,269 @@ def test_global_product_branding_is_persistent_admin_only_and_escaped(routed_db)
             follow_redirects=False,
         )
         assert response.status_code == 403
+
+
+def test_management_workspaces_consolidate_controls_and_primary_region(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+
+    admin_html = admin.get("/admin").text
+    assert 'href="/manage/catalog"' in admin_html
+    assert 'href="/manage/crew"' in admin_html
+    assert 'href="/manage/accounts"' in admin_html
+    assert 'action="/admin/users"' not in admin_html
+    assert 'action="/manage/catalog/positions"' not in admin_html
+
+    accounts_html = admin.get("/manage/accounts").text
+    assert 'action="/admin/users"' in accounts_html
+    assert 'action="/admin/invitations"' in accounts_html
+    catalog_html = admin.get("/manage/catalog").text
+    assert 'action="/manage/catalog/positions"' in catalog_html
+    created = admin.post(
+        "/manage/catalog/positions",
+        data={"name": "Vision Operator", "crew_group_id": "", "csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+    duplicate = admin.post(
+        "/manage/catalog/positions",
+        data={"name": "Vision Operator", "crew_group_id": "", "csrf_token": admin_csrf},
+    )
+    assert duplicate.status_code == 409
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    manager_accounts = manager.get("/manage/accounts").text
+    assert 'action="/admin/users"' not in manager_accounts
+    assert 'action="/admin/invitations"' not in manager_accounts
+    manager_settings = manager.get("/settings").text
+    assert 'href="/crew"' not in manager_settings
+    assert 'href="/manage/crew"' in manager_settings
+    assert 'href="/manage/catalog"' in manager_settings
+    crew_html = manager.get(f"/manage/crew?region_id={region_id}").text
+    assert "Primary region" in crew_html
+    assert "data-live-search" in crew_html
+    assert "capability-table" in crew_html
+    with factory() as db:
+        southern_id = db.scalar(select(Region.id).where(Region.id != region_id))
+        grant_count = len(list(db.scalars(select(RoleGrant).where(RoleGrant.user_id.is_not(None)))))
+    denied = manager.post(
+        f"/manage/crew/{person_id}/profile",
+        data={
+            "display_name": "Amy Crew",
+            "email": "",
+            "home_region_id": str(southern_id),
+            "csrf_token": manager_csrf,
+        },
+    )
+    assert denied.status_code == 403
+    created_person = admin.post(
+        "/manage/crew",
+        data={
+            "display_name": "Southern New Crew",
+            "email": "",
+            "region_id": str(southern_id),
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created_person.status_code == 303
+    moved = admin.post(
+        f"/manage/crew/{person_id}/profile",
+        data={
+            "display_name": "Amy Crew",
+            "email": "",
+            "home_region_id": str(southern_id),
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert moved.status_code == 303
+    with factory() as db:
+        assert db.get(Person, person_id).home_region_id == southern_id
+        assert db.scalar(
+            select(Person.id).where(
+                Person.display_name == "Southern New Crew", Person.home_region_id == southern_id
+            )
+        )
+        assert len(list(db.scalars(select(RoleGrant).where(RoleGrant.user_id.is_not(None))))) == grant_count
+        manager_user = db.scalar(select(User).where(User.email == "manager@example.test"))
+        db.add(RoleGrant(user_id=manager_user.id, role=Role.MANAGER.value, region_id=southern_id))
+        db.commit()
+    allowed = manager.post(
+        f"/manage/crew/{person_id}/profile",
+        data={
+            "display_name": "Amy Crew",
+            "email": "",
+            "home_region_id": str(region_id),
+            "csrf_token": manager_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert allowed.status_code == 303
+    capability = manager.post(
+        f"/manage/crew/{person_id}/capabilities/{position_id}",
+        data={"signal": "MANAGER_ALLOW", "csrf_token": manager_csrf},
+        follow_redirects=False,
+    )
+    assert capability.status_code == 303
+    with factory() as db:
+        assert db.scalar(
+            select(PositionCapability.id).where(
+                PositionCapability.person_id == person_id,
+                PositionCapability.base_position_id == position_id,
+                PositionCapability.signal == "MANAGER_ALLOW",
+            )
+        )
+
+
+def test_calendar_empty_cells_open_prefilled_builder_only_for_managers(routed_db) -> None:  # type: ignore[no-untyped-def]
+    _factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+    builder = manager.get(f"/manage/workdays/new?date=2030-02-12&region_id={region_id}")
+    assert builder.status_code == 200
+    assert 'name="work_date" value="2030-02-12"' in builder.text
+    assert f'<option value="{region_id}" selected' in builder.text
+    personal_month = manager.get("/month?year=2030&month=2")
+    assert 'data-empty-build-url="/manage/workdays/new?date=2030-02-12"' in personal_month.text
+    crew_month = manager.get(f"/crew?region_id={region_id}&year=2030&month=2")
+    assert (
+        f'data-empty-build-url="/manage/workdays/new?date=2030-02-12&amp;region_id={region_id}"'
+        in crew_month.text
+    )
+
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    employee_month = employee.get("/month?year=2030&month=2")
+    assert "data-empty-build-url" not in employee_month.text
+
+
+def test_delete_never_published_workday_cleans_generated_travel_but_keeps_source(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        event_row = ExternalCalendarEvent(
+            event_date=date(2030, 3, 5),
+            track_id=track_id,
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+        )
+        operation = Operation(name="Delete me", region_id=region_id)
+        db.add_all([event_row, operation])
+        db.flush()
+        parent = Workday(
+            region_id=region_id,
+            operation_id=operation.id,
+            external_event_id=event_row.id,
+            category="RACE_DAY",
+            created_by_user_id=manager.id,
+        )
+        db.add(parent)
+        db.flush()
+        parent_revision = WorkdayRevision(
+            workday_id=parent.id,
+            revision_number=1,
+            state="DRAFT",
+            work_date=date(2030, 3, 5),
+            created_by_user_id=manager.id,
+        )
+        child = Workday(
+            region_id=region_id,
+            operation_id=operation.id,
+            generated_from_workday_id=parent.id,
+            category="TRAVEL",
+            created_by_user_id=manager.id,
+        )
+        db.add_all([parent_revision, child])
+        db.flush()
+        child_revision = WorkdayRevision(
+            workday_id=child.id,
+            revision_number=1,
+            state="DRAFT",
+            work_date=date(2030, 3, 4),
+            created_by_user_id=manager.id,
+        )
+        db.add(child_revision)
+        db.flush()
+        parent.current_draft_revision_id = parent_revision.id
+        child.current_draft_revision_id = child_revision.id
+        db.commit()
+        parent_id, child_id, event_id, operation_id = parent.id, child.id, event_row.id, operation.id
+
+    manager_client = TestClient(app)
+    csrf = _login(manager_client, "manager@example.test", "123456")
+    deleted = manager_client.post(
+        f"/manage/workdays/{parent_id}/delete",
+        data={"confirm_delete": "yes", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert deleted.status_code == 303, deleted.text
+    assert f"/manage/workdays/{parent_id}" not in manager_client.get(
+        "/month?year=2030&month=3"
+    ).text
+    with factory() as db:
+        assert db.get(Workday, parent_id) is None
+        assert db.get(Workday, child_id) is None
+        assert db.get(Operation, operation_id) is None
+        assert db.get(ExternalCalendarEvent, event_id) is not None
+        audit = db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "workday.private_draft.deleted")
+        )
+        assert audit is not None
+
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        published = Workday(
+            region_id=region_id,
+            category="RACE_DAY",
+            created_by_user_id=manager.id,
+        )
+        db.add(published)
+        db.flush()
+        historical = WorkdayRevision(
+            workday_id=published.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2030, 3, 6),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+            published_at=utcnow(),
+        )
+        db.add(historical)
+        db.commit()
+        published_id = published.id
+        other_region_id = db.scalar(select(Region.id).where(Region.id != region_id))
+        outside = Workday(
+            region_id=other_region_id,
+            category="OFFICE_DAY",
+            created_by_user_id=manager.id,
+        )
+        db.add(outside)
+        db.flush()
+        outside_revision = WorkdayRevision(
+            workday_id=outside.id,
+            revision_number=1,
+            state="DRAFT",
+            work_date=date(2030, 3, 7),
+            created_by_user_id=manager.id,
+        )
+        db.add(outside_revision)
+        db.flush()
+        outside.current_draft_revision_id = outside_revision.id
+        db.commit()
+        outside_id = outside.id
+    rejected = manager_client.post(
+        f"/manage/workdays/{published_id}/delete",
+        data={"confirm_delete": "yes", "csrf_token": csrf},
+    )
+    assert rejected.status_code == 409
+    with factory() as db:
+        assert db.get(Workday, published_id) is not None
+    unauthorized = manager_client.post(
+        f"/manage/workdays/{outside_id}/delete",
+        data={"confirm_delete": "yes", "csrf_token": csrf},
+    )
+    assert unauthorized.status_code == 403
+    with factory() as db:
+        assert db.get(Workday, outside_id) is not None

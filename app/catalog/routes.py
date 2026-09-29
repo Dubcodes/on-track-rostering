@@ -376,3 +376,41 @@ def update_position(position_id: uuid.UUID, request: Request, name: str = Form(.
     with controlled_integrity(db, "A base position in that crew group already uses that name."):
         db.commit()
     return RedirectResponse("/manage/catalog#positions", status_code=303)
+
+
+@router.post("/positions")
+def create_position(
+    request: Request,
+    name: str = Form(...),
+    crew_group_id: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    group = _active_group(db, crew_group_id)
+    row = BasePosition(
+        name=_name(name, 100),
+        crew_group_id=group.id if group else None,
+    )
+    duplicate = db.scalar(
+        select(BasePosition.id).where(
+            BasePosition.name == row.name,
+            BasePosition.crew_group_id == row.crew_group_id,
+        )
+    )
+    if duplicate:
+        raise HTTPException(409, "A base position in that crew group already uses that name.")
+    with controlled_integrity(db, "A base position in that crew group already uses that name."):
+        db.add(row)
+        db.flush()
+        record_audit(
+            db,
+            "position.created",
+            "base_position",
+            row.id,
+            request.state.user.id,
+            detail={"name": row.name},
+        )
+        db.commit()
+    return RedirectResponse("/manage/catalog#positions", status_code=303)

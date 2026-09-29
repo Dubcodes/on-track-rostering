@@ -8,7 +8,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.catalog.models import BasePosition, PersonCrewGroup, Region
+from app.catalog.models import BasePosition, Region
 from app.core.enums import WorkdayStatus
 from app.identity.models import Person
 from app.positions.service import bulk_eligibility
@@ -26,12 +26,13 @@ class CrewPickerPerson:
 
 @dataclass(frozen=True)
 class CrewPickerView:
-    relevant: tuple[CrewPickerPerson, ...]
+    primary_label: str
+    primary: tuple[CrewPickerPerson, ...]
     other: tuple[CrewPickerPerson, ...]
 
     @property
     def groups(self) -> tuple[tuple[str, tuple[CrewPickerPerson, ...]], ...]:
-        return (("Relevant crew", self.relevant), ("Other crew", self.other))
+        return ((self.primary_label, self.primary), ("Other regions", self.other))
 
 
 HINT_LABELS = {
@@ -50,12 +51,10 @@ def crew_picker_views(
     work_date: date,
     position_ids: set[uuid.UUID | None],
     exclude_workday_id: uuid.UUID | None = None,
-    forced_relevant: dict[uuid.UUID | None, set[uuid.UUID]] | None = None,
 ) -> dict[uuid.UUID | None, CrewPickerView]:
     """Build canonical position-aware crew groups without moving policy into JavaScript."""
     if not position_ids:
         return {}
-    forced_relevant = forced_relevant or {}
     people = list(
         db.scalars(
             select(Person)
@@ -91,16 +90,7 @@ def crew_picker_views(
         )
     )
     eligibility_by_pair = bulk_eligibility(db, person_ids, concrete_position_ids)
-    crew_groups_by_person: dict[uuid.UUID, set[uuid.UUID]] = {}
-    if person_ids:
-        for person_id, crew_group_id in db.execute(
-            select(PersonCrewGroup.person_id, PersonCrewGroup.crew_group_id).where(
-                PersonCrewGroup.person_id.in_(person_ids)
-            )
-        ):
-            crew_groups_by_person.setdefault(person_id, set()).add(crew_group_id)
-
-    region_ids = {person.home_region_id for person in people if person.home_region_id}
+    region_ids = {region_id, *(person.home_region_id for person in people if person.home_region_id)}
     region_names = {
         region.id: region.name
         for region in db.scalars(select(Region).where(Region.id.in_(region_ids)))
@@ -111,8 +101,7 @@ def crew_picker_views(
 
     views: dict[uuid.UUID | None, CrewPickerView] = {}
     for position_id in position_ids:
-        position = positions.get(position_id)
-        relevant: list[CrewPickerPerson] = []
+        primary: list[CrewPickerPerson] = []
         other: list[CrewPickerPerson] = []
         for person in people:
             eligible, reason = (
@@ -123,9 +112,9 @@ def crew_picker_views(
             hint = HINT_LABELS[reason]
             if person.id in same_date_people:
                 hint += "; also rostered this date"
-            context_label = ""
+            region_name = region_names.get(person.home_region_id, "No primary region")
+            context_label = region_name if person.home_region_id != region_id else ""
             if person.display_name in duplicate_names:
-                region_name = region_names.get(person.home_region_id, "No home region")
                 context_label = f"{region_name} · crew record {str(person.id)[:8]}"
             option = CrewPickerPerson(
                 id=person.id,
@@ -134,16 +123,10 @@ def crew_picker_views(
                 context_label=context_label,
                 same_date=person.id in same_date_people,
             )
-            is_relevant = bool(
-                person.id in forced_relevant.get(position_id, set())
-                or eligible
-                or person.home_region_id == region_id
-                or (
-                    position
-                    and position.crew_group_id
-                    and position.crew_group_id in crew_groups_by_person.get(person.id, set())
-                )
-            )
-            (relevant if is_relevant else other).append(option)
-        views[position_id] = CrewPickerView(tuple(relevant), tuple(other))
+            (primary if person.home_region_id == region_id else other).append(option)
+        views[position_id] = CrewPickerView(
+            f"{region_names.get(region_id, 'Primary region')} crew",
+            tuple(primary),
+            tuple(other),
+        )
     return views

@@ -26,12 +26,12 @@
     {% for weekday in weekdays %}<div class="weekday">{{ weekday }}</div>{% endfor %}<div class="weekday weekday-total">Week</div>
     {% for week in grid %}
       {% for day in week %}
-        <article class="day-cell{% if not day.in_month %} outside-month{% endif %}{% if day.today %} today{% endif %}">
+        <article class="day-cell{% if not day.in_month %} outside-month{% endif %}{% if day.today %} today{% endif %}{% if can_build and day.in_month and not items_by_date.get(day.date) and not external_by_date.get(day.date) %} buildable-empty-day{% endif %}"{% if can_build and day.in_month and not items_by_date.get(day.date) and not external_by_date.get(day.date) %} data-empty-build-url="/manage/workdays/new?date={{ day.date.isoformat() }}" role="link" tabindex="0" aria-label="Build roster for {{ day.date.strftime('%d %B %Y') }}"{% endif %}>
           <div class="calendar-date-heading">
             <span class="date-with-holiday">{{ holiday_marker(day.holiday, "start" if loop.index0 < 2 else "end") }}{% if items_by_date.get(day.date) %}<a class="day-link" href="{{ items_by_date[day.date][0].url }}">{% else %}<span class="day-link">{% endif %}<span>{{ day.date.strftime('%a') }}</span><strong>{{ day.date.day }}</strong>{% if items_by_date.get(day.date) %}</a>{% else %}</span>{% endif %}</span>
             {% if fortnight_markers.get(day.date) %}<a class="timesheet-dot" href="{{ fortnight_markers[day.date] }}" aria-label="Open fortnight hours ending {{ day.date.strftime('%d %B') }}" title="Fortnight hours">{{ ui_icon("timesheet") }}</a>{% endif %}
           </div>
-          <div class="shift-list">{% for item in items_by_date.get(day.date, []) %}
+          <div class="shift-list">{% if can_build and day.in_month and not items_by_date.get(day.date) and not external_by_date.get(day.date) %}<span class="empty-build-hint">Build</span>{% endif %}{% for item in items_by_date.get(day.date, []) %}
             <a class="shift-card{% if item.cross_region %} cross-region{% endif %}{% if item.workday_status != 'SCHEDULED' %} is-cancelled{% endif %}" href="{{ item.url }}" data-work-date="{{ item.date.isoformat() }}" data-presentation="{{ item.presentation }}" data-category="{{ item.category }}">
               <strong class="shift-track">{{ item.track or item.title }}</strong>
               <span class="shift-mini"><span class="shift-mini-role">{{ item.role }}</span><span class="shift-mini-time">{{ item.start|display_time or 'TBC' }}</span></span>

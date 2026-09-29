@@ -81,6 +81,37 @@
   document.querySelectorAll("[data-auto-submit]").forEach((element) => {
     element.addEventListener("change", () => element.form?.submit());
   });
+  document.querySelectorAll("[data-live-search]").forEach((root) => {
+    const input = root.querySelector("[data-live-search-input]") || document.querySelector("[data-live-search-input]");
+    const items = [...root.querySelectorAll("[data-live-search-item]")];
+    const empty = root.querySelector("[data-live-search-empty]");
+    if (!input) return;
+    const filter = () => {
+      const query = input.value.trim().toLocaleLowerCase();
+      let visible = 0;
+      items.forEach((item) => {
+        const matches = !query || (item.dataset.search || item.textContent || "").toLocaleLowerCase().includes(query);
+        item.hidden = !matches;
+        if (matches) visible += 1;
+      });
+      if (empty) empty.hidden = visible !== 0;
+    };
+    input.addEventListener("input", filter);
+    input.addEventListener("search", filter);
+    filter();
+  });
+  document.querySelectorAll("[data-empty-build-url]").forEach((cell) => {
+    const activate = (event) => {
+      if (event.target instanceof Element && event.target.closest("a, button, input, select, textarea, details")) return;
+      window.location.href = cell.dataset.emptyBuildUrl;
+    };
+    cell.addEventListener("click", activate);
+    cell.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      activate(event);
+    });
+  });
   let touchStartX = 0;
   let touchStartY = 0;
   let touchEligible = false;

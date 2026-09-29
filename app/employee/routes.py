@@ -156,6 +156,10 @@ def month_view(
     previous = date(year - (month == 1), 12 if month == 1 else month - 1, 1)
     following = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
     notice_regions = relevant_notice_region_ids(db, request.state.actor)
+    can_build = any(
+        can_manage_region(request.state.actor, region_id)
+        for region_id in db.scalars(select(Region.id).where(Region.lifecycle == "ACTIVE"))
+    )
     fortnight_markers: dict[date, str] = {}
     if request.state.actor.person_id:
         current_start, _ = fortnight_bounds(today=today)
@@ -187,6 +191,7 @@ def month_view(
             month_view_url=f"/month?year={year}&month={month}&view=month",
             list_view_url=f"/month?year={year}&month={month}&view=list",
             fortnight_markers=fortnight_markers,
+            can_build=can_build,
             prominent_notice=prominent_notice(db, notice_regions),
         ),
     )
@@ -608,6 +613,7 @@ def crew_view(
             header_next_url=f"/crew?{base_query}&year={following.year}&month={following.month}&view={view}",
             month_view_url=f"/crew?{base_query}&year={year}&month={month}&view=month",
             list_view_url=f"/crew?{base_query}&year={year}&month={month}&view=list",
+            can_build=can_manage_region(request.state.actor, selected_region.id),
             prominent_notice=prominent_notice(db, {selected_region.id}),
         ),
     )
