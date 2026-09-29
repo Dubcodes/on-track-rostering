@@ -42,6 +42,7 @@ from app.rostering.service import (
     update_assignment,
     update_draft_details,
 )
+from app.unavailability.models import PersonUnavailability
 
 
 def draft_details(draft: WorkdayRevision, **changes) -> DraftDetailsInput:  # type: ignore[no-untyped-def]
@@ -342,6 +343,16 @@ def test_open_position_apply_select_and_publish(db) -> None:  # type: ignore[no-
         db, actor=employee_actor, workday_id=workday.id, slot_key=open_slot.slot_key
     )
     assert duplicate.id == application.id
+    db.add(
+        PersonUnavailability(
+            person_id=person.id,
+            start_date=published.work_date,
+            end_date=published.work_date,
+            note="Manager-only note",
+            created_by_user_id=manager.id,
+        )
+    )
+    db.commit()
     draft = ensure_draft(db, workday, manager.id)
     back = BasePosition(name="Back")
     db.add(back)

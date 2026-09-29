@@ -2,7 +2,7 @@
 
 ## Current source and deployment boundary
 
-This checkpoint is based on exact qualified `main` SHA `031a9b144da564ce7c2ac1a9688f59c6df7e658c` (release-gate run `36503512199`). The final SHA and exact-head workflow for the Builder flexibility/operational-management checkpoint are recorded in the completion report after GitHub qualification. No staging or production deployment is part of this pass; the previously observed private staging deployment must not be inferred to contain newer source.
+This checkpoint is based on exact qualified `main` SHA `d4373aee6273de6f8d09167d3da8567df735ce25` (release-gate run `36612942208`): 204 PostgreSQL-backed tests and 27 Playwright tests passed with the complete release gate. No staging or production deployment is part of this pass; the previously observed private staging deployment must not be inferred to contain newer source.
 
 Local development and qualification remain Docker-free. PostgreSQL integration, Playwright, Compose validation, and production image construction are authoritative only when executed by the exact-head GitHub release gate unless a native/remote development PostgreSQL URL and local browser environment are explicitly available.
 
@@ -15,15 +15,15 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 - Persistent Base Position display order with deterministic legacy backfill/fallback and configured operational picker order.
 - Region-owned reusable Vehicle management for Admin and authorized Managers, including rental-style records, lifecycle, audit, and immutable assignment name snapshots.
 - Admin-global and Manager-region-scoped Audit workspace with Region/date/actor/action/text filtering and redacted structured detail. Sub-Manager and read-only roles have no audit access.
+- Inclusive whole-date Person leave/unavailability with scoped Manager/Admin administration, preserved cancellation history, existing-roster conflict links, advisory Builder/Open-application warnings, deliberate roster override, Preview warnings, and management-only notes.
 - Consolidated Master Data, Crew, Accounts, Hours, Audit, Settings, external calendar/import/source management, configurable branding, provider-neutral racing evidence, Operations, TravelLegs, accommodation, notification delivery, and personal offline read models.
 
 ## Qualification baseline
 
-The preceding exact-head gate at `031a9b1` passed PostgreSQL migration/repeated-upgrade qualification, **202 PostgreSQL-backed tests**, **27 Playwright tests** at 1280/430/375/320, compile, Ruff, Alembic PostgreSQL SQL generation, dependency integrity/audit, JavaScript syntax, production and staging Compose validation, and the production image build. This checkpoint must receive its own exact-head result before those claims transfer.
+The preceding exact-head gate at `d4373ae` passed PostgreSQL 17.6 migration/repeated-upgrade qualification, **204 PostgreSQL-backed tests**, **27 Playwright tests** at 1280/430/375/320, compile, Ruff, Alembic PostgreSQL SQL generation, dependency integrity/audit, JavaScript syntax, production and staging Compose validation, and the production image build. That qualified checkpoint includes flexible multiple Positions, Move/Keep both/Cancel, one person-level travel plan, one Person/day Hours aggregation, Open Position multi-Position consistency, Vehicle master data, Position ordering/history, Audit, native Builder time inputs, and Builder HTML error recovery. Leave requires its own exact-head result before qualification transfers.
 
 ## Outstanding product backlog
 
-- Leave / Person unavailability with a Manager override warning integrated into the shared conflict dialog.
 - Contractor Manager invitation workflow and temporary-account expiry based on latest future assignment, with inactivity extension.
 - Automatic Race Day timing derivation: first-race floor-to-quarter, setup lead, on-track, Vehicle travel call time, last-race ceil-to-quarter, pack-up, and return travel.
 - Configurable fortnight anchor in application settings and Team Hours visual distribution bars.

@@ -13,6 +13,7 @@ from app.core.enums import WorkdayStatus
 from app.identity.models import Person
 from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
+from app.unavailability.service import active_for_people_on_date
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,22 @@ class CrewPickerPerson:
     hint: str
     context_label: str
     same_date: bool
+    on_leave: bool
+    leave_start: date | None
+    leave_end: date | None
+
+    @property
+    def leave_label(self) -> str:
+        if not self.on_leave or not self.leave_start or not self.leave_end:
+            return ""
+        start = f"{self.leave_start.day} {self.leave_start:%b}"
+        end = (
+            str(self.leave_end.day)
+            if self.leave_start.month == self.leave_end.month
+            and self.leave_start.year == self.leave_end.year
+            else f"{self.leave_end.day} {self.leave_end:%b}"
+        )
+        return f"On leave · {start}–{end}"
 
 
 @dataclass(frozen=True)
@@ -98,6 +115,7 @@ def crew_picker_views(
     duplicate_names = {
         name for name, count in Counter(person.display_name for person in people).items() if count > 1
     }
+    leave_by_person = active_for_people_on_date(db, person_ids, work_date)
 
     views: dict[uuid.UUID | None, CrewPickerView] = {}
     for position_id in position_ids:
@@ -122,6 +140,9 @@ def crew_picker_views(
                 hint=hint,
                 context_label=context_label,
                 same_date=person.id in same_date_people,
+                on_leave=person.id in leave_by_person,
+                leave_start=(leave_by_person[person.id].start_date if person.id in leave_by_person else None),
+                leave_end=(leave_by_person[person.id].end_date if person.id in leave_by_person else None),
             )
             (primary if person.home_region_id == region_id else other).append(option)
         views[position_id] = CrewPickerView(

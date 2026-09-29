@@ -140,6 +140,11 @@
         option.dataset.state = "ASSIGNED";
         option.dataset.label = person.label;
         option.dataset.search = `${person.label} ${person.context || ""} ${person.hint || ""}`;
+        if (person.on_leave) {
+          option.dataset.leaveStart = person.leave_start || "";
+          option.dataset.leaveEnd = person.leave_end || "";
+          option.dataset.leaveLabel = person.leave_label || "On leave";
+        }
         const alreadySelected = [...list.querySelectorAll("[data-assignment-row]")].some((row) =>
           row !== picker.closest("[data-assignment-row]") && row.querySelector("[data-person-value]").value === person.id
         );
@@ -164,9 +169,10 @@
           selected.textContent = `Already assigned: ${assignedPosition}`;
           option.append(selected);
         }
-        [person.context, person.hint].filter(Boolean).forEach((detail) => {
+        [person.context, person.hint, person.leave_label].filter(Boolean).forEach((detail) => {
           const small = document.createElement("small");
           small.textContent = detail;
+          if (detail === person.leave_label) small.className = "leave-warning";
           option.append(small);
         });
         wrapper.append(option);
@@ -250,6 +256,9 @@
     } else if (picker.dataset.pickerKind === "person") {
       row.querySelector("[data-person-value]").value = option.dataset.value || "";
       row.querySelector("[data-assignment-state]").value = option.dataset.state || "ASSIGNED";
+      const warning = row.querySelector("[data-assignment-leave]");
+      warning.textContent = option.dataset.leaveLabel || "";
+      warning.hidden = !option.dataset.leaveLabel;
     } else if (picker.dataset.pickerKind === "vehicle") {
       const mode = option.dataset.transportMode || (option.dataset.value ? "VEHICLE" : "UNASSIGNED");
       row.querySelector("[data-vehicle-value]").value = mode === "VEHICLE" ? option.dataset.value || "" : "";
@@ -266,12 +275,15 @@
     const input = row.querySelector('[data-picker-kind="person"] [data-picker-input]');
     input.value = "Unassigned";
     input.dataset.selectedLabel = "Unassigned";
+    const warning = row.querySelector("[data-assignment-leave]");
+    warning.textContent = "";
+    warning.hidden = true;
     refreshRow(row);
   };
   const finishConflict = (action) => {
     if (!pendingConflict) return;
     const {picker, option, existingRow, input} = pendingConflict;
-    if (action === "move") resetPersonRow(existingRow);
+    if (action === "move" && existingRow) resetPersonRow(existingRow);
     if (action === "keep") {
       const targetRow = picker.closest("[data-assignment-row]");
       copyPersonTravel(existingRow, targetRow);
@@ -287,14 +299,35 @@
       const existingRow = [...list.querySelectorAll("[data-assignment-row]")].find((candidate) =>
         candidate !== row && candidate.querySelector("[data-person-value]").value === option.dataset.value
       );
-      if (existingRow) {
+      const onLeave = Boolean(option.dataset.leaveLabel);
+      if (existingRow || onLeave) {
         const input = picker.querySelector("[data-picker-input]");
         pendingConflict = {picker, option, existingRow, input};
-        conflictDialog.querySelector("[data-conflict-person]").textContent = option.dataset.label || "This person";
-        conflictDialog.querySelector("[data-conflict-position]").textContent = existingRow.querySelector('[data-picker-kind="position"] [data-picker-input]').value || "another position";
+        const person = option.dataset.label || "This person";
+        const position = existingRow?.querySelector('[data-picker-kind="position"] [data-picker-input]')?.value || "another position";
+        const title = conflictDialog.querySelector("[data-conflict-title]");
+        const message = conflictDialog.querySelector("[data-conflict-message]");
+        const move = conflictDialog.querySelector("[data-conflict-move]");
+        const keep = conflictDialog.querySelector("[data-conflict-keep]");
+        if (existingRow && onLeave) {
+          title.textContent = "Crew member conflict";
+          message.textContent = `${person} is already assigned to ${position} and is ${option.dataset.leaveLabel.toLowerCase().replace(" · ", " from ")}.`;
+          move.textContent = "Move to this position";
+          keep.hidden = false;
+        } else if (existingRow) {
+          title.textContent = "Crew member already assigned";
+          message.textContent = `${person} is already assigned to ${position}.`;
+          move.textContent = "Move to this position";
+          keep.hidden = false;
+        } else {
+          title.textContent = "Crew member on leave";
+          message.textContent = `${person} is ${option.dataset.leaveLabel.toLowerCase().replace(" · ", " from ")}.`;
+          move.textContent = "Roster anyway";
+          keep.hidden = true;
+        }
         closePicker(picker);
         conflictDialog.showModal();
-        conflictDialog.querySelector("[data-conflict-move]").focus();
+        move.focus();
         return;
       }
     }

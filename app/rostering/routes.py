@@ -42,6 +42,7 @@ from app.rostering.service import (
     update_draft_details,
 )
 from app.rostering.travel import TRANSPORT_LABELS, TRANSPORT_UNASSIGNED
+from app.unavailability.service import active_for_people_on_date
 from app.web import context, templates
 
 router = APIRouter(prefix="/manage")
@@ -275,6 +276,7 @@ def new_workday_page(
             positions=positions,
             assignments=[],
             people_groups_by_assignment={},
+            assignment_leave_by_id={},
             applications_by_slot={},
             vehicles=_builder_vehicles(db, request, regions, selected_region.id),
             vehicle_region_names={region.id: region.name for region in regions},
@@ -411,6 +413,12 @@ def _builder_context(
         assignment.id: picker_views[assignment.base_position_id].groups
         for assignment in assignments
     }
+    leave_by_person = active_for_people_on_date(
+        db, {row.person_id for row in assignments if row.person_id}, draft.work_date
+    )
+    assignment_leave_by_id = {
+        row.id: leave_by_person.get(row.person_id) for row in assignments
+    }
     application_rows = db.execute(
         select(OpenPositionApplication, Person)
         .join(Person, Person.id == OpenPositionApplication.person_id)
@@ -443,6 +451,11 @@ def _builder_context(
                 "person": person,
                 "advisory": picker_person.hint if picker_person else "Eligibility reviewed on selection",
                 "same_date": picker_person.same_date if picker_person else False,
+                "leave": (
+                    picker_person.leave_label
+                    if picker_person and picker_person.on_leave
+                    else ""
+                ),
             }
         )
     generated_travel = None
@@ -483,6 +496,7 @@ def _builder_context(
         ),
         assignments=assignments,
         people_groups_by_assignment=people_groups_by_assignment,
+        assignment_leave_by_id=assignment_leave_by_id,
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
         vehicles=_builder_vehicles(db, request, editable_regions, workday.region_id),
@@ -530,6 +544,10 @@ def workday_crew_picker(
                             "hint": person.hint,
                             "context": person.context_label,
                             "same_date": person.same_date,
+                            "on_leave": person.on_leave,
+                            "leave_start": person.leave_start.isoformat() if person.leave_start else None,
+                            "leave_end": person.leave_end.isoformat() if person.leave_end else None,
+                            "leave_label": person.leave_label,
                         }
                         for person in people
                     ],
@@ -570,6 +588,10 @@ def new_workday_crew_picker(
                             "hint": person.hint,
                             "context": person.context_label,
                             "same_date": person.same_date,
+                            "on_leave": person.on_leave,
+                            "leave_start": person.leave_start.isoformat() if person.leave_start else None,
+                            "leave_end": person.leave_end.isoformat() if person.leave_end else None,
+                            "leave_label": person.leave_label,
                         }
                         for person in people
                     ],
@@ -605,6 +627,16 @@ def _publication_warnings(
     ) if person_ids else set()
     if person_ids - linked:
         warnings.append("One or more assigned people do not have a linked app account.")
+    leave_by_person = active_for_people_on_date(db, person_ids, draft.work_date)
+    if leave_by_person:
+        names = list(
+            db.scalars(
+                select(Person.display_name)
+                .where(Person.id.in_(leave_by_person))
+                .order_by(Person.display_name)
+            )
+        )
+        warnings.append(f"{', '.join(names)} {'is' if len(names) == 1 else 'are'} on leave on this Workday.")
     eligibility_by_pair = bulk_eligibility(
         db,
         {row.person_id for row in assignments if row.person_id is not None},

@@ -36,6 +36,7 @@ from app.rostering.models import (
     Workday,
     WorkdayRevision,
 )
+from app.unavailability.models import PersonUnavailability
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("ONTRACK_RUN_BROWSER_TESTS") != "1",
@@ -154,6 +155,20 @@ def browser_site():  # type: ignore[no-untyped-def]
                     signal=CapabilitySignal.MANAGER_BLOCK.value,
                     changed_by_user_id=manager.id,
                 ),
+                PersonUnavailability(
+                    person_id=other_person.id,
+                    start_date=date.today() - timedelta(days=1),
+                    end_date=date.today() + timedelta(days=2),
+                    note="Private browser leave note",
+                    created_by_user_id=manager.id,
+                ),
+                PersonUnavailability(
+                    person_id=duplicate_a.id,
+                    start_date=date.today() - timedelta(days=1),
+                    end_date=date.today() + timedelta(days=2),
+                    note="Another private browser note",
+                    created_by_user_id=manager.id,
+                ),
             ]
         )
         workday = Workday(region_id=region.id, created_by_user_id=manager.id)
@@ -236,6 +251,14 @@ def browser_site():  # type: ignore[no-untyped-def]
                 revision_id=revision.id,
                 slot_key=open_assignment.slot_key,
                 person_id=person.id,
+                status="APPLIED",
+            )
+        )
+        db.add(
+            OpenPositionApplication(
+                revision_id=revision.id,
+                slot_key=open_assignment.slot_key,
+                person_id=other_person.id,
                 status="APPLIED",
             )
         )
@@ -1149,6 +1172,95 @@ def test_builder_picker_tracks_active_field_geometry(browser_site, width: int) -
 
 
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_leave_management_and_builder_conflicts(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(
+        viewport={"width": width, "height": 900}, has_touch=width <= 760
+    )
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + f"/manage/leave?region_id={values['region_id']}")
+    assert page.get_by_role("heading", name="Leave & unavailability").is_visible()
+    assert page.get_by_text("Private browser leave note").is_visible()
+    _assert_no_horizontal_overflow(page)
+    if width in {1280, 320}:
+        _capture_page(page, f"leave-management-{width}.png")
+
+    def choose_position(row, position_id: str) -> None:  # type: ignore[no-untyped-def]
+        picker = row.locator('[data-picker-kind="position"]')
+        picker.locator("[data-picker-input]").click()
+        with page.expect_response(lambda response: "/crew-picker?" in response.url):
+            picker.locator(f'[data-picker-option][data-value="{position_id}"]').click()
+
+    def choose_person(row, person_id: str) -> None:  # type: ignore[no-untyped-def]
+        picker = row.locator('[data-picker-kind="person"]')
+        picker.locator("[data-picker-input]").click()
+        picker.locator(f'[data-picker-option][data-value="{person_id}"]').click()
+
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+    assigned_row = page.locator(
+        f'[data-person-value][value="{values["position_aware_person_id"]}"]'
+    ).locator("xpath=ancestor::article")
+    assert assigned_row.locator("[data-assignment-leave]").is_visible()
+
+    page.get_by_role("button", name="Add position").click()
+    leave_only_row = page.locator("[data-assignment-row]").last
+    choose_position(leave_only_row, values["head_on_position_id"])
+    choose_person(leave_only_row, values["duplicate_person_ids"][0])
+    dialog = page.locator("[data-assignment-conflict-dialog]")
+    assert dialog.get_by_role("heading", name="Crew member on leave").is_visible()
+    assert dialog.get_by_role("button", name="Roster anyway").is_visible()
+    page.keyboard.press("Escape")
+    assert leave_only_row.locator("[data-person-value]").input_value() == ""
+    choose_person(leave_only_row, values["duplicate_person_ids"][0])
+    dialog.get_by_role("button", name="Roster anyway").click()
+    assert leave_only_row.locator("[data-person-value]").input_value() == values[
+        "duplicate_person_ids"
+    ][0]
+
+    page.get_by_role("button", name="Add position").click()
+    combined_row = page.locator("[data-assignment-row]").last
+    choose_position(combined_row, values["director_position_id"])
+    choose_person(combined_row, values["position_aware_person_id"])
+    assert dialog.get_by_role("heading", name="Crew member conflict").is_visible()
+    assert dialog.get_by_role("button", name="Keep both").is_visible()
+    dialog.get_by_role("button", name="Cancel").click()
+    assert combined_row.locator("[data-person-value]").input_value() == ""
+    choose_person(combined_row, values["position_aware_person_id"])
+    dialog.get_by_role("button", name="Keep both").click()
+    assert page.locator(
+        f'[data-person-value][value="{values["position_aware_person_id"]}"]'
+    ).count() == 2
+    _assert_no_horizontal_overflow(page)
+
+    page.reload()
+    original_row = page.locator(
+        f'[data-person-value][value="{values["position_aware_person_id"]}"]'
+    ).locator("xpath=ancestor::article")
+    page.get_by_role("button", name="Add position").click()
+    move_row = page.locator("[data-assignment-row]").last
+    choose_position(move_row, values["director_position_id"])
+    choose_person(move_row, values["position_aware_person_id"])
+    dialog.get_by_role("button", name="Move to this position").click()
+    assert original_row.locator("[data-person-value]").input_value() == ""
+    assert move_row.locator("[data-person-value]").input_value() == values[
+        "position_aware_person_id"
+    ]
+
+    applications = page.locator(".builder-application-panel")
+    applications.locator("summary").click()
+    leave_application = applications.locator(
+        ".builder-application-row", has_text="Unrelated Browser Crew"
+    )
+    assert leave_application.get_by_text("On leave", exact=False).is_visible()
+    assert leave_application.get_by_role("button", name="Select anyway").is_visible()
+    assert "Private browser leave note" not in page.content()
+    assert not errors
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
 def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
     with SessionLocal() as db:
@@ -1586,7 +1698,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert applications.locator(
         ".builder-application-row strong", has_text="Browser Crew Member"
     ).is_visible()
-    assert applications.get_by_role("button", name="Select").is_visible()
+    assert applications.get_by_role("button", name="Select", exact=True).is_visible()
     assert applications.get_by_text("also rostered this date", exact=False).is_visible()
     _assert_no_horizontal_overflow(page)
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}/preview")

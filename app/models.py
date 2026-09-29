@@ -10,5 +10,6 @@ from app.notices import models as notice_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401
 from app.rostering import models as rostering_models  # noqa: F401
 from app.system_settings import models as system_settings_models  # noqa: F401
+from app.unavailability import models as unavailability_models  # noqa: F401
 
 __all__ = ["Base"]

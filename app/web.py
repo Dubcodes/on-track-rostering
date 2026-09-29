@@ -12,7 +12,7 @@ from app.catalog.presentation import track_token
 from app.core.config import get_settings
 from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_GROUPS, THEME_LABELS, THEME_VALUES, normalize_theme
-from app.core.time import display_datetime, display_time, local_today
+from app.core.time import display_date, display_datetime, display_time, local_today
 from app.system_settings.service import DEFAULT_OPERATIONAL_SETTINGS
 
 
@@ -32,6 +32,7 @@ class OnTrackTemplates(Jinja2Templates):
 templates = OnTrackTemplates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["display_datetime"] = display_datetime
 templates.env.filters["display_time"] = display_time
+templates.env.filters["display_date"] = display_date
 templates.env.filters["track_token"] = track_token
 
 

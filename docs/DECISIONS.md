@@ -76,3 +76,7 @@ Base Position display order is editable catalogue data, not business identity. A
 ## Audit reads remain redacted and scoped
 
 `AuditEvent` is security-redacted at write time. Admin may read the global audit stream; Managers may read only Regions they administer. Sub-Managers and read-only roles do not gain administrative audit access, and the UI presents human summaries with structured redacted detail rather than raw event JSON.
+
+## Leave is an operational warning
+
+Person leave/unavailability is an inclusive whole-date scheduling signal, not an HR, payroll, entitlement, or approval system. It never rewrites an existing roster and never makes a Person ineligible. Authorized Managers may deliberately roster someone on leave after an explicit shared-dialog warning. The date range is visible to permitted roster builders; arbitrary management note text remains confined to scoped Admin/Manager leave administration and is excluded from audit detail and employee-facing data.

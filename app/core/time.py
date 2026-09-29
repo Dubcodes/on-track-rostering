@@ -28,6 +28,13 @@ def display_time(value: time | None) -> str:
     return value.strftime("%H:%M") if value else ""
 
 
+def display_date(value: date | None, include_year: bool = True) -> str:
+    if value is None:
+        return ""
+    suffix = value.strftime("%b %Y") if include_year else value.strftime("%b")
+    return f"{value.day} {suffix}"
+
+
 def parse_time(value: str) -> time | None:
     """Accept minute-precision clock input, not timezone/seconds or ambiguous hours."""
     value = value.strip()

@@ -28,6 +28,7 @@ from app.notices.routes import router as notices_router
 from app.notifications.routes import router as notifications_router
 from app.open_positions.routes import router as open_positions_router
 from app.rostering.routes import router as rostering_router
+from app.unavailability.routes import router as unavailability_router
 
 
 @asynccontextmanager
@@ -59,6 +60,7 @@ app.include_router(admin_router)
 app.include_router(accounts_router)
 app.include_router(catalog_router)
 app.include_router(audit_router)
+app.include_router(unavailability_router)
 
 
 @app.exception_handler(FreshAuthenticationRequired)

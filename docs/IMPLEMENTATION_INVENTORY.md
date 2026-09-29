@@ -13,6 +13,7 @@
 | Position history | Stable-slot Position rename/change becomes one label-to-label human change without UUIDs | `app/rostering/diff.py` | Structured diff regression |
 | Vehicles | Reusable regional company/rental records, Admin/all and Manager/scoped mutation, archive lifecycle, local-first Builder picker, immutable name snapshots | `app/catalog`, Builder read/template | Regional authority, audit, picker and snapshot tests |
 | Audit | Redacted write service plus Admin-global/Manager-region-scoped filtered read workspace | `app/audit` | Authorization, regional visibility and redaction tests |
+| Leave/unavailability | Inclusive whole-date advisory ranges, overlap rejection, cancellation history, scoped Manager/Admin page, roster conflict links, Builder/Preview/Open-application warning and deliberate override | `app/unavailability`, Builder read/template/JS | Service/route/privacy and responsive conflict-dialog coverage; no payroll, balances or employee requests |
 | Crew/management | Consolidated Crew, Accounts, Master Data, primary Region editing, live search, capabilities, draft deletion | `app/crew`, `app/accounts`, `app/catalog` | Route and responsive browser tests |
 | Operations/travel | Operations, explicit TravelLegs, standard previous-day Travel generation, accommodation and personal Making own way/timing | rostering models/services/read models | Domain, route, publication, hours and browser tests |
 | External racing | Provider-neutral observations/canonical events, field provenance, Track mapping, import preview/apply, source adoption and display preferences | `app/external_calendar` | Adapter/reconciliation/import/browser tests; source availability never blocks manual rostering |
@@ -28,4 +29,4 @@ CI covers simultaneous first-draft creation, stale details/assignments/editor-af
 
 ## Current operational validation boundary
 
-The last qualified baseline is `031a9b144da564ce7c2ac1a9688f59c6df7e658c`, release-gate `36503512199`, with 202 PostgreSQL-backed tests and 27 Playwright tests. The exact result for this checkpoint is recorded after its final push. No deployment is implied. Remaining staging/recovery/product work is listed in `docs/BUILD_STATUS.md`.
+The last qualified baseline is `d4373aee6273de6f8d09167d3da8567df735ce25`, release-gate `36612942208`, with 204 PostgreSQL-backed tests and 27 Playwright tests. The exact result for this checkpoint is recorded after its final push. No deployment is implied. Remaining staging/recovery/product work is listed in `docs/BUILD_STATUS.md`.

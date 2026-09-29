@@ -54,6 +54,7 @@ from app.rostering.models import (
     WorkdayRevision,
 )
 from app.system_settings.models import SystemSettings
+from app.unavailability.models import PersonUnavailability
 
 
 def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -759,6 +760,190 @@ def _login(client: TestClient, email: str, pin: str) -> str:
     csrf = client.cookies.get("ontrack_csrf")
     assert csrf
     return csrf
+
+
+def test_leave_management_picker_preview_privacy_and_authorization(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    workday_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 10, 14),
+        rows=[
+            (person_id, "Amy Crew", "CCU", False),
+            (person_id, "Amy Crew", "Director", False),
+        ],
+    )
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    response = manager.post(
+        "/manage/leave",
+        data={
+            "person_id": str(person_id),
+            "start_date": "2026-10-12",
+            "end_date": "2026-10-16",
+            "note": "Private manager context",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    page = manager.get(f"/manage/leave?region_id={region_id}")
+    assert page.status_code == 200
+    assert page.text.count(f'/manage/workdays/{workday_id}') == 1
+    assert "Private manager context" in page.text
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        for inactive_status in ("CANCELLED", "ABANDONED"):
+            workday.status = inactive_status
+            db.commit()
+            inactive_page = manager.get(f"/manage/leave?region_id={region_id}")
+            assert f'/manage/workdays/{workday_id}' not in inactive_page.text
+        workday.status = "SCHEDULED"
+        db.commit()
+
+    builder = manager.get(f"/manage/workdays/{workday_id}")
+    assert "On leave · 12 Oct–16 Oct" in builder.text
+
+    existing = manager.get(
+        f"/manage/workdays/{workday_id}/crew-picker",
+        params={"position_id": str(position_id)},
+    )
+    person_payload = next(
+        person
+        for group in existing.json()["groups"]
+        for person in group["people"]
+        if person["id"] == str(person_id)
+    )
+    assert person_payload["on_leave"] is True
+    assert person_payload["leave_start"] == "2026-10-12"
+    assert "Private manager context" not in str(person_payload)
+    new_picker = manager.get(
+        "/manage/new-workday/crew-picker",
+        params={
+            "region_id": str(region_id),
+            "work_date": "2026-10-14",
+            "position_id": str(position_id),
+        },
+    )
+    assert any(
+        person["on_leave"]
+        for group in new_picker.json()["groups"]
+        for person in group["people"]
+        if person["id"] == str(person_id)
+    )
+    preview = manager.get(f"/manage/workdays/{workday_id}/preview")
+    assert "Amy Crew is on leave on this Workday." in preview.text
+    submanager_builder = TestClient(app)
+    _login(submanager_builder, "submanager@example.test", "445566")
+    submanager_page = submanager_builder.get(f"/manage/workdays/{workday_id}")
+    assert "On leave · 12 Oct–16 Oct" in submanager_page.text
+    assert "Private manager context" not in submanager_page.text
+    employee_day = TestClient(app)
+    _login(employee_day, "amy@example.test", "654321")
+    personal_payload = employee_day.get(f"/api/day/{workday_id}").json()
+    assert "Private manager context" not in str(personal_payload)
+    assert "leave" not in str(personal_payload).casefold()
+
+    overlap = manager.post(
+        "/manage/leave",
+        data={
+            "person_id": str(person_id),
+            "start_date": "2026-10-16",
+            "end_date": "2026-10-18",
+            "csrf_token": csrf,
+        },
+        follow_redirects=True,
+    )
+    assert "already has active leave overlapping" in overlap.text
+
+    with factory() as db:
+        outside_person = db.scalar(select(Person).where(Person.display_name == "South Crew"))
+    denied = manager.post(
+        "/manage/leave",
+        data={
+            "person_id": str(outside_person.id),
+            "start_date": "2026-10-12",
+            "end_date": "2026-10-16",
+            "csrf_token": csrf,
+        },
+    )
+    assert denied.status_code == 403
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    assert admin.post(
+        "/manage/leave",
+        data={
+            "person_id": str(outside_person.id),
+            "start_date": "2026-11-01",
+            "end_date": "2026-11-02",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    ).status_code == 303
+    with factory() as db:
+        contractor = User(
+            email="leave-contractor@example.test",
+            display_name="Leave Contractor",
+            credential_hash=hash_credential("667788"),
+            credential_kind="pin",
+        )
+        db.add(contractor)
+        db.flush()
+        db.add(
+            RoleGrant(
+                user_id=contractor.id,
+                role=Role.CONTRACTOR.value,
+                region_id=region_id,
+            )
+        )
+        db.commit()
+    for email, pin in (
+        ("submanager@example.test", "445566"),
+        ("viewer@example.test", "112233"),
+        ("amy@example.test", "654321"),
+        ("leave-contractor@example.test", "667788"),
+    ):
+        client = TestClient(app)
+        unauthorized_csrf = _login(client, email, pin)
+        assert client.post(
+            "/manage/leave",
+            data={
+                "person_id": str(person_id),
+                "start_date": "2026-11-01",
+                "end_date": "2026-11-02",
+                "csrf_token": unauthorized_csrf,
+            },
+        ).status_code == 403
+
+    with factory() as db:
+        leave = db.scalar(select(PersonUnavailability))
+        assert leave and leave.cancelled_at is None
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "person_unavailability.created"
+            )
+        )
+        assert audit and "Private manager context" not in str(audit.detail)
+        leave_id = leave.id
+    cancelled = manager.post(
+        f"/manage/leave/{leave_id}/cancel",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert cancelled.status_code == 303
+    with factory() as db:
+        assert db.get(PersonUnavailability, leave_id).cancelled_at is not None
+    cancelled_picker = manager.get(
+        f"/manage/workdays/{workday_id}/crew-picker",
+        params={"position_id": str(position_id)},
+    )
+    assert not any(
+        person["on_leave"]
+        for group in cancelled_picker.json()["groups"]
+        for person in group["people"]
+        if person["id"] == str(person_id)
+    )
 
 
 def test_employee_personal_timing_and_making_own_way_are_stable_and_notify_manager(

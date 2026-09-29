@@ -1265,3 +1265,14 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 }
 .assignment-conflict-dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .assignment-conflict-dialog h2 { margin-top: 0; }
+.leave-warning { color: var(--warning, #a15c00); font-weight: 800; }
+.leave-records { display: grid; gap: .75rem; }
+.leave-record { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.4fr) auto; gap: 1rem; align-items: start; padding: .85rem; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.leave-record > div:first-child { display: grid; gap: .2rem; }
+.leave-record p { margin: .35rem 0 0; white-space: pre-wrap; }
+.leave-conflicts { display: grid; gap: .3rem; min-width: 0; }
+.leave-conflicts a { overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .leave-record { grid-template-columns: 1fr; }
+  .leave-record form, .leave-record button { width: 100%; }
+}
