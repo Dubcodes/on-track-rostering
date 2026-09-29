@@ -1467,7 +1467,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             original_person_row.locator("[data-standard-travel-check]").uncheck()
             original_person_row.locator("[data-standard-travel-check]").dispatch_event("change")
             original_vehicle_picker = original_person_row.locator('[data-picker-kind="vehicle"]')
-            original_vehicle_picker.locator("[data-picker-input]").click()
+            original_vehicle_picker.locator("[data-picker-input]").fill("")
             original_vehicle_picker.locator(
                 '[data-picker-option][data-transport-mode="SELF_TRAVEL"]'
             ).click()

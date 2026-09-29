@@ -1064,6 +1064,9 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .control-record { border-top: 1px solid var(--line); padding: 9px 2px; }
 .control-record > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .control-record[open] > summary { margin-bottom: 10px; }
+.audit-list, .audit-list .control-record { min-width: 0; }
+.audit-list .control-record > header { display: grid; min-width: 0; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+.audit-list .control-record > header span, .audit-list .control-record > header strong, .audit-list .control-record > header small { display: block; min-width: 0; overflow-wrap: anywhere; }
 .source-identity-main { min-width: 0; }
 .source-identity-main > strong, .source-identity-meta { display: block; overflow-wrap: anywhere; }
 .source-identity-meta { margin-top: 3px; font-weight: 600; }
@@ -1083,6 +1086,7 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 @media (max-width: 560px) {
   .compact-signout { align-items: stretch; flex-direction: column; }
   .control-record > summary { align-items: flex-start; }
+  .audit-list .control-record > header { grid-template-columns: 1fr; }
   .source-identity-state { max-width: 42%; text-align: right; }
   .builder-start-grid { grid-template-columns: 1fr; }
   .builder-start-actions, .archived-record { align-items: stretch; flex-direction: column; }
