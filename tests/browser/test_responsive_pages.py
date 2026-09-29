@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
-from app.catalog.models import BasePosition, CrewGroup, Region, Track
+from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
 from app.core.database import Base, SessionLocal, engine
 from app.core.enums import CapabilitySignal, Role
 from app.core.time import utcnow
@@ -113,6 +113,7 @@ def browser_site():  # type: ignore[no-untyped-def]
         director = BasePosition(name=f"Director {suffix}", crew_group_id=group.id)
         side_one = BasePosition(name="Side 1", crew_group_id=group.id)
         side_two = BasePosition(name="Side 2", crew_group_id=group.id)
+        vehicle = Vehicle(name=f"Browser Vehicle {suffix}", home_region_id=region.id)
         duplicate_a = Person(display_name="John Smith", home_region_id=cross_region.id)
         duplicate_b = Person(display_name="John Smith", home_region_id=cross_region.id)
         person.home_region_id = region.id
@@ -126,6 +127,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                 director,
                 side_one,
                 side_two,
+                vehicle,
                 duplicate_a,
                 duplicate_b,
             ]
