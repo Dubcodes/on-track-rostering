@@ -1511,7 +1511,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             assert new_row.locator('input[name="return_travel_minutes_override"]').input_value() == "90"
             vehicle_picker = new_row.locator('[data-picker-kind="vehicle"]')
             vehicle_input = vehicle_picker.locator("[data-picker-input]")
-            vehicle_input.click()
+            vehicle_input.fill("")
             vehicle_option = vehicle_picker.locator('[data-picker-option][data-transport-mode="VEHICLE"]').first
             vehicle_option.click()
             assert original_person_row.locator("[data-vehicle-value]").input_value() == new_row.locator(
