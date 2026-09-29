@@ -1,41 +1,31 @@
 # Implementation inventory
 
-This inventory maps the delivered foundation to code, migrations, automated evidence, and remaining operational validation. “Implemented” means code and deterministic tests exist; it does not turn an unavailable external system into a claimed pass.
+“Implemented” means code and deterministic tests exist. Deployment-dependent behavior remains separately qualified.
 
 | Area | Delivered behavior | Primary implementation | Evidence / boundary |
 |---|---|---|---|
-| Identity | Separate Users and People, unique link, lifecycle, invitations and signup approval | `app/identity`, `app/accounts`, `app/admin` | Route/security tests; PostgreSQL uniqueness test runs in CI |
-| Authorization | Explicit capability policy, regional scope, Manager/Admin administration boundary, Viewer read-only breadth, pending/active/revoked grants, final-Admin protection | `app/auth/policy.py`, `app/accounts` | Account, route, and security tests; elevation concurrency is PostgreSQL-only |
-| Sessions | Hash-only trusted devices, role-sensitive trust, epoch invalidation, fresh-primary timestamp | `app/auth/security.py`, `app/auth/service.py`, middleware | Account security and route tests |
-| Passkeys | Bound, expiring, one-use registration/auth challenges; RP/origin verification; required user verification | `app/auth/factors.py`, `app/auth/factor_routes.py`, `app/static/passkeys.js` | Factor tests; real hardware ceremony remains deployment validation |
-| TOTP | Encrypted inactive setup, confirmation, ±1-window verification, replay prevention, fresh-auth removal | `app/auth/factors.py`, factor routes/templates | Factor and login tests; no recovery codes |
-| Roster authority | Stable workday, private draft, immutable publication, structured diff, safe history, row lock, snapshots | `app/rostering` | Diff/route tests and PostgreSQL concurrent-publish/rollback tests |
-| Open positions | Eligibility, employee application, Manager draft selection, close-on-publication | `app/open_positions`, `app/positions` | Route and PostgreSQL uniqueness tests |
-| Decline | Confirmed employee decline creates atomic immutable publication and detaches stale draft | roster/open-position services | Route tests plus PostgreSQL stale-draft test |
-| Crew/capability | Scoped Crew View, Viewer oversight notes, lifecycle, groups, independent employee/Manager signals, preserved worked history | `app/crew`, `app/positions` | Route, policy, and capability-clear tests |
-| Hours/read models | Shared multi-slot person/day participation, personal/regional fortnight totals, overnight, no break inference, NZ holidays | `app/rostering/participation.py`, `app/employee`, `app/hours` | Fixed multi-role/overnight/date/holiday tests |
-| Offline | Per-user upcoming/own-Day cache, CSRF-free generated HTML, cache-backed timestamp, cross-user deletion, cross-month today-plus-three prefetch | service worker and employee JSON routes | Offline contract and route tests; physical offline revocation remains impossible |
-| Notifications | Transactional outbox, encrypted subscriptions, prior/new audience union, deterministic reminders, skip-locked claims/leases, retry/deactivate | `app/notifications`, `python -m app.cli deliver-notifications` | Fixed-time/delivery tests; claim concurrency is PostgreSQL-only; real provider pending |
-| Regional administration | Manager tracks/colours and scoped accounts; Admin region policy/lifecycle and global groups/positions | `app/catalog/routes.py`, `app/accounts` | Regional authority and directory privacy route tests |
-| Schema | Append-only migrations through operational settings; theme, holiday geography, reminder, branding, and operational-policy columns originate in the migration chain | `migrations/versions` | PostgreSQL 17.6 chain and repeated upgrade passed in CI; staging initialized successfully; local execution remains pending |
-| Responsive UI | Server-rendered Employee/Manager/Viewer/Admin paths at four target widths, with theme/colour/console/picker assertions | templates/static CSS, `tests/browser` | 6 exact-head CI Playwright cases passed; real-device matrix remains pending |
-| Deployment | Separate PostgreSQL 17 production/staging Compose artifacts, migration-before-app startup, and internal-only staging app/database networking | Compose files, deployment scripts/docs | Real isolated HTTPS staging is running; initial login/navigation smoke passed; full staging qualification remains pending |
-
-## Migration chain additions in this completion pass
-
-- `4c72a6f19d31`: account approval, role-grant lifecycle, and fresh-primary authentication state.
-- `7a91d36e5b20`: server-bound WebAuthn challenges and encrypted TOTP factors.
-- `ab24e50d17c4`: notification availability, per-subscription delivery, attempts, retry, and result state.
-- `c8e451d10a77`: Admin-eligible primary credential marker, notification claim lease fields/index, and one-hour preference default correction. User theme, regional holiday geography, and the preference column already exist in the foundation schema.
+| Identity/security | Separate Users and People, scoped roles, invitations/signup review, trusted devices, fresh auth, passkeys and optional TOTP | `app/identity`, `app/accounts`, `app/auth` | Security/route tests; real authenticator and recovery operations remain staging work |
+| Roster authority | Stable Workday, one shared private draft, exact optimistic locking, immutable publication, Preview/diff/history, Open applications, decline and cancellation | `app/rostering`, `app/open_positions` | Route/domain tests plus PostgreSQL concurrency suite |
+| Builder | Unified identity/timing/notes/travel/assignments form; native time controls; collapsed secondary sections; live Position, Person and Vehicle search; human HTML validation errors | Builder template/JS and rostering routes/service | Focused route and Playwright behavior/geometry coverage |
+| Multi-Position Person | Same Person may hold multiple stable slots; immediate Move/Keep both/Cancel dialog; Position rows remain independent | `app/static/builder.js`, `app/rostering/service.py` | Save/publish/domain and responsive browser coverage |
+| Person/day participation | Multiple Position spans combine once as earliest effective start/latest effective finish; personal timing applies once; generated Travel has one row per Person | `app/rostering/participation.py`, `app/rostering/travel.py`, `app/hours` | Multi-role, personal timing, Travel and fortnight tests; never sums roles as separate shifts |
+| Position catalog | Base Position capabilities, persistent numeric display order, deterministic legacy backfill/fallback | `app/catalog`, `app/positions/ordering.py`, migration `e48c7ad291f0` | Catalog/Builder order and migration qualification |
+| Position history | Stable-slot Position rename/change becomes one label-to-label human change without UUIDs | `app/rostering/diff.py` | Structured diff regression |
+| Vehicles | Reusable regional company/rental records, Admin/all and Manager/scoped mutation, archive lifecycle, local-first Builder picker, immutable name snapshots | `app/catalog`, Builder read/template | Regional authority, audit, picker and snapshot tests |
+| Audit | Redacted write service plus Admin-global/Manager-region-scoped filtered read workspace | `app/audit` | Authorization, regional visibility and redaction tests |
+| Crew/management | Consolidated Crew, Accounts, Master Data, primary Region editing, live search, capabilities, draft deletion | `app/crew`, `app/accounts`, `app/catalog` | Route and responsive browser tests |
+| Operations/travel | Operations, explicit TravelLegs, standard previous-day Travel generation, accommodation and personal Making own way/timing | rostering models/services/read models | Domain, route, publication, hours and browser tests |
+| External racing | Provider-neutral observations/canonical events, field provenance, Track mapping, import preview/apply, source adoption and display preferences | `app/external_calendar` | Adapter/reconciliation/import/browser tests; source availability never blocks manual rostering |
+| Hours | Personal and Team fortnight totals from current publication, combined Person/day participation, overnight and holidays, no break inference | `app/hours`, participation service | Fixed multi-role/overnight/personal/date tests |
+| Offline/notifications | User-namespaced read-only personal cache; transactional notification outbox, preferences, retries and reminders | service worker, employee JSON, `app/notifications` | Contract/delivery tests; real Web Push remains environment qualification |
+| Branding/settings | Persisted global product branding and operational signup policy | branding/system settings modules | Authorization, persistence, escaping and responsive tests |
+| Schema/deployment | Append-only PostgreSQL/Alembic chain; retained production/staging Compose; migration-before-app startup | `migrations/versions`, deployment artifacts | GitHub PostgreSQL/repeated-upgrade/Compose/image gate; no local Docker |
+| Responsive UI | Employee and management paths at 1280/430/375/320 with behavior, console and overflow assertions | templates/static CSS/JS, `tests/browser` | Previous exact-head result: 27 Playwright passed; this checkpoint requires its own exact-head run |
 
 ## PostgreSQL-only assertions
 
-The PostgreSQL suite deliberately covers simultaneous first-draft creation, stale detail/assignment mutations, stale editor state after Publish, exact lock-version conflicts, simultaneous publication, transactional outbox rollback, simultaneous pending-grant activation, partial/unique identity and application constraints, stale-draft behavior during decline, and concurrent notification claims/expired-lease recovery. These are not reported as passed from the local SQLite suite.
+CI covers simultaneous first-draft creation, stale details/assignments/editor-after-Publish, exact lock-version conflicts, concurrent Publish/outbox, constraints, decline immutability, notification claims, and the full migration chain. SQLite unit tests are never reported as PostgreSQL qualification.
 
-## Independent review items
+## Current operational validation boundary
 
-- Decide whether future collaborative editing requires one draft branch per Manager rather than the current single workday draft pointer.
-- Design recovery-code issuance/rotation before making MFA mandatory for accounts without a second authenticator.
-- Configure the production scheduler cadence and VAPID credentials, then validate delivery against real browser endpoints.
-- Validate production RP/origin settings with real authenticators and production VAPID credentials with real endpoints.
-- Rehearse backup restoration and application restart persistence on a disposable deployment target.
+The last qualified baseline is `031a9b144da564ce7c2ac1a9688f59c6df7e658c`, release-gate `36503512199`, with 202 PostgreSQL-backed tests and 27 Playwright tests. The exact result for this checkpoint is recorded after its final push. No deployment is implied. Remaining staging/recovery/product work is listed in `docs/BUILD_STATUS.md`.

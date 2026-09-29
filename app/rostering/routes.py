@@ -3,10 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import date, time
 from types import SimpleNamespace
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -18,7 +19,7 @@ from app.core.enums import AssignmentStatus, RacingDiscipline, WorkdayCategory, 
 from app.core.time import parse_time
 from app.identity.models import Person, UserPersonLink
 from app.notifications.service import record_event
-from app.positions.ordering import position_order
+from app.positions.ordering import catalog_position_order, position_order
 from app.positions.service import bulk_eligibility
 from app.rostering.builder_read import crew_picker_views
 from app.rostering.conflicts import publication_conflicts
@@ -49,6 +50,21 @@ router = APIRouter(prefix="/manage")
 def _editable_regions(db: Session, request: Request) -> list[Region]:
     regions = list(db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)))
     return [region for region in regions if can_manage_region(request.state.actor, region.id)]
+
+
+def _builder_vehicles(
+    db: Session, request: Request, regions: list[Region], workday_region_id: uuid.UUID
+) -> list[Vehicle]:
+    statement = select(Vehicle).where(Vehicle.lifecycle == "ACTIVE")
+    if not request.state.actor.is_admin:
+        statement = statement.where(
+            or_(Vehicle.home_region_id.in_([region.id for region in regions]),
+                Vehicle.home_region_id.is_(None))
+        )
+    return sorted(
+        db.scalars(statement),
+        key=lambda vehicle: (vehicle.home_region_id != workday_region_id, vehicle.name.casefold()),
+    )
 
 
 def _day_type_options() -> tuple[tuple[str, str], ...]:
@@ -208,11 +224,7 @@ def new_workday_page(
     )
     positions = sorted(
         db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE")),
-        key=lambda position: position_order(position.name),
-    )
-    vehicles = sorted(
-        db.scalars(select(Vehicle).where(Vehicle.lifecycle == "ACTIVE")),
-        key=lambda vehicle: (vehicle.home_region_id != regions[0].id, vehicle.name.casefold()),
+        key=catalog_position_order,
     )
     selected_region = next(
         (region for region in regions if region.id == region_id),
@@ -264,9 +276,11 @@ def new_workday_page(
             assignments=[],
             people_groups_by_assignment={},
             applications_by_slot={},
-            vehicles=vehicles,
+            vehicles=_builder_vehicles(db, request, regions, selected_region.id),
+            vehicle_region_names={region.id: region.name for region in regions},
             transport_labels=TRANSPORT_LABELS,
             day_type_options=_day_type_options(),
+            builder_error=request.query_params.get("error"),
         ),
     )
 
@@ -347,7 +361,13 @@ async def new_workday(request: Request, db: Session = Depends(get_db)):
         db.commit()
     except (KeyError, TypeError, ValueError) as exc:
         db.rollback()
-        raise HTTPException(400, str(exc)) from exc
+        raw_date = str(form.get("work_date", ""))
+        raw_region = str(form.get("region_id", ""))
+        return RedirectResponse(
+            f"/manage/workdays/new?date={quote(raw_date)}&region_id={quote(raw_region)}"
+            f"&error={quote(str(exc))}",
+            status_code=303,
+        )
     return RedirectResponse(f"/manage/workdays/{workday.id}/preview", status_code=303)
 
 
@@ -362,7 +382,23 @@ def _builder_context(
             .order_by(Assignment.display_name_snapshot)
         )
     )
-    assignments.sort(key=lambda row: (position_order(row.display_name_snapshot), str(row.slot_key)))
+    assignment_position_ids = {
+        assignment.base_position_id for assignment in assignments if assignment.base_position_id
+    }
+    assignment_positions = {
+        position.id: position
+        for position in db.scalars(
+            select(BasePosition).where(BasePosition.id.in_(assignment_position_ids))
+        )
+    } if assignment_position_ids else {}
+    assignments.sort(
+        key=lambda row: (
+            catalog_position_order(assignment_positions[row.base_position_id])
+            if row.base_position_id in assignment_positions
+            else (1, *position_order(row.display_name_snapshot)),
+            str(row.slot_key),
+        )
+    )
     position_ids = {assignment.base_position_id for assignment in assignments}
     picker_views = crew_picker_views(
         db,
@@ -424,12 +460,14 @@ def _builder_context(
                 generated_workday.current_draft_revision_id
                 or generated_workday.current_published_revision_id,
             )
+    builder_error = extra.pop("builder_error", request.query_params.get("error"))
+    editable_regions = _editable_regions(db, request)
     return context(
         request,
         new_mode=False,
         workday=workday,
         draft=draft,
-        regions=_editable_regions(db, request),
+        regions=editable_regions,
         day_type_options=_day_type_options(),
         tracks=list(
             db.scalars(
@@ -441,21 +479,17 @@ def _builder_context(
         positions=sorted(
             db.scalars(
                 select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name)
-            ), key=lambda position: position_order(position.name)
+            ), key=catalog_position_order
         ),
         assignments=assignments,
         people_groups_by_assignment=people_groups_by_assignment,
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
-        vehicles=sorted(
-            db.scalars(select(Vehicle).where(Vehicle.lifecycle == "ACTIVE")),
-            key=lambda vehicle: (
-                vehicle.home_region_id != workday.region_id,
-                vehicle.name.casefold(),
-            ),
-        ),
+        vehicles=_builder_vehicles(db, request, editable_regions, workday.region_id),
+        vehicle_region_names={region.id: region.name for region in editable_regions},
         transport_labels=TRANSPORT_LABELS,
         generated_travel=generated_travel,
+        builder_error=builder_error,
         **extra,
     )
 
@@ -745,10 +779,18 @@ async def save_workday_draft(
         )
     except DraftConflict as exc:
         db.rollback()
-        raise HTTPException(409, str(exc)) from exc
+        return templates.TemplateResponse(
+            "workday_builder.html",
+            _builder_context(db, request, workday, draft, builder_error=str(exc)),
+            status_code=409,
+        )
     except (KeyError, TypeError, ValueError) as exc:
         db.rollback()
-        raise HTTPException(400, str(exc)) from exc
+        return templates.TemplateResponse(
+            "workday_builder.html",
+            _builder_context(db, request, workday, draft, builder_error=str(exc)),
+            status_code=400,
+        )
     return RedirectResponse(f"/manage/workdays/{workday_id}/preview", status_code=303)
 
 

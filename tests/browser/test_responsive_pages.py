@@ -586,6 +586,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             "trial_workday_id": str(trial_workday.id),
             "head_on_position_id": str(head_on.id),
             "director_position_id": str(director.id),
+            "browser_person_id": str(person.id),
             "position_aware_person_id": str(other_person.id),
             "duplicate_person_ids": [str(duplicate_a.id), str(duplicate_b.id)],
         }
@@ -651,12 +652,10 @@ def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> No
     start = page.locator('input[name="start_time"]')
     if not start.is_visible():
         page.locator(".builder-inline-advanced > summary").click()
-    assert start.get_attribute("type") == "text"
-    assert start.get_attribute("inputmode") == "numeric"
-    for value in ("930", "0930", "9:30", "09:30"):
-        start.fill(value)
-        start.press("Tab")
-        assert start.input_value() == "09:30"
+    assert start.get_attribute("type") == "time"
+    start.fill("09:30")
+    start.press("Tab")
+    assert start.input_value() == "09:30"
     context.close()
 
 
@@ -1453,6 +1452,46 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         page.keyboard.press("Enter")
         new_person_picker = new_row.locator('[data-picker-kind="person"]')
         new_person_input = new_person_picker.locator("[data-picker-input]")
+        original_person_row = page.locator(
+            f'[data-assignment-row]:has([data-person-value][value="{values["browser_person_id"]}"])'
+        ).first
+        original_position = original_person_row.locator(
+            '[data-picker-kind="position"] [data-picker-input]'
+        ).input_value()
+        new_person_input.click()
+        new_person_input.fill("Browser Crew Member")
+        new_person_picker.locator(
+            f'[data-picker-option][data-value="{values["browser_person_id"]}"]'
+        ).click()
+        conflict_dialog = page.locator("[data-assignment-conflict-dialog]")
+        assert conflict_dialog.is_visible()
+        assert original_position in conflict_dialog.inner_text()
+        if width == 1280:
+            conflict_dialog.get_by_role("button", name="Cancel").click()
+            assert new_row.locator("[data-person-value]").input_value() == ""
+            assert original_person_row.locator("[data-person-value]").input_value() == values[
+                "browser_person_id"
+            ]
+            new_person_input.click()
+            new_person_input.fill("Browser Crew Member")
+            new_person_picker.locator(
+                f'[data-picker-option][data-value="{values["browser_person_id"]}"]'
+            ).click()
+            conflict_dialog.get_by_role("button", name="Keep both").click()
+            selected_values = page.locator("[data-person-value]").evaluate_all(
+                "nodes => nodes.map(node => node.value)"
+            )
+            assert selected_values.count(values["browser_person_id"]) == 2
+            new_person_input.click()
+            new_person_input.fill("Unassigned")
+            new_person_picker.get_by_text("Unassigned", exact=True).click()
+        else:
+            conflict_dialog.get_by_role("button", name="Move to this position").click()
+            assert original_person_row.locator("[data-person-value]").input_value() == ""
+            assert original_person_row.locator("[data-assignment-state]").input_value() == "TBC"
+            assert new_row.locator("[data-person-value]").input_value() == values[
+                "browser_person_id"
+            ]
         new_person_input.click()
         new_person_input.fill("")
         position_aware_option = new_person_picker.locator(
@@ -1832,6 +1871,14 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     page.goto(base_url + "/manage/catalog")
     assert page.locator(".brand > strong:first-child").inner_text() == configured_name
     assert page.get_by_text("Active Regions", exact=True).is_visible()
+    assert page.get_by_role("heading", name="Vehicles", exact=True).is_visible()
+    assert page.get_by_text("Add vehicle", exact=True).is_visible()
+    _assert_no_horizontal_overflow(page)
+    page.goto(base_url + "/manage/audit")
+    assert page.get_by_role("heading", name="Audit", exact=True).is_visible()
+    assert page.locator('select[name="region_id"]').is_visible()
+    assert page.locator('input[name="search"]').is_visible()
+    _assert_no_horizontal_overflow(page)
     assert not errors
     context.close()
 

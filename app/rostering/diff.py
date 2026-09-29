@@ -125,9 +125,23 @@ def publication_diff(
             continue
         assert old is not None and new is not None
         role = new.display_name_snapshot or old.display_name_snapshot
+        position_changed = (
+            old.base_position_id != new.base_position_id
+            or old.display_name_snapshot != new.display_name_snapshot
+        )
+        if position_changed:
+            changes.append(
+                PublicationChange(
+                    "assignment",
+                    "Position",
+                    old.display_name_snapshot,
+                    new.display_name_snapshot,
+                    f"Position changed from {old.display_name_snapshot} "
+                    f"to {new.display_name_snapshot}.",
+                    slot_key,
+                )
+            )
         for attribute, label in (
-            ("base_position_id", "Base position"),
-            ("display_name_snapshot", "Display position"),
             ("slot_index", "Slot number"),
             ("person_name_snapshot", "Person"),
             ("status", "Status"),

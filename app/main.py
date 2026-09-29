@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.accounts.routes import router as accounts_router
 from app.admin.routes import router as admin_router
+from app.audit.routes import router as audit_router
 from app.auth.factor_routes import router as factor_router
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.routes import router as auth_router
@@ -57,6 +58,7 @@ app.include_router(crew_router)
 app.include_router(admin_router)
 app.include_router(accounts_router)
 app.include_router(catalog_router)
+app.include_router(audit_router)
 
 
 @app.exception_handler(FreshAuthenticationRequired)

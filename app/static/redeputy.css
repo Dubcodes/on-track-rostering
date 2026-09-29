@@ -1250,3 +1250,14 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
   .capability-row { grid-template-columns: minmax(7rem, 1fr) minmax(8rem, 1fr) auto; }
   .capability-row small { display: none; }
 }
+.assignment-conflict-dialog {
+  width: min(32rem, calc(100vw - 2rem));
+  border: 0;
+  border-radius: var(--radius, 12px);
+  padding: 1.25rem;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 35%);
+}
+.assignment-conflict-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.assignment-conflict-dialog h2 { margin-top: 0; }

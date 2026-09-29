@@ -2,6 +2,8 @@
   "use strict";
   const form = document.querySelector("[data-workday-form]");
   if (!form) return;
+  const conflictDialog = form.querySelector("[data-assignment-conflict-dialog]");
+  let pendingConflict = null;
   const list = form.querySelector("[data-assignment-list]");
   const template = form.querySelector("[data-assignment-template]");
   let openPicker = null;
@@ -141,7 +143,6 @@
         const alreadySelected = [...list.querySelectorAll("[data-assignment-row]")].some((row) =>
           row !== picker.closest("[data-assignment-row]") && row.querySelector("[data-person-value]").value === person.id
         );
-        option.disabled = alreadySelected;
         const name = document.createElement("strong");
         name.textContent = person.label;
         if (person.same_date) {
@@ -156,7 +157,11 @@
         option.append(name);
         if (alreadySelected) {
           const selected = document.createElement("small");
-          selected.textContent = "Already assigned to another position";
+          const assignedRow = [...list.querySelectorAll("[data-assignment-row]")].find((row) =>
+            row !== picker.closest("[data-assignment-row]") && row.querySelector("[data-person-value]").value === person.id
+          );
+          const assignedPosition = assignedRow?.querySelector('[data-picker-kind="position"] [data-picker-input]')?.value || "another position";
+          selected.textContent = `Already assigned: ${assignedPosition}`;
           option.append(selected);
         }
         [person.context, person.hint].filter(Boolean).forEach((detail) => {
@@ -209,7 +214,7 @@
       empty.hidden = false;
     }
   };
-  const choose = (picker, option) => {
+  const applyPersonChoice = (picker, option) => {
     const row = picker.closest("[data-assignment-row]");
     const input = picker.querySelector("[data-picker-input]");
     input.value = option.dataset.label || "";
@@ -229,6 +234,55 @@
     closePicker(picker);
     refreshRow(row);
   };
+  const resetPersonRow = (row) => {
+    row.querySelector("[data-person-value]").value = "";
+    row.querySelector("[data-assignment-state]").value = "TBC";
+    const input = row.querySelector('[data-picker-kind="person"] [data-picker-input]');
+    input.value = "Unassigned";
+    input.dataset.selectedLabel = "Unassigned";
+    refreshRow(row);
+  };
+  const finishConflict = (action) => {
+    if (!pendingConflict) return;
+    const {picker, option, existingRow, input} = pendingConflict;
+    if (action === "move") resetPersonRow(existingRow);
+    if (action === "keep") {
+      const targetRow = picker.closest("[data-assignment-row]");
+      const standard = existingRow.querySelector("[data-standard-travel-check]").checked;
+      targetRow.querySelector("[data-standard-travel-check]").checked = standard;
+      targetRow.querySelector("[data-standard-travel-value]").value = standard ? "1" : "0";
+      ["accommodation_name", "hotel_to_track_minutes_override"].forEach((name) => {
+        targetRow.querySelector(`[name="${name}"]`).value = existingRow.querySelector(`[name="${name}"]`).value;
+      });
+    }
+    if (action !== "cancel") applyPersonChoice(picker, option);
+    pendingConflict = null;
+    conflictDialog.close();
+    input.focus();
+  };
+  const choose = (picker, option) => {
+    if (picker.dataset.pickerKind === "person" && option.dataset.value) {
+      const row = picker.closest("[data-assignment-row]");
+      const existingRow = [...list.querySelectorAll("[data-assignment-row]")].find((candidate) =>
+        candidate !== row && candidate.querySelector("[data-person-value]").value === option.dataset.value
+      );
+      if (existingRow) {
+        const input = picker.querySelector("[data-picker-input]");
+        pendingConflict = {picker, option, existingRow, input};
+        conflictDialog.querySelector("[data-conflict-person]").textContent = option.dataset.label || "This person";
+        conflictDialog.querySelector("[data-conflict-position]").textContent = existingRow.querySelector('[data-picker-kind="position"] [data-picker-input]').value || "another position";
+        closePicker(picker);
+        conflictDialog.showModal();
+        conflictDialog.querySelector("[data-conflict-move]").focus();
+        return;
+      }
+    }
+    applyPersonChoice(picker, option);
+  };
+  conflictDialog?.querySelector("[data-conflict-move]")?.addEventListener("click", () => finishConflict("move"));
+  conflictDialog?.querySelector("[data-conflict-keep]")?.addEventListener("click", () => finishConflict("keep"));
+  conflictDialog?.querySelector("[data-conflict-cancel]")?.addEventListener("click", () => finishConflict("cancel"));
+  conflictDialog?.addEventListener("cancel", (event) => { event.preventDefault(); finishConflict("cancel"); });
   const wirePicker = (picker) => {
     const input = picker.querySelector("[data-picker-input]");
     input.dataset.selectedLabel = input.value;

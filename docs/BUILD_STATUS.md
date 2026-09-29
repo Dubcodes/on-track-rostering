@@ -1,43 +1,37 @@
-# Build status — 2026-09-13
+# Build status — 2026-09-29
 
-## Current result
+## Current source and deployment boundary
 
-The Foundation is running in a real, private, isolated staging deployment at `https://ontrackrostering.dubcodesmedia.com`. The visibly deployed build is `ee8af0d5dcd215c6df02f113ef8c8bf43ee936f2`. PostgreSQL initialized successfully, the bootstrap Admin was created through the CLI, HTTPS access through the standard Cloudflare Tunnel works, password/PIN login succeeds, the secure authenticated session persists across navigation, and `/month` and `/settings` render against PostgreSQL-backed data.
+This checkpoint is based on exact qualified `main` SHA `031a9b144da564ce7c2ac1a9688f59c6df7e658c` (release-gate run `36503512199`). The final SHA and exact-head workflow for the Builder flexibility/operational-management checkpoint are recorded in the completion report after GitHub qualification. No staging or production deployment is part of this pass; the previously observed private staging deployment must not be inferred to contain newer source.
 
-This is verified deployment smoke evidence, not a completed functional staging qualification and not production-readiness approval. The operator matrix in `docs/STAGING_QUALIFICATION.md` records the remaining real-browser, role, workflow, restart, privacy, offline, notification, log, and recovery checks. Any source revision newer than the visibly deployed SHA still requires its own exact-head CI pass and a manual staging redeploy before its behavior is live.
+Local development and qualification remain Docker-free. PostgreSQL integration, Playwright, Compose validation, and production image construction are authoritative only when executed by the exact-head GitHub release gate unless a native/remote development PostgreSQL URL and local browser environment are explicitly available.
 
-## Staging findings closed in `ee8af0d`
+## Implemented
 
-Real staging exposed two integration defects. Standard Cloudflare Tunnel requests preserved the public `Host` and supplied `X-Forwarded-For`/`X-Forwarded-Proto` without requiring `X-Forwarded-Host`; the application had incorrectly required all four headers. Pydantic Settings also attempted JSON decoding of tuple-valued environment fields before the intended comma-separated validator ran.
+- Authoritative Workdays with private optimistic-versioned drafts, immutable publications, Preview → Publish, stable assignment slots, redacted human history, Open applications, direct immutable decline, cancellation lifecycle, and safe deletion of never-published drafts.
+- Unified Builder with Day identity, native time controls, Notes before collapsed Travel, live Position/Person/Vehicle search, standard Travel/hotel planning, assignment details, and HTML validation recovery.
+- A Person may hold multiple Positions on one Workday. The Builder presents Move, Keep both, or Cancel immediately; ordinary same-Workday duplication is no longer a server error.
+- Person/day Hours, reminder timing, personal timing, and generated Travel aggregate multiple Position rows once using earliest effective start and latest effective finish.
+- Persistent Base Position display order with deterministic legacy backfill/fallback and configured operational picker order.
+- Region-owned reusable Vehicle management for Admin and authorized Managers, including rental-style records, lifecycle, audit, and immutable assignment name snapshots.
+- Admin-global and Manager-region-scoped Audit workspace with Region/date/actor/action/text filtering and redacted structured detail. Sub-Manager and read-only roles have no audit access.
+- Consolidated Master Data, Crew, Accounts, Hours, Audit, Settings, external calendar/import/source management, configurable branding, provider-neutral racing evidence, Operations, TravelLegs, accommodation, notification delivery, and personal offline read models.
 
-`ee8af0d` permits a single valid `X-Forwarded-Host` when supplied and otherwise uses the single ordinary `Host`, only after the direct peer matches an explicit trusted-proxy CIDR and the forwarded client/protocol values validate. Ambiguous, comma-joined, malformed, and port-conflicting forwarding still fails safely. `NoDecode` now preserves raw comma-separated allowed-host and proxy-CIDR environment values for typed tuple validation.
+## Qualification baseline
 
-Exact-head GitHub release-gate run `34715787713` passed for `ee8af0d`: PostgreSQL 17.6 applied the full Alembic chain through `e72a19c5f40b`, a second `alembic upgrade head` was clean, the PostgreSQL-backed suite reported **82 passed with no skips**, and all **6 Playwright tests** passed. Python compile, Ruff, PostgreSQL-dialect SQL generation, `pip check`, `pip-audit --local`, JavaScript syntax, production/staging Compose validation, and the production image build also passed.
+The preceding exact-head gate at `031a9b1` passed PostgreSQL migration/repeated-upgrade qualification, **202 PostgreSQL-backed tests**, **27 Playwright tests** at 1280/430/375/320, compile, Ruff, Alembic PostgreSQL SQL generation, dependency integrity/audit, JavaScript syntax, production and staging Compose validation, and the production image build. This checkpoint must receive its own exact-head result before those claims transfer.
 
-## Foundation delivered
+## Outstanding product backlog
 
-- Standalone FastAPI/Jinja/SQLAlchemy application with PostgreSQL 17, append-only Alembic migrations, and no Re-Deputy runtime dependency.
-- Separate Users and rosterable People; scoped capability roles; final-Admin protection; pending-grant activation; trusted-device, fresh-auth, passkey, and optional TOTP controls.
-- Stable Workday identity, immutable published snapshots, private optimistic-versioned shared Manager drafts, structured Preview/diff/history, and atomic Publish.
-- Purpose-built employee Month/Day reads, event-only Contractor and private-note filtering, regional Crew View, Open-position applications, policy-driven immutable decline, and current-publication hours.
-- User-namespaced read-only offline data and an idempotent notification outbox/delivery worker separated from roster transactions.
-- Persisted Admin-only global branding and public-signup policy.
-- Separate production and staging deployment artifacts. The live staging app and database use their own service names, volume, network, credentials, and data.
-
-## Current automated evidence boundaries
-
-- CI PostgreSQL coverage includes simultaneous first-draft creation, stale detail and assignment mutations, stale editor state after Publish, exact `lock_version` conflict behavior, concurrent Publish/outbox behavior, constraints, decline immutability, and notification claiming.
-- CI Playwright covers 1280/430/375/320 layouts and offline personal-Day cases, but automated browser evidence is not a substitute for the real-device/operator matrix.
-- Local PostgreSQL remains pending when no disposable `ONTRACK_TEST_DATABASE_URL` is configured. SQLite deterministic tests are not presented as PostgreSQL qualification.
-- Docker is not run on the Windows development machine. Compose and image evidence comes from GitHub CI.
-
-## Explicitly pending or deferred
-
-- Full real functional staging qualification is pending. In particular: real passkey and TOTP ceremonies; the complete role/direct-request matrix; roster lifecycle, stale-write, Open-position, decline, privacy, hours, physical offline, responsive-device, restart/persistence, and log review.
-- Real Web Push delivery remains pending unless staging-specific VAPID credentials are deliberately configured. Reminder delivery requires `python -m app.cli deliver-notifications` under a durable server-side scheduler.
-- Recovery codes are not implemented.
-- Production backup/restore rehearsal, production secrets/hostname/RP identity/VAPID, monitoring, scheduler, release controls, and immutable release artifact remain production-promotion work.
-- Operations/Travel, Accommodation, provider ingest, full vehicle operations, abandoned/rescheduled workflow, management-only crew-note expansion, logo upload, and major recovery redesign remain outside the current Foundation pass.
+- Leave / Person unavailability with a Manager override warning integrated into the shared conflict dialog.
+- Contractor Manager invitation workflow and temporary-account expiry based on latest future assignment, with inactivity extension.
+- Automatic Race Day timing derivation: first-race floor-to-quarter, setup lead, on-track, Vehicle travel call time, last-race ceil-to-quarter, pack-up, and return travel.
+- Configurable fortnight anchor in application settings and Team Hours visual distribution bars.
+- Editable simple roster Position presets; later optional historical suggestions without a complex prediction rules matrix.
+- Full abandoned/rescheduled Workday workflow and employee availability response after moved or abandoned days.
+- Remaining responsive/layout polish and full physical-device/operator staging qualification.
+- Real Web Push delivery with deployment-owned VAPID/scheduler configuration; real passkey/TOTP ceremonies; complete role/direct-request/privacy/offline/restart/log matrix.
+- Recovery codes, monitored production scheduler, immutable release promotion, production secrets/RP identity, and backup/restore rehearsal.
 
 ## Known architecture constraint
 
@@ -45,4 +39,4 @@ Each Workday owns one shared `current_draft_revision_id`; independent per-Manage
 
 ## Release rule
 
-During active development the isolated staging stack may intentionally follow `main`, but each redeploy follows local checks and a successful exact-head GitHub gate. Production promotion is a separate freeze: complete the real staging matrix, select one known-green exact SHA, and use an immutable tag and/or immutable image. A green CI run alone does not prove a live redeploy or production readiness.
+Every source checkpoint requires a successful exact-head GitHub release gate. Deployment is separate and explicit: no green CI run proves a staging redeploy or production promotion.

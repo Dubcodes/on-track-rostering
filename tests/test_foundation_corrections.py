@@ -594,12 +594,16 @@ def test_publication_diff_is_complete_and_redacts_note_contents(db) -> None:  # 
         "Normal day notes",
         "Added role",
         "Removed role",
-        "Camera 2 Base position",
-        "Camera 2 Display position",
+            "Position",
         "Camera 2 Slot number",
         "Camera 2 Vehicle",
         "Camera 2 Accommodation",
     } <= labels
+    position_changes = [change for change in changes if change.label == "Position"]
+    assert len(position_changes) == 1
+    assert position_changes[0].summary == "Position changed from Camera to Camera 2."
+    assert str(old_position.id) not in position_changes[0].summary
+    assert str(new_position.id) not in position_changes[0].summary
     summaries = " ".join(change.summary for change in changes)
     assert "Old sensitive" not in summaries and "New sensitive" not in summaries
     assert "Old private" not in summaries and "New private" not in summaries

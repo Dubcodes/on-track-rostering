@@ -48,6 +48,7 @@ from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor
 from app.notices.service import prominent_notice, recent_notices, relevant_notice_region_ids
 from app.notifications.models import NotificationPreference, PushSubscription
 from app.notifications.service import record_event
+from app.positions.ordering import catalog_position_order
 from app.positions.service import set_preference_signal
 from app.rostering.models import (
     AllowanceIndicator,
@@ -731,8 +732,9 @@ def upcoming_work_api(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, db: Session = Depends(get_db)):
-    positions = list(
-        db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name))
+    positions = sorted(
+        db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE")),
+        key=catalog_position_order,
     )
     signals = {}
     if request.state.actor.person_id:

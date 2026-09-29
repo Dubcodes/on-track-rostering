@@ -19,10 +19,11 @@ with warnings.catch_warnings():
     from fastapi.testclient import TestClient
 
 from app.audit.models import AuditEvent, HumanChange
+from app.audit.service import record_audit
 from app.auth.factors import begin_totp
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
-from app.catalog.models import BasePosition, CrewGroup, Region, Track
+from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
 from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
@@ -88,7 +89,9 @@ def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None: 
         "work_date": "2026-09-20", "day_type": "RACE_DAY:THOROUGHBRED",
         "csrf_token": csrf,
     })
-    assert forged.status_code == 400
+    assert forged.status_code == 200
+    assert "Roster not saved" in forged.text
+    assert '"detail"' not in forged.text
     with factory() as db:
         assert counts_before == (
             len(list(db.scalars(select(Workday.id)))),
@@ -2614,3 +2617,71 @@ def test_delete_never_published_workday_cleans_generated_travel_but_keeps_source
     assert unauthorized.status_code == 403
     with factory() as db:
         assert db.get(Workday, outside_id) is not None
+
+
+def test_vehicle_management_and_audit_are_region_scoped(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/catalog/vehicles",
+        data={"csrf_token": csrf, "name": "Rental Van - October",
+              "home_region_id": str(region_id), "category": "Rental",
+              "model": "Transit", "fuel_type": "Diesel"},
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+    with factory() as db:
+        vehicle = db.scalar(select(Vehicle).where(Vehicle.name == "Rental Van - October"))
+        assert vehicle and vehicle.home_region_id == region_id
+        vehicle_id = vehicle.id
+        other_region = db.scalar(select(Region).where(Region.id != region_id))
+        manager_user = db.scalar(select(User).where(User.email == "manager@example.test"))
+        record_audit(db, "regional.visible", "vehicle", vehicle.id, manager_user.id,
+                     region_id=region_id,
+                     detail={"credential_token": "never-show", "name": vehicle.name})
+        record_audit(db, "regional.hidden", "vehicle", vehicle.id, manager_user.id,
+                     region_id=other_region.id)
+        db.commit()
+        other_region_id = other_region.id
+    archived = manager.post(
+        f"/manage/catalog/vehicles/{vehicle_id}",
+        data={"csrf_token": csrf, "name": "Rental Van - October",
+              "home_region_id": str(region_id), "category": "Rental",
+              "model": "Transit", "fuel_type": "Diesel", "lifecycle": "ARCHIVED"},
+        follow_redirects=False,
+    )
+    assert archived.status_code == 303
+    with factory() as db:
+        assert db.get(Vehicle, vehicle_id).lifecycle == "ARCHIVED"
+    rejected = manager.post(
+        "/manage/catalog/vehicles",
+        data={"csrf_token": csrf, "name": "Unauthorized Van",
+              "home_region_id": str(other_region_id), "category": "Rental"},
+    )
+    assert rejected.status_code == 403
+    audit = manager.get("/manage/audit")
+    assert audit.status_code == 200
+    assert "regional.visible" in audit.text and "regional.hidden" not in audit.text
+    assert "never-show" not in audit.text and "[REDACTED]" in audit.text
+    submanager = TestClient(app)
+    _login(submanager, "submanager@example.test", "445566")
+    assert submanager.get("/manage/audit").status_code == 403
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+    global_audit = admin.get("/manage/audit")
+    assert "regional.visible" in global_audit.text and "regional.hidden" in global_audit.text
+
+
+def test_position_display_order_controls_builder_picker(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, _person_id) = routed_db
+    with factory() as db:
+        group = db.scalar(select(CrewGroup))
+        db.get(BasePosition, position_id).display_order = 90
+        db.add(BasePosition(name="Custom First", crew_group_id=group.id, display_order=1))
+        db.commit()
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+    page = manager.get(f"/manage/workdays/new?region_id={region_id}")
+    assert page.status_code == 200
+    assert page.text.index('data-label="Custom First"') < page.text.index('data-label="CCU"')

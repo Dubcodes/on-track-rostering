@@ -116,6 +116,17 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
             explanation="Manually confirmed rescheduled-day entitlement.",
         )
     )
+    db.add(
+        Assignment(
+            revision_id=labour_day.id,
+            display_name_snapshot="Sound/VT",
+            person_id=person.id,
+            person_name_snapshot=person.display_name,
+            status="ASSIGNED",
+            start_time=time(6),
+            end_time=time(20),
+        )
+    )
     db.commit()
 
     rows = published_hours(
@@ -125,8 +136,8 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
         end=date(2026, 11, 1),
         management=False,
     )
-    assert [row["minutes"] for row in rows] == [720, 180]
-    assert group_people(rows)[0]["duration"] == "15h"
+    assert [row["minutes"] for row in rows] == [840, 180]
+    assert group_people(rows)[0]["duration"] == "17h"
     assert rows[0]["holiday"] == "Labour Day"
     assert {item["kind"] for item in rows[0]["allowances"]} == {"LUNCH", "RESCHEDULED"}
     assert "no automatic break deduction" in rows[0]["raw"]
@@ -152,8 +163,8 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
     assert personal_rows[0]["minutes"] == 600
     assert personal_rows[0]["personal_override"] is True
     assert (personal_rows[0]["normal_start"], personal_rows[0]["normal_end"]) == (
-        time(7, 30),
-        time(19, 30),
+        time(6),
+        time(20),
     )
     management_rows = published_hours(
         db,
@@ -162,7 +173,7 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
         end=date(2026, 11, 1),
         management=True,
     )
-    assert management_rows[0]["minutes"] == 720
+    assert management_rows[0]["minutes"] == 840
     assert management_rows[0]["personal_override"] is False
     db.get(Workday, labour_day.workday_id).status = "CANCELLED"
     db.commit()

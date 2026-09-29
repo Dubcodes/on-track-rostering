@@ -11,7 +11,7 @@ from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.policy import can_administer_region, require_admin
 from app.auth.security import verify_csrf
-from app.catalog.models import BasePosition, CrewGroup, Region, Track
+from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
 from app.catalog.service import (
     allocate_palette_slot,
     business_reference_tables,
@@ -20,6 +20,7 @@ from app.catalog.service import (
 from app.core.database import get_db
 from app.core.enums import DeclinePolicy, Lifecycle
 from app.core.forms import controlled_integrity, optional_uuid
+from app.positions.ordering import catalog_position_order
 from app.web import context, templates
 
 router = APIRouter(prefix="/manage/catalog")
@@ -54,6 +55,10 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
         db.scalars(select(Track).where(Track.region_id.in_(region_ids)).order_by(Track.name))
     )
     active_region_ids = {row.id for row in active_regions}
+    vehicle_statement = select(Vehicle).order_by(Vehicle.name)
+    if not request.state.actor.is_admin:
+        vehicle_statement = vehicle_statement.where(Vehicle.home_region_id.in_(region_ids))
+    vehicles = list(db.scalars(vehicle_statement))
     return templates.TemplateResponse(
         "catalog.html",
         context(
@@ -71,7 +76,8 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
                 if row.lifecycle == Lifecycle.ARCHIVED.value or row.region_id not in active_region_ids
             ],
             groups=list(db.scalars(select(CrewGroup).order_by(CrewGroup.name))),
-            positions=list(db.scalars(select(BasePosition).order_by(BasePosition.name))),
+            positions=sorted(db.scalars(select(BasePosition)), key=catalog_position_order),
+            vehicles=vehicles,
             decline_policies=[item.value for item in DeclinePolicy],
         ),
     )
@@ -352,7 +358,7 @@ def update_group(group_id: uuid.UUID, request: Request, name: str = Form(...), l
 
 
 @router.post("/positions/{position_id}")
-def update_position(position_id: uuid.UUID, request: Request, name: str = Form(...), crew_group_id: str = Form(""), lifecycle: str = Form(...), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def update_position(position_id: uuid.UUID, request: Request, name: str = Form(...), crew_group_id: str = Form(""), display_order: int | None = Form(None), lifecycle: str = Form(...), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     require_admin(request.state.actor)
     verify_csrf(request, csrf_token)
     row = db.get(BasePosition, position_id)
@@ -371,8 +377,14 @@ def update_position(position_id: uuid.UUID, request: Request, name: str = Form(.
     )
     if duplicate:
         raise HTTPException(409, "A base position in that crew group already uses that name.")
+    if display_order is not None and display_order < 0:
+        raise HTTPException(400, "Position order must be zero or greater.")
+    previous = {"name": row.name, "display_order": row.display_order, "lifecycle": row.lifecycle}
     row.name, row.lifecycle, row.crew_group_id = clean_name, clean_lifecycle, group_id
-    record_audit(db, "position.updated", "base_position", row.id, request.state.user.id)
+    row.display_order = display_order
+    record_audit(db, "position.updated", "base_position", row.id, request.state.user.id,
+                 detail={"previous": previous, "name": row.name, "display_order": row.display_order,
+                         "lifecycle": row.lifecycle})
     with controlled_integrity(db, "A base position in that crew group already uses that name."):
         db.commit()
     return RedirectResponse("/manage/catalog#positions", status_code=303)
@@ -383,15 +395,19 @@ def create_position(
     request: Request,
     name: str = Form(...),
     crew_group_id: str = Form(""),
+    display_order: int | None = Form(None),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     require_admin(request.state.actor)
     verify_csrf(request, csrf_token)
+    if display_order is not None and display_order < 0:
+        raise HTTPException(400, "Position order must be zero or greater.")
     group = _active_group(db, crew_group_id)
     row = BasePosition(
         name=_name(name, 100),
         crew_group_id=group.id if group else None,
+        display_order=display_order,
     )
     duplicate = db.scalar(
         select(BasePosition.id).where(
@@ -414,3 +430,77 @@ def create_position(
         )
         db.commit()
     return RedirectResponse("/manage/catalog#positions", status_code=303)
+
+
+def _vehicle_region(db: Session, actor, region_id: uuid.UUID) -> Region:
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active home region.")
+    if not can_administer_region(actor, region.id):
+        raise HTTPException(403, "Regional administration authority required.")
+    return region
+
+
+@router.post("/vehicles")
+def create_vehicle(
+    request: Request,
+    name: str = Form(...),
+    home_region_id: uuid.UUID = Form(...),
+    category: str = Form("Operational"),
+    model: str = Form(""),
+    fuel_type: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    _vehicle_region(db, request.state.actor, home_region_id)
+    row = Vehicle(name=_name(name, 100), home_region_id=home_region_id,
+                  category=_name(category, 80), model=model.strip()[:100] or None,
+                  fuel_type=fuel_type.strip()[:40] or None)
+    with controlled_integrity(db, "A vehicle already uses that name."):
+        db.add(row)
+        db.flush()
+        record_audit(db, "vehicle.created", "vehicle", row.id, request.state.user.id,
+                     region_id=row.home_region_id,
+                     detail={"name": row.name, "category": row.category, "model": row.model})
+        db.commit()
+    return RedirectResponse("/manage/catalog#vehicles", status_code=303)
+
+
+@router.post("/vehicles/{vehicle_id}")
+def update_vehicle(
+    vehicle_id: uuid.UUID,
+    request: Request,
+    name: str = Form(...),
+    home_region_id: uuid.UUID = Form(...),
+    category: str = Form("Operational"),
+    model: str = Form(""),
+    fuel_type: str = Form(""),
+    lifecycle: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    row = db.get(Vehicle, vehicle_id)
+    if not row:
+        raise HTTPException(404)
+    if not request.state.actor.is_admin and (
+        row.home_region_id is None
+        or not can_administer_region(request.state.actor, row.home_region_id)
+    ):
+        raise HTTPException(403, "Regional administration authority required.")
+    _vehicle_region(db, request.state.actor, home_region_id)
+    previous = {"name": row.name, "home_region_id": str(row.home_region_id),
+                "category": row.category, "model": row.model, "fuel_type": row.fuel_type,
+                "lifecycle": row.lifecycle}
+    row.name, row.home_region_id = _name(name, 100), home_region_id
+    row.category, row.model = _name(category, 80), model.strip()[:100] or None
+    row.fuel_type, row.lifecycle = fuel_type.strip()[:40] or None, _lifecycle(lifecycle)
+    record_audit(db, "vehicle.updated", "vehicle", row.id, request.state.user.id,
+                 region_id=row.home_region_id,
+                 detail={"previous": previous, "name": row.name, "home_region_id": str(row.home_region_id),
+                         "category": row.category, "model": row.model, "fuel_type": row.fuel_type,
+                         "lifecycle": row.lifecycle})
+    with controlled_integrity(db, "A vehicle already uses that name."):
+        db.commit()
+    return RedirectResponse("/manage/catalog#vehicles", status_code=303)

@@ -64,3 +64,15 @@ Manager and Admin may administer regional tracks and scoped accounts. Region pol
 ## Hours are derived from publication snapshots
 
 Fortnight views calculate from the configured anchor and current published assignment spans. They do not infer breaks or deduct them, handle overnight spans, and show holiday and allowance markers without treating allowances as time. Employee access is personal; management access follows explicit regional visibility policy.
+
+## Flexible multi-Position participation
+
+A Person may deliberately hold multiple Positions on one Workday. The Builder warns at selection time instead of prohibiting the save and requires an explicit Move, Keep both, or Cancel decision. Stable assignment slots remain independent roster facts, while Person/day participation is aggregated once from the earliest effective start to latest effective finish. Hours, reminders, personal timing, and generated Travel therefore never sum duplicate Position rows as separate worked days.
+
+## Catalogue ordering and regional operational records
+
+Base Position display order is editable catalogue data, not business identity. A nullable numeric order controls current operational selectors; the historical name-based sequence remains only a deterministic fallback and migration backfill. Vehicles are reusable regional catalogue records administered by Admin or the responsible regional Manager, while assignment snapshots protect historical presentation.
+
+## Audit reads remain redacted and scoped
+
+`AuditEvent` is security-redacted at write time. Admin may read the global audit stream; Managers may read only Regions they administer. Sub-Managers and read-only roles do not gain administrative audit access, and the UI presents human summaries with structured redacted detail rather than raw event JSON.

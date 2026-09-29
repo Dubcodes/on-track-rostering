@@ -566,14 +566,6 @@ def add_assignment(
         raise ValueError("Select an active base position.")
     if person and person.lifecycle != "ACTIVE":
         raise ValueError("Select an active person.")
-    if person and db.scalar(
-        select(Assignment.id).where(
-            Assignment.revision_id == draft.id,
-            Assignment.person_id == person.id,
-            Assignment.status == AssignmentStatus.ASSIGNED.value,
-        )
-    ):
-        raise ValueError(f"{person.display_name} can hold only one position on this Workday.")
     if item.status not in {status.value for status in AssignmentStatus}:
         raise ValueError("Invalid assignment status.")
     name = position.name if position else "Crew"
@@ -634,15 +626,6 @@ def update_assignment(
     person = db.get(Person, person_id) if person_id else None
     if person and person.lifecycle != "ACTIVE":
         raise ValueError("Select an active person.")
-    if person and db.scalar(
-        select(Assignment.id).where(
-            Assignment.revision_id == draft.id,
-            Assignment.person_id == person.id,
-            Assignment.status == AssignmentStatus.ASSIGNED.value,
-            Assignment.id != assignment.id,
-        )
-    ):
-        raise ValueError(f"{person.display_name} can hold only one position on this Workday.")
     if status not in {item.value for item in AssignmentStatus}:
         raise ValueError("Invalid assignment status.")
     if base_position_id is not _UNCHANGED:
@@ -760,7 +743,6 @@ def save_draft(
         AssignmentStatus.TBC.value,
     }
     prepared: list[tuple[DraftAssignmentInput, BasePosition | None, Person | None]] = []
-    assigned_people: set[uuid.UUID] = set()
     for item in assignments:
         if item.assignment_id is None and item.base_position_id is None:
             raise ValueError("Select a position for each new assignment.")
@@ -781,10 +763,6 @@ def save_draft(
             raise ValueError("Invalid assignment status.")
         if item.person_id is None and item.status == AssignmentStatus.ASSIGNED.value:
             raise ValueError("Choose a person, Open position, or Unassigned.")
-        if person and item.person_id in assigned_people:
-            raise ValueError(f"{person.display_name} can hold only one position on this Workday.")
-        if person:
-            assigned_people.add(person.id)
         if item.slot_index is not None and item.slot_index < 1:
             raise ValueError("Slot index must be at least 1.")
         if item.transport_mode not in TRANSPORT_MODES:

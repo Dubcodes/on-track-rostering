@@ -38,3 +38,10 @@ def position_order(name: str) -> tuple[int, int, int, str]:
     # Keep assistants adjacent to their parent rather than among custom roles.
     assist = int(stem.endswith("assist")) if rank in {5, 6} else 0
     return rank, index if rank != 100 else 0, assist, key
+
+
+def catalog_position_order(position: object) -> tuple[int, int, int, int, str]:
+    """Prefer catalog order while retaining the deterministic legacy fallback."""
+    configured = getattr(position, "display_order", None)
+    fallback = position_order(str(getattr(position, "name", "")))
+    return (0, configured, 0, 0, fallback[-1]) if configured is not None else (1, *fallback)

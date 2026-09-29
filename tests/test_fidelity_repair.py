@@ -31,7 +31,7 @@ from app.rostering.models import (
     Workday,
     WorkdayRevision,
 )
-from app.rostering.participation import active_published_assignments
+from app.rostering.participation import active_published_assignments, person_day_participation
 from app.rostering.service import (
     DraftAssignmentInput,
     DraftDetailsInput,
@@ -303,8 +303,7 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     assert next(row for row in race_rows if row.person_id == local_person.id).start_time == time(8, 50)
     assert (draft.start_time, draft.end_time) == (time(8, 30), time(22, 30))
     db.refresh(workday)
-    with pytest.raises(ValueError, match="only one position"):
-        save_draft(
+    save_draft(
             db,
             workday_id=workday.id,
             draft_id=draft.id,
@@ -322,6 +321,15 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
                 race_count=None,
                 day_note="",
                 change_reason="",
+                    start_origin="Clow Place",
+                    finish_destination="Clow Place",
+                    standard_travel_enabled=True,
+                    travel_departure_time=time(12),
+                    travel_to_hotel_minutes=300,
+                    default_hotel="Beachfront Hotel",
+                    hotel_to_track_minutes=30,
+                    return_travel_minutes=300,
+                    pack_up_minutes=60,
             ),
             assignments=[
                 DraftAssignmentInput(
@@ -329,10 +337,22 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
                     slot_index=None,
                     person_id=person.id,
                     status="ASSIGNED",
+                        uses_standard_travel=True,
+                        accommodation_name="Alternative Lodge",
+                        hotel_to_track_minutes_override=15,
                 )
                 for position in (eng, ccu)
             ],
         )
+    multi_rows = list(db.scalars(select(Assignment).where(
+        Assignment.revision_id == draft.id, Assignment.person_id == person.id)))
+    assert {row.display_name_snapshot for row in multi_rows} == {"ENG", "CCU1"}
+    participation = person_day_participation(draft, multi_rows)
+    assert participation.role_summary == "CCU1 + ENG"
+    assert participation.minutes == 825
+    travel_rows = list(db.scalars(select(Assignment).where(
+        Assignment.revision_id == travel_revision.id, Assignment.person_id == person.id)))
+    assert len(travel_rows) == 1
     db.commit()
     conflicting_travel = Workday(
         region_id=region.id,
