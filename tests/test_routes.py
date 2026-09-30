@@ -2395,7 +2395,8 @@ def test_regional_directory_catalog_authority_theme_and_upcoming_cross_month(rou
     assert 'data-presentation="unconfirmed"' in cross_region_month.text
     assert "Your rostered week" not in cross_region_month.text
     assert 'class="weekday weekday-total">Week</div>' in cross_region_month.text
-    assert "45h 0m" in cross_region_month.text
+    visible_week_days = min(len(dates), 7 - dates[0].weekday())
+    assert f"{visible_week_days * 9}h 0m" in cross_region_month.text
     january = employee_client.get("/month?year=2026&month=1")
     assert 'title="Auckland Anniversary Day"' in january.text
 
