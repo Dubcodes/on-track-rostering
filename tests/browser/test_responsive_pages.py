@@ -2172,6 +2172,7 @@ def test_race_day_builder_live_timing_and_override_resets(browser_site, width: i
     assert return_travel.input_value() == "30"
     first_race.fill("12:24")
     last_race.fill("16:47")
+    page.locator(".builder-travel-panel").evaluate("element => element.open = true")
     pack_up.fill("60")
     return_travel.fill("30")
     assert on_track.input_value() == "10:15"
