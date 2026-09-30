@@ -20,7 +20,7 @@ from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
 from app.core.database import Base, SessionLocal, engine
 from app.core.enums import CapabilitySignal, Role
-from app.core.time import utcnow
+from app.core.time import local_today, utcnow
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
@@ -161,22 +161,22 @@ def browser_site():  # type: ignore[no-untyped-def]
                 ),
                 PersonUnavailability(
                     person_id=leave_managed_person.id,
-                    start_date=date.today() - timedelta(days=1),
-                    end_date=date.today() + timedelta(days=2),
+                    start_date=local_today() - timedelta(days=1),
+                    end_date=local_today() + timedelta(days=2),
                     note="Private browser leave note",
                     created_by_user_id=manager.id,
                 ),
                 PersonUnavailability(
                     person_id=other_person.id,
-                    start_date=date.today() - timedelta(days=1),
-                    end_date=date.today() + timedelta(days=2),
+                    start_date=local_today() - timedelta(days=1),
+                    end_date=local_today() + timedelta(days=2),
                     note="Builder-only private leave note",
                     created_by_user_id=manager.id,
                 ),
                 PersonUnavailability(
                     person_id=duplicate_a.id,
-                    start_date=date.today() - timedelta(days=1),
-                    end_date=date.today() + timedelta(days=2),
+                    start_date=local_today() - timedelta(days=1),
+                    end_date=local_today() + timedelta(days=2),
                     note="Another private browser note",
                     created_by_user_id=manager.id,
                 ),
@@ -189,7 +189,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             workday_id=workday.id,
             revision_number=1,
             state="PUBLISHED",
-            work_date=date.today(),
+            work_date=local_today(),
             track_id=track.id,
             track_name_snapshot=track.name,
 
@@ -281,7 +281,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             workday_id=cross_workday.id,
             revision_number=1,
             state="PUBLISHED",
-            work_date=date.today(),
+            work_date=local_today(),
             track_id=cross_track.id,
             track_name_snapshot=cross_track.name,
 
@@ -315,7 +315,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             workday_id=travel_workday.id,
             revision_number=1,
             state="PUBLISHED",
-            work_date=date.today().replace(day=8),
+            work_date=local_today().replace(day=8),
             track_name_snapshot="Operations Transit",
 
             title="Travel to race meeting",
@@ -354,7 +354,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             workday_id=open_workday.id,
             revision_number=1,
             state="PUBLISHED",
-            work_date=date.today().replace(day=22),
+            work_date=local_today().replace(day=22),
             track_name_snapshot="Browser Track Open Day",
 
             title="Open race day",
@@ -405,7 +405,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             ]
         )
         external_event = ExternalCalendarEvent(
-            event_date=date.today(),
+            event_date=local_today(),
             track_id=track.id,
             external_track_name=track.name,
             discipline="THOROUGHBRED",
@@ -418,7 +418,7 @@ def browser_site():  # type: ignore[no-untyped-def]
         db.add(external_event)
         db.flush()
         linked_race_event = ExternalCalendarEvent(
-            event_date=date.today(),
+            event_date=local_today(),
             track_id=track.id,
             external_track_name=track.name,
             discipline="HARNESS",
@@ -432,7 +432,7 @@ def browser_site():  # type: ignore[no-untyped-def]
         db.flush()
         workday.external_event_id = linked_race_event.id
         trial_event = ExternalCalendarEvent(
-            event_date=date.today() + timedelta(days=1),
+            event_date=local_today() + timedelta(days=1),
             track_id=track.id,
             external_track_name=track.name,
             discipline="THOROUGHBRED",
@@ -487,7 +487,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                         source_track_name="Unmatched Browser Track",
                     payload_hash=uuid.uuid4().hex,
                     parsed_facts={
-                        "event_date": date.today().isoformat(),
+                        "event_date": local_today().isoformat(),
                         "discipline": "HARNESS",
                         "event_kind": "TRIAL",
                     },
@@ -500,7 +500,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                         source_track_name=track.name,
                         payload_hash=uuid.uuid4().hex,
                         parsed_facts={
-                            "event_date": (date.today() + timedelta(days=2)).isoformat(),
+                            "event_date": (local_today() + timedelta(days=2)).isoformat(),
                             "discipline": "HARNESS",
                             "event_kind": "TRIAL",
                         },
@@ -514,7 +514,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                             source_track_name="Unmatched Browser Track",
                             payload_hash=uuid.uuid4().hex,
                             parsed_facts={
-                                "event_date": (date.today() + timedelta(days=index + 1)).isoformat(),
+                                "event_date": (local_today() + timedelta(days=index + 1)).isoformat(),
                                 "discipline": "HARNESS",
                                 "event_kind": "RACE" if index % 2 else "TRIAL",
                                 "venue_confidence": "EXPLICIT",
@@ -530,7 +530,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                         source_track_name="Auckland Trotting Club Browser",
                         payload_hash=uuid.uuid4().hex,
                         parsed_facts={
-                            "event_date": date.today().isoformat(),
+                            "event_date": local_today().isoformat(),
                             "discipline": "HARNESS",
                             "event_kind": "RACE",
                             "venue_confidence": "CLUB_ONLY",
@@ -544,7 +544,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                         source_track_name="Create Browser Venue",
                         payload_hash=uuid.uuid4().hex,
                         parsed_facts={
-                            "event_date": date.today().isoformat(),
+                            "event_date": local_today().isoformat(),
                             "discipline": "THOROUGHBRED",
                             "event_kind": "RACE",
                             "venue_confidence": "EXPLICIT",
@@ -1796,7 +1796,7 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
         ).all()
     page.get_by_role("button", name="Publish roster").click()
     page.wait_for_url(f"**/day/{values['trial_workday_id']}")
-    assert str((date.today() + timedelta(days=1)).year) in page.locator("h1").first.inner_text()
+    assert str((local_today() + timedelta(days=1)).year) in page.locator("h1").first.inner_text()
     assert page.get_by_text("First trial", exact=True).is_visible()
     assert page.get_by_text(updated_time, exact=True).is_visible()
     assert page.get_by_text("First race", exact=True).count() == 0
@@ -1941,7 +1941,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     assert page.locator(".month-nav > strong").inner_text() == "October 2026"
     page.get_by_role("link", name="Current month roster").click()
     page.wait_for_url(base_url + "/month")
-    assert page.locator(".month-nav > strong").inner_text() == date.today().strftime("%B %Y")
+    assert page.locator(".month-nav > strong").inner_text() == local_today().strftime("%B %Y")
     _capture_page(page, f"brand-current-month-return-{width}.png")
     assert not errors
     manager_context.close()
@@ -2017,7 +2017,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
         form={
             "region_id": values["region_id"],
             "category": "RACE_DAY",
-            "work_date": date.today().isoformat(),
+            "work_date": local_today().isoformat(),
             "csrf_token": csrf,
         },
     )
