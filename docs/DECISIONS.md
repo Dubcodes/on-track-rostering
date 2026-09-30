@@ -80,3 +80,7 @@ Base Position display order is editable catalogue data, not business identity. A
 ## Leave is an operational warning
 
 Person leave/unavailability is an inclusive whole-date scheduling signal, not an HR, payroll, entitlement, or approval system. It never rewrites an existing roster and never makes a Person ineligible. Authorized Managers may deliberately roster someone on leave after an explicit shared-dialog warning. The date range is visible to permitted roster builders; arbitrary management note text remains confined to scoped Admin/Manager leave administration and is excluded from audit detail and employee-facing data.
+
+## Race Day timing is derived, snapshotted, and explicitly overridable
+
+Race Day operational timing is derived by default from source programme times, Region setup lead, the Workday's Track-travel snapshot, Pack-up, and Return travel. Managers remain authoritative: deliberate Start, On track, Track travel, and Finish overrides are explicitly tracked and survive revision cloning. Published history never consults the current Track master default. Client calculation is feedback only; the save service recalculates non-overridden values from validated database policy and draft inputs.

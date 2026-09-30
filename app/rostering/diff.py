@@ -62,6 +62,7 @@ def publication_diff(
             ("track_name_snapshot", "Track"),
             ("start_time", "Start"),
             ("on_track_time", "On-track time"),
+            ("track_travel_minutes", "Track travel"),
             ("first_trial_time", "First trial"),
             ("last_trial_time", "Last trial"),
             ("first_race_time", "First race"),

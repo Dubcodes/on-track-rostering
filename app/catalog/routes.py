@@ -119,7 +119,7 @@ def _active_group(db: Session, raw_id: str) -> CrewGroup | None:
 
 
 @router.post("/tracks")
-def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str = Form(...), map_reference: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str = Form(...), map_reference: str = Form(""), default_travel_minutes: int | None = Form(None), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     verify_csrf(request, csrf_token)
     region = db.get(Region, region_id)
     if not region or region.lifecycle != Lifecycle.ACTIVE.value:
@@ -127,23 +127,26 @@ def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str =
     if not can_administer_region(request.state.actor, region_id):
         raise HTTPException(403, "Regional administration authority required.")
     clean_name = _name(name, 120)
+    if default_travel_minutes is not None and not 0 <= default_travel_minutes <= 1440:
+        raise HTTPException(400, "Default travel must be between 0 and 1440 minutes.")
     if normalized_track_match(db, region_id, clean_name):
         raise HTTPException(409, "A track in that region already uses that normalized name.")
     try:
         slot = allocate_palette_slot(db, region_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    row = Track(region_id=region_id, name=clean_name, palette_slot=slot, map_reference=map_reference.strip()[:500] or None)
+    row = Track(region_id=region_id, name=clean_name, palette_slot=slot, map_reference=map_reference.strip()[:500] or None, default_travel_minutes=default_travel_minutes)
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.add(row)
         db.flush()
-        record_audit(db, "track.created", "track", row.id, request.state.user.id, region_id=region_id)
+        record_audit(db, "track.created", "track", row.id, request.state.user.id, region_id=region_id,
+                     detail={"default_travel_minutes": row.default_travel_minutes})
         db.commit()
     return RedirectResponse("/manage/catalog#tracks", status_code=303)
 
 
 @router.post("/tracks/{track_id}")
-def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), region_id: uuid.UUID = Form(...), lifecycle: str = Form(...), map_reference: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), region_id: uuid.UUID = Form(...), lifecycle: str = Form(...), map_reference: str = Form(""), default_travel_minutes: int | None = Form(None), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     verify_csrf(request, csrf_token)
     row = db.scalar(select(Track).where(Track.id == track_id).with_for_update())
     if not row:
@@ -156,6 +159,8 @@ def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), r
     previous_region, previous_slot = row.region_id, row.palette_slot
     clean_lifecycle = _lifecycle(lifecycle)
     clean_name = _name(name, 120)
+    if default_travel_minutes is not None and not 0 <= default_travel_minutes <= 1440:
+        raise HTTPException(400, "Default travel must be between 0 and 1440 minutes.")
     if normalized_track_match(db, region_id, clean_name, exclude_track_id=row.id):
         raise HTTPException(409, "A track in that region already uses that normalized name.")
     if region_id != row.region_id or (clean_lifecycle == "ACTIVE" and row.lifecycle != "ACTIVE"):
@@ -163,11 +168,15 @@ def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), r
             row.palette_slot = allocate_palette_slot(db, region_id, preferred=row.palette_slot, exclude_track_id=row.id)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
+    previous_default_travel_minutes = row.default_travel_minutes
     row.name, row.region_id = clean_name, region_id
     row.map_reference, row.lifecycle = map_reference.strip()[:500] or None, clean_lifecycle
+    row.default_travel_minutes = default_travel_minutes
     record_audit(db, "track.updated", "track", row.id, request.state.user.id, region_id=row.region_id,
                  detail={"previous_region_id": str(previous_region), "region_id": str(row.region_id),
-                         "previous_palette_slot": previous_slot, "palette_slot": row.palette_slot})
+                         "previous_palette_slot": previous_slot, "palette_slot": row.palette_slot,
+                         "previous_default_travel_minutes": previous_default_travel_minutes,
+                         "default_travel_minutes": row.default_travel_minutes})
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.commit()
     return RedirectResponse("/manage/catalog#tracks", status_code=303)

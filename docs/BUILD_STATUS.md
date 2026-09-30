@@ -20,12 +20,11 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 
 ## Qualification baseline
 
-The preceding exact-head gate at `d4373ae` passed PostgreSQL 17.6 migration/repeated-upgrade qualification, **204 PostgreSQL-backed tests**, **27 Playwright tests** at 1280/430/375/320, compile, Ruff, Alembic PostgreSQL SQL generation, dependency integrity/audit, JavaScript syntax, production and staging Compose validation, and the production image build. That qualified checkpoint includes flexible multiple Positions, Move/Keep both/Cancel, one person-level travel plan, one Person/day Hours aggregation, Open Position multi-Position consistency, Vehicle master data, Position ordering/history, Audit, native Builder time inputs, and Builder HTML error recovery. Leave requires its own exact-head result before qualification transfers.
+The Leave checkpoint at exact SHA `1cff0b50c0cb4044214dde646c0956e8e6df5029` is **QUALIFIED** by release-gate run `36652200053`: **208 PostgreSQL-backed tests**, **31 Playwright tests**, production/staging Compose validation, and production image build passed. This qualified checkpoint includes flexible multiple Positions, Move/Keep both/Cancel, one person-level travel plan, one Person/day Hours aggregation, Open Position multi-Position consistency, Vehicle master data, Position ordering/history, Audit, native Builder time inputs, Builder HTML error recovery, and the complete advisory Leave workflow.
 
 ## Outstanding product backlog
 
 - Contractor Manager invitation workflow and temporary-account expiry based on latest future assignment, with inactivity extension.
-- Automatic Race Day timing derivation: first-race floor-to-quarter, setup lead, on-track, Vehicle travel call time, last-race ceil-to-quarter, pack-up, and return travel.
 - Configurable fortnight anchor in application settings and Team Hours visual distribution bars.
 - Editable simple roster Position presets; later optional historical suggestions without a complex prediction rules matrix.
 - Full abandoned/rescheduled Workday workflow and employee availability response after moved or abandoned days.

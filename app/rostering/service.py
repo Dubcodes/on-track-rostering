@@ -36,6 +36,7 @@ from app.rostering.models import (
     Workday,
     WorkdayRevision,
 )
+from app.rostering.timing import derive_race_day_timing
 from app.rostering.travel import (
     TRANSPORT_CUSTOM,
     TRANSPORT_MODES,
@@ -95,6 +96,10 @@ class DraftDetailsInput:
     race_count: int | None
     day_note: str
     change_reason: str
+    start_time_is_override: bool = False
+    on_track_time_is_override: bool = False
+    track_travel_minutes: int | None = None
+    track_travel_minutes_is_override: bool = False
     end_time_is_override: bool = False
     last_trial_time: time | None = None
     start_origin: str = ""
@@ -110,13 +115,20 @@ class DraftDetailsInput:
     pack_up_minutes: int = 60
 
 
-def _validated_track(db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID) -> str:
+def _validated_track_record(
+    db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID
+) -> Track | None:
     if track_id is None:
-        return "To be confirmed"
+        return None
     track = db.get(Track, track_id)
     if not track or track.lifecycle != "ACTIVE" or track.region_id != region_id:
         raise ValueError("Select an active track from the workday region.")
-    return track.name
+    return track
+
+
+def _validated_track(db: Session, track_id: uuid.UUID | None, region_id: uuid.UUID) -> str:
+    track = _validated_track_record(db, track_id, region_id)
+    return track.name if track else "To be confirmed"
 
 
 def create_workday(
@@ -134,7 +146,8 @@ def create_workday(
     region = db.get(Region, region_id)
     if not region or region.lifecycle != "ACTIVE":
         raise ValueError("Select an active region.")
-    track_name = _validated_track(db, track_id, region_id)
+    track = _validated_track_record(db, track_id, region_id)
+    track_name = track.name if track else "To be confirmed"
     if category in {WorkdayCategory.RACE_DAY.value, WorkdayCategory.TRIALS.value}:
         racing_discipline = racing_discipline or RacingDiscipline.THOROUGHBRED.value
     else:
@@ -155,6 +168,16 @@ def create_workday(
         track_id=track_id,
         track_name_snapshot=track_name,
         title=title.strip() or category.replace("_", " ").title(),
+        track_travel_minutes=(
+            track.default_travel_minutes
+            if category == WorkdayCategory.RACE_DAY.value and track
+            else None
+        ),
+        return_travel_minutes=(
+            track.default_travel_minutes
+            if category == WorkdayCategory.RACE_DAY.value and track
+            else None
+        ),
         created_by_user_id=actor_user_id,
     )
     db.add(draft)
@@ -257,9 +280,13 @@ def ensure_draft(
         track_name_snapshot=published.track_name_snapshot,
         title=published.title,
         start_time=published.start_time,
+        start_time_is_override=published.start_time_is_override,
         end_time=published.end_time,
         end_time_is_override=published.end_time_is_override,
         on_track_time=published.on_track_time,
+        on_track_time_is_override=published.on_track_time_is_override,
+        track_travel_minutes=published.track_travel_minutes,
+        track_travel_minutes_is_override=published.track_travel_minutes_is_override,
         first_trial_time=published.first_trial_time,
         last_trial_time=published.last_trial_time,
         first_race_time=published.first_race_time,
@@ -375,7 +402,6 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
         return_travel_minutes=draft.return_travel_minutes,
         explicit_finish_time=draft.end_time if draft.end_time_is_override else None,
     )
-    draft.start_time = calculation.race_start
     if not draft.end_time_is_override:
         draft.end_time = calculation.race_finish
     operation = db.get(Operation, workday.operation_id) if workday.operation_id else None
@@ -731,7 +757,8 @@ def save_draft(
     ):
         raise ValueError("One or more assignment rows do not belong to this draft.")
 
-    track_name = _validated_track(db, details.track_id, workday.region_id)
+    track = _validated_track_record(db, details.track_id, workday.region_id)
+    track_name = track.name if track else "To be confirmed"
     valid_categories = {item.value for item in WorkdayCategory}
     valid_disciplines = {item.value for item in RacingDiscipline}
     if details.category not in valid_categories:
@@ -795,7 +822,9 @@ def save_draft(
         details.end_time,
         details.on_track_time,
     )
+    draft.start_time_is_override = details.start_time_is_override
     draft.end_time_is_override = details.end_time_is_override
+    draft.on_track_time_is_override = details.on_track_time_is_override
     draft.first_trial_time = details.first_trial_time
     draft.last_trial_time = details.last_trial_time
     draft.first_race_time = details.first_race_time
@@ -812,6 +841,48 @@ def save_draft(
     draft.hotel_to_track_minutes = details.hotel_to_track_minutes
     draft.return_travel_minutes = details.return_travel_minutes
     draft.pack_up_minutes = details.pack_up_minutes
+
+    if workday.category == WorkdayCategory.RACE_DAY.value:
+        if not 0 <= draft.pack_up_minutes <= 1440:
+            raise ValueError("Pack-up minutes must be between 0 and 1440.")
+        for value, label in (
+            (details.track_travel_minutes, "Track travel"),
+            (details.return_travel_minutes, "Return travel"),
+        ):
+            if value is not None and not 0 <= value <= 1440:
+                raise ValueError(f"{label} minutes must be between 0 and 1440.")
+        draft.track_travel_minutes_is_override = details.track_travel_minutes_is_override
+        draft.track_travel_minutes = (
+            details.track_travel_minutes
+            if details.track_travel_minutes_is_override
+            else (track.default_travel_minutes if track else None)
+        )
+        region = db.get(Region, workday.region_id)
+        if region is None:
+            raise ValueError("Workday region not found.")
+        timing = derive_race_day_timing(
+            work_date=draft.work_date,
+            first_race_time=draft.first_race_time,
+            last_race_time=draft.last_race_time,
+            setup_lead_minutes=region.lead_minutes_race_day,
+            track_travel_minutes=draft.track_travel_minutes,
+            pack_up_minutes=draft.pack_up_minutes,
+            return_travel_minutes=draft.return_travel_minutes,
+            on_track_time=draft.on_track_time,
+            on_track_is_override=draft.on_track_time_is_override,
+            start_time=draft.start_time,
+            start_is_override=draft.start_time_is_override,
+            finish_time=draft.end_time,
+            finish_is_override=draft.end_time_is_override,
+        )
+        draft.on_track_time = timing.on_track
+        draft.start_time = timing.start
+        draft.end_time = timing.finish
+    else:
+        draft.track_travel_minutes = None
+        draft.track_travel_minutes_is_override = False
+        draft.start_time_is_override = False
+        draft.on_track_time_is_override = False
 
     kept_ids = set(submitted_ids)
     for assignment_id, assignment in current.items():
@@ -1196,9 +1267,13 @@ def decline_published_assignment(
             track_name_snapshot=published.track_name_snapshot,
             title=published.title,
             start_time=published.start_time,
+            start_time_is_override=published.start_time_is_override,
             end_time=published.end_time,
             end_time_is_override=published.end_time_is_override,
             on_track_time=published.on_track_time,
+            on_track_time_is_override=published.on_track_time_is_override,
+            track_travel_minutes=published.track_travel_minutes,
+            track_travel_minutes_is_override=published.track_travel_minutes_is_override,
             first_trial_time=published.first_trial_time,
             last_trial_time=published.last_trial_time,
             first_race_time=published.first_race_time,

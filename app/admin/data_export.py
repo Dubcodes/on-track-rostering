@@ -40,7 +40,7 @@ def safe_data_export(db: Session) -> bytes:
     """Return business data only; authentication material and raw provider payloads are excluded."""
     exports = (
         ("regions.csv", Region, ("id", "name", "lifecycle", "decline_policy", "statutory_holiday_region")),
-        ("tracks.csv", Track, ("id", "region_id", "name", "palette_slot", "map_reference", "lifecycle")),
+        ("tracks.csv", Track, ("id", "region_id", "name", "palette_slot", "map_reference", "default_travel_minutes", "lifecycle")),
         ("crew_groups.csv", CrewGroup, ("id", "name", "lifecycle")),
         ("base_positions.csv", BasePosition, ("id", "crew_group_id", "name", "lifecycle")),
         (
@@ -93,8 +93,13 @@ def safe_data_export(db: Session) -> bytes:
                 "track_name_snapshot",
                 "title",
                 "start_time",
+                "start_time_is_override",
                 "end_time",
+                "end_time_is_override",
                 "on_track_time",
+                "on_track_time_is_override",
+                "track_travel_minutes",
+                "track_travel_minutes_is_override",
                 "first_trial_time",
                 "first_race_time",
                 "last_race_time",

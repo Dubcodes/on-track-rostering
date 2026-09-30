@@ -51,6 +51,7 @@ class Track(Base):
     name: Mapped[str] = mapped_column(String(120))
     palette_slot: Mapped[int] = mapped_column()
     map_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    default_travel_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

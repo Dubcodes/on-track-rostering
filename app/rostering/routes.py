@@ -175,9 +175,32 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         track_id=_optional_uuid(form.get("track_id")),
         title=str(form.get("title", "")),
         start_time=parse_time(str(form.get("start_time", ""))),
+        start_time_is_override=(
+            str(form.get("start_time_is_override", "")) == "1"
+            if "start_time_is_override" in form
+            else bool(str(form.get("start_time", "")).strip())
+        ),
         end_time=parse_time(str(form.get("end_time", ""))),
-        end_time_is_override=str(form.get("end_time_is_override", "")) == "1",
+        end_time_is_override=(
+            str(form.get("end_time_is_override", "")) == "1"
+            if "end_time_is_override" in form
+            else bool(str(form.get("end_time", "")).strip())
+        ),
         on_track_time=parse_time(str(form.get("on_track_time", ""))) if racing else None,
+        on_track_time_is_override=(
+            race_day
+            and (
+                str(form.get("on_track_time_is_override", "")) == "1"
+                if "on_track_time_is_override" in form
+                else bool(str(form.get("on_track_time", "")).strip())
+            )
+        ),
+        track_travel_minutes=(
+            _optional_int(form.get("track_travel_minutes")) if race_day else None
+        ),
+        track_travel_minutes_is_override=(
+            race_day and str(form.get("track_travel_minutes_is_override", "")) == "1"
+        ),
         first_trial_time=parse_time(str(form.get("first_trial_time", ""))) if trials else None,
         last_trial_time=parse_time(str(form.get("last_trial_time", ""))) if trials else None,
         first_race_time=parse_time(str(form.get("first_race_time", ""))) if race_day else None,
@@ -246,8 +269,13 @@ def new_workday_page(
         track_name_snapshot="Choose a Track",
         title="Race Day",
         start_time=None,
+        start_time_is_override=False,
         end_time=None,
+        end_time_is_override=False,
         on_track_time=None,
+        on_track_time_is_override=False,
+        track_travel_minutes=None,
+        track_travel_minutes_is_override=False,
         first_trial_time=None,
         first_race_time=None,
         last_race_time=None,
@@ -281,6 +309,7 @@ def new_workday_page(
             vehicles=_builder_vehicles(db, request, regions, selected_region.id),
             vehicle_region_names={region.id: region.name for region in regions},
             transport_labels=TRANSPORT_LABELS,
+            setup_lead_minutes=selected_region.lead_minutes_race_day,
             day_type_options=_day_type_options(),
             builder_error=request.query_params.get("error"),
         ),
@@ -477,6 +506,7 @@ def _builder_context(
             )
     builder_error = extra.pop("builder_error", request.query_params.get("error"))
     editable_regions = _editable_regions(db, request)
+    region = db.get(Region, workday.region_id)
     return context(
         request,
         new_mode=False,
@@ -504,6 +534,7 @@ def _builder_context(
         vehicles=_builder_vehicles(db, request, editable_regions, workday.region_id),
         vehicle_region_names={region.id: region.name for region in editable_regions},
         transport_labels=TRANSPORT_LABELS,
+        setup_lead_minutes=region.lead_minutes_race_day if region else 120,
         generated_travel=generated_travel,
         builder_error=builder_error,
         **extra,
@@ -675,7 +706,6 @@ def _publication_warnings(
         value is None
         for value in (
             draft.on_track_time,
-            draft.first_trial_time,
             draft.first_race_time,
             draft.last_race_time,
             draft.race_count,

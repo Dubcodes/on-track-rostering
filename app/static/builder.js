@@ -459,8 +459,98 @@
   };
   form.querySelector("[data-apply-preset]")?.addEventListener("click", () => applyPreset(true));
   const dayType = form.querySelector("[data-day-type]");
-  form.querySelector("[data-finish-input]")?.addEventListener("input", (event) => {
-    form.querySelector("[data-finish-override]").value = event.currentTarget.value.trim() ? "1" : "0";
+  const startInput = form.querySelector("[data-start-input]");
+  const onTrackInput = form.querySelector("[data-on-track-input]");
+  const finishInput = form.querySelector("[data-finish-input]");
+  const firstRaceInput = form.querySelector("[data-first-race]");
+  const lastRaceInput = form.querySelector("[data-last-race]");
+  const trackTravelInput = form.querySelector("[data-track-travel]");
+  const returnTravelInput = form.querySelector("[data-return-travel]");
+  const packUpInput = form.querySelector("[data-pack-up]");
+  const startOverride = form.querySelector("[data-start-override]");
+  const onTrackOverride = form.querySelector("[data-on-track-override]");
+  const finishOverride = form.querySelector("[data-finish-override]");
+  const trackTravelOverride = form.querySelector("[data-track-travel-override]");
+  const minutes = (value) => {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(value || "");
+    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+  };
+  const clock = (value) => {
+    const normalized = ((value % 1440) + 1440) % 1440;
+    return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+  };
+  const numeric = (input, fallback = null) => {
+    if (!input || input.value.trim() === "") return fallback;
+    const value = Number(input.value);
+    return Number.isFinite(value) ? value : fallback;
+  };
+  const isRaceDay = () => dayType?.value.split(":")[0] === "RACE_DAY";
+  const recalculateRaceTiming = () => {
+    if (!isRaceDay()) return;
+    const firstRace = minutes(firstRaceInput?.value);
+    if (onTrackOverride?.value !== "1") {
+      onTrackInput.value = firstRace === null
+        ? ""
+        : clock(Math.floor(firstRace / 15) * 15 - numeric({value: form.dataset.setupLead}, 0));
+    }
+    const onTrack = minutes(onTrackInput?.value);
+    if (startOverride?.value !== "1") {
+      startInput.value = onTrack === null ? "" : clock(onTrack - numeric(trackTravelInput, 0));
+    }
+    const lastRace = minutes(lastRaceInput?.value);
+    if (finishOverride?.value !== "1") {
+      finishInput.value = lastRace === null
+        ? ""
+        : clock(Math.ceil(lastRace / 15) * 15 + numeric(packUpInput, 0) + numeric(returnTravelInput, 0));
+    }
+    const travelLabel = form.querySelector("[data-track-travel-label]");
+    if (travelLabel) travelLabel.textContent = trackTravelInput?.value || "not configured";
+  };
+  startInput?.addEventListener("input", () => { if (isRaceDay()) startOverride.value = "1"; });
+  onTrackInput?.addEventListener("input", () => {
+    if (!isRaceDay()) return;
+    onTrackOverride.value = "1";
+    recalculateRaceTiming();
+  });
+  finishInput?.addEventListener("input", () => { if (isRaceDay()) finishOverride.value = "1"; });
+  trackTravelInput?.addEventListener("input", () => {
+    if (!isRaceDay()) return;
+    trackTravelOverride.value = "1";
+    recalculateRaceTiming();
+  });
+  [firstRaceInput, lastRaceInput, returnTravelInput, packUpInput].forEach((input) => {
+    input?.addEventListener("input", recalculateRaceTiming);
+  });
+  form.querySelectorAll("[data-use-calculated]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const kind = button.dataset.useCalculated;
+      if (kind === "start") startOverride.value = "0";
+      if (kind === "on-track") onTrackOverride.value = "0";
+      if (kind === "finish") finishOverride.value = "0";
+      recalculateRaceTiming();
+    });
+  });
+  form.querySelector("[data-use-track-default]")?.addEventListener("click", () => {
+    const option = form.querySelector("[data-region-track]")?.selectedOptions[0];
+    trackTravelOverride.value = "0";
+    trackTravelInput.value = option?.dataset.defaultTravel || "";
+    recalculateRaceTiming();
+  });
+  form.querySelector("[data-region-track]")?.addEventListener("change", (event) => {
+    if (!isRaceDay() || trackTravelOverride?.value === "1") return;
+    const travel = event.currentTarget.selectedOptions[0]?.dataset.defaultTravel || "";
+    trackTravelInput.value = travel;
+    if (form.dataset.newMode === "1" && returnTravelInput && !returnTravelInput.value) {
+      returnTravelInput.value = travel;
+    }
+    recalculateRaceTiming();
+  });
+  form.querySelector("[data-track-region]")?.addEventListener("change", (event) => {
+    const lead = event.currentTarget.selectedOptions[0]?.dataset.setupLead;
+    if (lead !== undefined) form.dataset.setupLead = lead;
+    const label = form.querySelector("[data-setup-lead-label]");
+    if (label) label.textContent = lead || "0";
+    recalculateRaceTiming();
   });
   const syncDayType = () => {
     const [category, discipline] = dayType.value.split(":");
@@ -468,6 +558,7 @@
     if (locationLabel) locationLabel.textContent = ["RACE_DAY", "TRIALS"].includes(category) ? "Track" : "Location";
     form.querySelectorAll("[data-racing-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
     form.querySelectorAll("[data-race-time]").forEach((field) => { field.hidden = category !== "RACE_DAY"; });
+    form.querySelectorAll("[data-race-action]").forEach((button) => { button.hidden = category !== "RACE_DAY"; });
     form.querySelectorAll("[data-trial-time]").forEach((field) => { field.hidden = category !== "TRIALS"; });
     const standardTravelAvailable = ["RACE_DAY", "TRIALS"].includes(category);
     const standardTravel = form.querySelector("[data-standard-plan]");
@@ -478,6 +569,7 @@
       if (!standardTravelAvailable) standardTravel.checked = false;
     }
     form.querySelector("[data-position-preset]").value = category === "TRIALS" ? "TRIALS" : (category === "RACE_DAY" ? discipline : "BLANK");
+    recalculateRaceTiming();
   };
   dayType?.addEventListener("change", syncDayType);
   syncDayType();

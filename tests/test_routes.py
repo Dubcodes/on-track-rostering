@@ -243,7 +243,13 @@ def test_track_edit_region_authority_palette_and_history(routed_db) -> None:  # 
         before = (wd.region_id, wd.current_published_revision_id, published.work_date, published.track_name_snapshot)
     manager = TestClient(app)
     csrf = _login(manager, "manager@example.test", "123456")
-    data = {"name": "Corrected Ellerslie", "region_id": str(destination_id), "lifecycle": "ACTIVE", "map_reference": "https://example.test/map", "csrf_token": csrf}
+    regional_data = {"name": "Ellerslie", "region_id": str(region_id), "lifecycle": "ACTIVE", "map_reference": "", "default_travel_minutes": "30", "csrf_token": csrf}
+    assert manager.post(f"/manage/catalog/tracks/{track_id}", data=regional_data, follow_redirects=False).status_code == 303
+    regional_data["default_travel_minutes"] = "-1"
+    assert manager.post(f"/manage/catalog/tracks/{track_id}", data=regional_data).status_code == 400
+    regional_data["default_travel_minutes"] = "1441"
+    assert manager.post(f"/manage/catalog/tracks/{track_id}", data=regional_data).status_code == 400
+    data = {"name": "Corrected Ellerslie", "region_id": str(destination_id), "lifecycle": "ACTIVE", "map_reference": "https://example.test/map", "default_travel_minutes": "35", "csrf_token": csrf}
     assert manager.post(f"/manage/catalog/tracks/{track_id}", data=data).status_code == 403
     admin = TestClient(app)
     data["csrf_token"] = _login(admin, "admin@example.test", "99887766")
@@ -251,12 +257,14 @@ def test_track_edit_region_authority_palette_and_history(routed_db) -> None:  # 
     assert admin.post(f"/manage/catalog/tracks/{track_id}", data=data, follow_redirects=False).status_code == 303
     with factory() as db:
         track = db.get(Track, track_id)
-        assert (track.region_id, track.palette_slot, track.map_reference) == (destination_id, 2, "https://example.test/map")
+        assert (track.region_id, track.palette_slot, track.map_reference, track.default_travel_minutes) == (destination_id, 2, "https://example.test/map", 35)
         wd = db.get(Workday, wd_id)
         published = db.get(WorkdayRevision, wd.current_published_revision_id)
         assert before == (wd.region_id, wd.current_published_revision_id, published.work_date, published.track_name_snapshot)
         audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "track.updated"))
         assert audit is not None
+        assert audit.detail["previous_default_travel_minutes"] is None
+        assert audit.detail["default_travel_minutes"] == 30
     data["name"] = "Corrected Ellerslie again"
     assert admin.post(f"/manage/catalog/tracks/{track_id}", data=data, follow_redirects=False).status_code == 303
     with factory() as db:

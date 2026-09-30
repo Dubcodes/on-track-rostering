@@ -104,7 +104,8 @@ def browser_site():  # type: ignore[no-untyped-def]
         else:
             db.add(SystemBranding(id=1, product_name="On Track", updated_by_user_id=admin.id))
         track = Track(
-            name=f"Browser Track {suffix}", region_id=region.id, palette_slot=1
+            name=f"Browser Track {suffix}", region_id=region.id, palette_slot=1,
+            default_travel_minutes=30,
         )
         cross_track = Track(
             name=f"Cross Track {suffix}",
@@ -2144,6 +2145,61 @@ def test_unpublished_builder_switches_timing_fields_without_reload(browser_site,
     day_type.select_option("RACE_DAY:HARNESS")
     assert not page.locator('input[name="last_trial_time"]').is_visible()
     assert page.locator('input[name="race_count"]').is_visible()
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_race_day_builder_live_timing_and_override_resets(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 1000}, has_touch=width <= 760)
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/manage/workdays/new")
+    page.locator('select[name="track_id"]').select_option(values["track_id"])
+    first_race = page.locator('input[name="first_race_time"]')
+    last_race = page.locator('input[name="last_race_time"]')
+    on_track = page.locator('input[name="on_track_time"]')
+    start = page.locator('input[name="start_time"]')
+    finish = page.locator('input[name="end_time"]')
+    track_travel = page.locator('input[name="track_travel_minutes"]')
+    return_travel = page.locator('input[name="return_travel_minutes"]')
+    pack_up = page.locator('input[name="pack_up_minutes"]')
+
+    assert track_travel.input_value() == "30"
+    assert return_travel.input_value() == "30"
+    first_race.fill("12:24")
+    last_race.fill("16:47")
+    pack_up.fill("60")
+    return_travel.fill("30")
+    assert on_track.input_value() == "10:15"
+    assert start.input_value() == "09:45"
+    assert finish.input_value() == "18:30"
+
+    on_track.fill("10:00")
+    assert page.locator('input[name="on_track_time_is_override"]').input_value() == "1"
+    assert start.input_value() == "09:30"
+    first_race.fill("13:24")
+    assert on_track.input_value() == "10:00"
+    page.get_by_role("button", name="Use calculated").nth(1).click()
+    assert on_track.input_value() == "11:15"
+
+    start.fill("09:30")
+    track_travel.fill("45")
+    assert start.input_value() == "09:30"
+    page.get_by_role("button", name="Use calculated").first.click()
+    assert start.input_value() == "10:30"
+    page.get_by_role("button", name="Use Track default").click()
+    assert track_travel.input_value() == "30"
+    assert start.input_value() == "10:45"
+
+    finish.fill("19:00")
+    last_race.fill("17:47")
+    assert finish.input_value() == "19:00"
+    page.get_by_role("button", name="Use calculated").nth(2).click()
+    assert finish.input_value() == "19:30"
     _assert_no_horizontal_overflow(page)
     assert not errors
     context.close()

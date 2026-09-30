@@ -16,6 +16,7 @@ from app.core.time import parse_time, utcnow
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation, ExternalTrackMapping
 from app.rostering.models import Workday, WorkdayRevision
 from app.rostering.service import create_workday
+from app.rostering.timing import derive_race_day_timing
 
 DISCIPLINES = {"THOROUGHBRED", "HARNESS"}
 EVENT_KINDS = {"RACE", "TRIAL"}
@@ -338,5 +339,25 @@ def adopt_external_event(
     draft.first_race_time = event.first_race_time
     draft.last_race_time = event.last_race_time
     draft.race_count = event.race_count
+    if event.event_kind == "RACE":
+        region = db.get(Region, track.region_id)
+        if region is None:
+            raise ValueError("The mapped Track region is unavailable.")
+        draft.track_travel_minutes = track.default_travel_minutes
+        draft.track_travel_minutes_is_override = False
+        if draft.return_travel_minutes is None:
+            draft.return_travel_minutes = track.default_travel_minutes
+        timing = derive_race_day_timing(
+            work_date=draft.work_date,
+            first_race_time=draft.first_race_time,
+            last_race_time=draft.last_race_time,
+            setup_lead_minutes=region.lead_minutes_race_day,
+            track_travel_minutes=draft.track_travel_minutes,
+            pack_up_minutes=draft.pack_up_minutes,
+            return_travel_minutes=draft.return_travel_minutes,
+        )
+        draft.on_track_time = timing.on_track
+        draft.start_time = timing.start
+        draft.end_time = timing.finish
     db.flush()
     return workday, True

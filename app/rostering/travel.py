@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.rostering.models import Assignment, WorkdayRevision
 
+from app.rostering.timing import ceil_to_quarter, clock_after
+
 TRANSPORT_UNASSIGNED = "UNASSIGNED"
 TRANSPORT_VEHICLE = "VEHICLE"
 TRANSPORT_SELF = "SELF_TRAVEL"
@@ -79,6 +81,19 @@ def effective_person_travel(
             datetime.combine(revision.work_date, revision.on_track_time)
             - timedelta(minutes=hotel_minutes)
         ).time()
+    if (
+        start is None
+        and assignment.transport_mode in {TRANSPORT_SELF, TRANSPORT_NOT_REQUIRED}
+        and revision.on_track_time is not None
+        and any(
+            (
+                revision.first_race_time is not None,
+                revision.last_race_time is not None,
+                revision.race_count is not None,
+            )
+        )
+    ):
+        start = revision.on_track_time
     if start is None:
         start = revision.start_time
     finish = assignment.end_time or revision.end_time
@@ -97,7 +112,7 @@ def effective_person_travel(
         and revision.on_track_time is not None
     ):
         reference = datetime.combine(revision.work_date, revision.on_track_time)
-        cleared = ceil_to_quarter(_clock_after(last_event, reference=reference))
+        cleared = ceil_to_quarter(clock_after(last_event, reference=reference))
         finish = (
             cleared
             + timedelta(minutes=revision.pack_up_minutes)
@@ -114,20 +129,6 @@ def effective_person_travel(
         ),
         return_travel_minutes=return_minutes,
     )
-
-
-def _clock_after(value: time, *, reference: datetime) -> datetime:
-    result = datetime.combine(reference.date(), value)
-    if result < reference:
-        result += timedelta(days=1)
-    return result
-
-
-def ceil_to_quarter(value: datetime) -> datetime:
-    """Round up to a quarter hour. No race-run allowance is applied."""
-    if value.second or value.microsecond or value.minute % 15:
-        value += timedelta(minutes=15 - value.minute % 15)
-    return value.replace(second=0, microsecond=0)
 
 
 def calculate_standard_travel(
@@ -158,14 +159,14 @@ def calculate_standard_travel(
     on_track_at = datetime.combine(race_date, on_track_time)
     race_start_at = on_track_at - timedelta(minutes=hotel_to_track_minutes)
     if last_race_time is not None:
-        last_race_at = _clock_after(last_race_time, reference=on_track_at)
+        last_race_at = clock_after(last_race_time, reference=on_track_at)
         race_clear_at = ceil_to_quarter(last_race_at)
         pack_up_done_at = race_clear_at + timedelta(minutes=pack_up_minutes)
     else:
-        pack_up_done_at = _clock_after(explicit_finish_time, reference=on_track_at)  # type: ignore[arg-type]
+        pack_up_done_at = clock_after(explicit_finish_time, reference=on_track_at)  # type: ignore[arg-type]
         race_clear_at = pack_up_done_at
     race_finish_at = (
-        _clock_after(explicit_finish_time, reference=on_track_at)
+        clock_after(explicit_finish_time, reference=on_track_at)
         if explicit_finish_time is not None
         else pack_up_done_at + timedelta(minutes=return_travel_minutes or 0)
     )

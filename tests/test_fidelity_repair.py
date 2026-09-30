@@ -255,6 +255,7 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
         details=DraftDetailsInput(
             work_date=date(2026, 10, 14), track_id=track.id, title="Ruakaka",
             start_time=None, end_time=None, on_track_time=time(9), first_trial_time=None,
+                on_track_time_is_override=True,
             first_race_time=None, last_race_time=time(16, 24), race_count=None,
             day_note="", change_reason="", start_origin="Clow Place",
             finish_destination="Clow Place", category="RACE_DAY",
@@ -302,7 +303,7 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     assert person_row.start_time is None
     assert effective_person_travel(draft, person_row).start == time(8, 45)
     assert next(row for row in race_rows if row.person_id == local_person.id).start_time == time(8, 50)
-    assert (draft.start_time, draft.end_time) == (time(8, 30), time(22, 30))
+    assert (draft.start_time, draft.end_time) == (time(9), time(22, 30))
     db.refresh(workday)
     save_draft(
             db,
@@ -316,6 +317,7 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
                 start_time=draft.start_time,
                 end_time=draft.end_time,
                 on_track_time=draft.on_track_time,
+                    on_track_time_is_override=True,
                 first_trial_time=None,
                 first_race_time=None,
                 last_race_time=draft.last_race_time,
@@ -420,8 +422,13 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
             track_id=parent_draft.track_id,
             title=parent_draft.title,
             start_time=parent_draft.start_time,
+                start_time_is_override=parent_draft.start_time_is_override,
             end_time=parent_draft.end_time,
+                end_time_is_override=parent_draft.end_time_is_override,
             on_track_time=parent_draft.on_track_time,
+                on_track_time_is_override=parent_draft.on_track_time_is_override,
+                track_travel_minutes=parent_draft.track_travel_minutes,
+                track_travel_minutes_is_override=parent_draft.track_travel_minutes_is_override,
             first_trial_time=parent_draft.first_trial_time,
             first_race_time=parent_draft.first_race_time,
             last_race_time=parent_draft.last_race_time,
