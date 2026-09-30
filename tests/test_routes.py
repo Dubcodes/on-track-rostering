@@ -803,7 +803,7 @@ def test_leave_management_picker_preview_privacy_and_authorization(routed_db) ->
         db.commit()
 
     builder = manager.get(f"/manage/workdays/{workday_id}")
-    assert "On leave · 12 Oct–16 Oct" in builder.text
+    assert "On leave · 12–16 Oct" in builder.text
 
     existing = manager.get(
         f"/manage/workdays/{workday_id}/crew-picker",
@@ -837,7 +837,7 @@ def test_leave_management_picker_preview_privacy_and_authorization(routed_db) ->
     submanager_builder = TestClient(app)
     _login(submanager_builder, "submanager@example.test", "445566")
     submanager_page = submanager_builder.get(f"/manage/workdays/{workday_id}")
-    assert "On leave · 12 Oct–16 Oct" in submanager_page.text
+    assert "On leave · 12–16 Oct" in submanager_page.text
     assert "Private manager context" not in submanager_page.text
     employee_day = TestClient(app)
     _login(employee_day, "amy@example.test", "654321")

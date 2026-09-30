@@ -80,6 +80,7 @@ def browser_site():  # type: ignore[no-untyped-def]
         person = Person(display_name="Browser Crew Member")
         manager_person = Person(display_name="Browser Roster Manager")
         other_person = Person(display_name="Unrelated Browser Crew")
+        leave_managed_person = Person(display_name="Browser Leave Managed Crew")
         db.add_all(
             [
                 region,
@@ -92,6 +93,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                 person,
                 manager_person,
                 other_person,
+                leave_managed_person,
             ]
         )
         db.flush()
@@ -119,6 +121,7 @@ def browser_site():  # type: ignore[no-untyped-def]
         duplicate_b = Person(display_name="John Smith", home_region_id=cross_region.id)
         person.home_region_id = region.id
         manager_person.home_region_id = region.id
+        leave_managed_person.home_region_id = region.id
         db.add_all(
             [
                 track,
@@ -156,10 +159,17 @@ def browser_site():  # type: ignore[no-untyped-def]
                     changed_by_user_id=manager.id,
                 ),
                 PersonUnavailability(
-                    person_id=other_person.id,
+                    person_id=leave_managed_person.id,
                     start_date=date.today() - timedelta(days=1),
                     end_date=date.today() + timedelta(days=2),
                     note="Private browser leave note",
+                    created_by_user_id=manager.id,
+                ),
+                PersonUnavailability(
+                    person_id=other_person.id,
+                    start_date=date.today() - timedelta(days=1),
+                    end_date=date.today() + timedelta(days=2),
+                    note="Builder-only private leave note",
                     created_by_user_id=manager.id,
                 ),
                 PersonUnavailability(
@@ -1195,8 +1205,9 @@ def test_leave_management_and_builder_conflicts(browser_site, width: int) -> Non
 
     def choose_person(row, person_id: str) -> None:  # type: ignore[no-untyped-def]
         picker = row.locator('[data-picker-kind="person"]')
-        picker.locator("[data-picker-input]").click()
-        picker.locator(f'[data-picker-option][data-value="{person_id}"]').click()
+        option = picker.locator(f'[data-picker-option][data-value="{person_id}"]')
+        picker.locator("[data-picker-input]").fill(option.get_attribute("data-label") or "")
+        option.click()
 
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
     assigned_row = page.locator(
@@ -1234,19 +1245,18 @@ def test_leave_management_and_builder_conflicts(browser_site, width: int) -> Non
     ).count() == 2
     _assert_no_horizontal_overflow(page)
 
-    page.reload()
-    original_row = page.locator(
-        f'[data-person-value][value="{values["position_aware_person_id"]}"]'
-    ).locator("xpath=ancestor::article")
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
     page.get_by_role("button", name="Add position").click()
     move_row = page.locator("[data-assignment-row]").last
     choose_position(move_row, values["director_position_id"])
     choose_person(move_row, values["position_aware_person_id"])
     dialog.get_by_role("button", name="Move to this position").click()
-    assert original_row.locator("[data-person-value]").input_value() == ""
     assert move_row.locator("[data-person-value]").input_value() == values[
         "position_aware_person_id"
     ]
+    assert page.locator(
+        f'[data-person-value][value="{values["position_aware_person_id"]}"]'
+    ).count() == 1
 
     applications = page.locator(".builder-application-panel")
     applications.locator("summary").click()

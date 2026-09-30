@@ -23,6 +23,16 @@ class RosterConflict:
     positions: tuple[str, ...]
 
 
+def unavailability_label(start_date: date, end_date: date) -> str:
+    if start_date.year != end_date.year:
+        dates = f"{start_date.day} {start_date:%b %Y}–{end_date.day} {end_date:%b %Y}"
+    elif start_date.month != end_date.month:
+        dates = f"{start_date.day} {start_date:%b}–{end_date.day} {end_date:%b}"
+    else:
+        dates = f"{start_date.day}–{end_date.day} {end_date:%b}"
+    return f"On leave · {dates}"
+
+
 def active_for_people_on_date(
     db: Session, person_ids: set[uuid.UUID], work_date: date
 ) -> dict[uuid.UUID, PersonUnavailability]:
@@ -69,15 +79,23 @@ def create_unavailability(
 ) -> PersonUnavailability:
     if end_date < start_date:
         raise ValueError("End date must be on or after the start date.")
+    clean_note = note.strip()
+    if len(clean_note) > 1000:
+        raise ValueError("Note must be 1000 characters or fewer.")
+    locked_person = db.scalar(
+        select(Person).where(Person.id == person.id).with_for_update()
+    )
+    if locked_person is None:
+        raise ValueError("Select an active person.")
     if active_overlapping(
-        db, person_id=person.id, start_date=start_date, end_date=end_date
+        db, person_id=locked_person.id, start_date=start_date, end_date=end_date
     ):
         raise ValueError("This person already has active leave overlapping those dates.")
     row = PersonUnavailability(
-        person_id=person.id,
+        person_id=locked_person.id,
         start_date=start_date,
         end_date=end_date,
-        note=note.strip(),
+        note=clean_note,
         created_by_user_id=actor_user_id,
     )
     db.add(row)
@@ -88,10 +106,10 @@ def create_unavailability(
         "person_unavailability",
         row.id,
         actor_user_id,
-        region_id=person.home_region_id,
+        region_id=locked_person.home_region_id,
         detail={
-            "person_id": str(person.id),
-            "person_name": person.display_name,
+            "person_id": str(locked_person.id),
+            "person_name": locked_person.display_name,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
         },
@@ -136,10 +154,10 @@ def roster_conflicts(
         .join(
             WorkdayRevision,
             or_(
-                Workday.current_draft_revision_id == WorkdayRevision.id,
+                Workday.current_published_revision_id == WorkdayRevision.id,
                 and_(
-                    Workday.current_draft_revision_id.is_(None),
-                    Workday.current_published_revision_id == WorkdayRevision.id,
+                    Workday.current_published_revision_id.is_(None),
+                    Workday.current_draft_revision_id == WorkdayRevision.id,
                 ),
             ),
         )

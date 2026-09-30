@@ -42,7 +42,7 @@ from app.rostering.service import (
     update_draft_details,
 )
 from app.rostering.travel import TRANSPORT_LABELS, TRANSPORT_UNASSIGNED
-from app.unavailability.service import active_for_people_on_date
+from app.unavailability.service import active_for_people_on_date, unavailability_label
 from app.web import context, templates
 
 router = APIRouter(prefix="/manage")
@@ -417,7 +417,9 @@ def _builder_context(
         db, {row.person_id for row in assignments if row.person_id}, draft.work_date
     )
     assignment_leave_by_id = {
-        row.id: leave_by_person.get(row.person_id) for row in assignments
+        row.id: unavailability_label(leave.start_date, leave.end_date)
+        for row in assignments
+        if (leave := leave_by_person.get(row.person_id)) is not None
     }
     application_rows = db.execute(
         select(OpenPositionApplication, Person)

@@ -13,7 +13,7 @@ from app.core.enums import WorkdayStatus
 from app.identity.models import Person
 from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
-from app.unavailability.service import active_for_people_on_date
+from app.unavailability.service import active_for_people_on_date, unavailability_label
 
 
 @dataclass(frozen=True)
@@ -31,14 +31,7 @@ class CrewPickerPerson:
     def leave_label(self) -> str:
         if not self.on_leave or not self.leave_start or not self.leave_end:
             return ""
-        start = f"{self.leave_start.day} {self.leave_start:%b}"
-        end = (
-            str(self.leave_end.day)
-            if self.leave_start.month == self.leave_end.month
-            and self.leave_start.year == self.leave_end.year
-            else f"{self.leave_end.day} {self.leave_end:%b}"
-        )
-        return f"On leave · {start}–{end}"
+        return unavailability_label(self.leave_start, self.leave_end)
 
 
 @dataclass(frozen=True)
