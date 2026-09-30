@@ -6,8 +6,8 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import date, timedelta
 from datetime import time as clock_time
-from datetime import timedelta
 from pathlib import Path
 
 import httpx
@@ -315,7 +315,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             workday_id=travel_workday.id,
             revision_number=1,
             state="PUBLISHED",
-            work_date=local_today().replace(day=8),
+            work_date=date.today().replace(day=8),
             track_name_snapshot="Operations Transit",
 
             title="Travel to race meeting",
