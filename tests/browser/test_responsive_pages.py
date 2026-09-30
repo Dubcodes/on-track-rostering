@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 from datetime import time as clock_time
 from pathlib import Path
 
