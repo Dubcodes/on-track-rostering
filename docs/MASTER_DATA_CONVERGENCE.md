@@ -1,5 +1,13 @@
 # Master data / calendar source / Builder convergence
 
+> **Historical implementation journal.** Statements in this document were
+> accurate at their recorded checkpoints, but may be superseded. It is not the
+> current product specification. For current behavior, use (in order)
+> `docs/DOMAIN_RULES.md`, `docs/ARCHITECTURE.md`, `docs/BUILD_STATUS.md`,
+> `docs/IMPLEMENTATION_INVENTORY.md`, and applicable explicit decisions in
+> `docs/DECISIONS.md`. Preserve this chronology as historical evidence rather
+> than treating its old continuation plans as present scope.
+
 ## First local checkpoint — 2026-09-16
 
 Starting clean `HEAD == origin/main`: `9d92afaf4623cca3278a7d51e6cf0090a062b086`.
@@ -55,9 +63,10 @@ staging/production deployment, or Re-Deputy modification occurred.
    GitHub release-gate evidence. Compose/image checks belong in CI, never local
    Docker execution.
 
-Operations/Travel architecture and live-source production scraping remain out
-of scope. Manual rostering, immutable publication, optimistic locking, privacy,
-and existing server-side authorization must be preserved through continuation.
+At this historical checkpoint, Operations/Travel architecture and live-source
+production scraping remained out of scope. Manual rostering, immutable
+publication, optimistic locking, privacy, and existing server-side authorization
+were required to be preserved through continuation.
 
 ## Second local checkpoint — track palette and editing
 

@@ -34,7 +34,7 @@
 
 ## Safety constraints
 
-Before changing code, read `AGENTS.md` and the relevant project docs; inspect the current source, migration history, and Git status. Preserve unrelated work. Never modify Re-Deputy and never use Docker on the Windows development machine. Production Portainer pulls GitHub `main`; keep migrations and startup deployable on Linux without Windows paths or committed secrets. Use PostgreSQL semantics and never present SQLite as PostgreSQL qualification.
+Before changing code, read `AGENTS.md`, `docs/DOMAIN_RULES.md`, `docs/ARCHITECTURE.md`, `docs/BUILD_STATUS.md`, `docs/IMPLEMENTATION_INVENTORY.md`, and applicable explicit decisions in `docs/DECISIONS.md`; inspect the current source, migration history, and Git status. Treat historical journals as reference evidence only, never as the current specification. Preserve unrelated work. Never modify Re-Deputy and never use Docker on the Windows development machine. Production Portainer pulls GitHub `main`; keep migrations and startup deployable on Linux without Windows paths or committed secrets. Use PostgreSQL semantics and never present SQLite as PostgreSQL qualification.
 
 Preserve server-side authorization, immutable Draft → Preview → Publish, small published-only employee read models, and manual racing-information fallback. Do not weaken a database invariant to simplify a test.
 

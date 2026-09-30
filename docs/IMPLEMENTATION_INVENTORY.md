@@ -14,7 +14,7 @@
 | Vehicles | Reusable regional company/rental records, Admin/all and Manager/scoped mutation, archive lifecycle, local-first Builder picker, immutable name snapshots | `app/catalog`, Builder read/template | Regional authority, audit, picker and snapshot tests |
 | Audit | Redacted write service plus Admin-global/Manager-region-scoped filtered read workspace | `app/audit` | Authorization, regional visibility and redaction tests |
 | Leave/unavailability | Inclusive whole-date advisory ranges, overlap rejection, cancellation history, scoped Manager/Admin page, roster conflict links, Builder/Preview/Open-application warning and deliberate override | `app/unavailability`, Builder read/template/JS | Service/route/privacy and responsive conflict-dialog coverage; no payroll, balances or employee requests |
-| Race Day automatic timing | First-race floor, Region setup lead, snapshotted Track travel, default vehicle call, last-race ceiling, Pack-up/Return travel Finish, explicit Manager resets/overrides | `app/rostering/timing.py`, Builder, save/adoption services | Server-authoritative and category-scoped; Trials and non-racing days remain manual/current |
+| Race Day automatic timing | First race floors to a quarter-hour, less Region setup lead gives On track; On track less snapshotted Track travel gives Workday Start/default vehicle crew call. Last race ceilings to a quarter-hour; Pack-up plus Return travel gives Finish. Self/no transport uses On track unless an assignment override applies. Explicit Manager override/reset flags are preserved. | `app/rostering/timing.py`, Builder, save/adoption services | Server-authoritative and category-scoped; Trials and non-racing days retain manual timing |
 | Track travel default | Nullable 0–1440 minute office/base-to-Track master default with scoped administration and audit | Track master data and `WorkdayRevision.track_travel_minutes` | Published revisions retain their historical snapshot |
 | Crew/management | Consolidated Crew, Accounts, Master Data, primary Region editing, live search, capabilities, draft deletion | `app/crew`, `app/accounts`, `app/catalog` | Route and responsive browser tests |
 | Operations/travel | Operations, explicit TravelLegs, standard previous-day Travel generation, accommodation and personal Making own way/timing | rostering models/services/read models | Domain, route, publication, hours and browser tests |
@@ -23,7 +23,7 @@
 | Offline/notifications | User-namespaced read-only personal cache; transactional notification outbox, preferences, retries and reminders | service worker, employee JSON, `app/notifications` | Contract/delivery tests; real Web Push remains environment qualification |
 | Branding/settings | Persisted global product branding and operational signup policy | branding/system settings modules | Authorization, persistence, escaping and responsive tests |
 | Schema/deployment | Append-only PostgreSQL/Alembic chain; retained production/staging Compose; migration-before-app startup | `migrations/versions`, deployment artifacts | GitHub PostgreSQL/repeated-upgrade/Compose/image gate; no local Docker |
-| Responsive UI | Employee and management paths at 1280/430/375/320 with behavior, console and overflow assertions | templates/static CSS/JS, `tests/browser` | Previous exact-head result: 27 Playwright passed; this checkpoint requires its own exact-head run |
+| Responsive UI | Employee and management paths at 1280/430/375/320 with behavior, console and overflow assertions | templates/static CSS/JS, `tests/browser` | Exact qualified result: 35 Playwright passed at `b843e7417e26b43a31610631603d203f58ecacd5` |
 
 ## PostgreSQL-only assertions
 
@@ -31,4 +31,4 @@ CI covers simultaneous first-draft creation, stale details/assignments/editor-af
 
 ## Current operational validation boundary
 
-The last qualified baseline is `d4373aee6273de6f8d09167d3da8567df735ce25`, release-gate `36612942208`, with 204 PostgreSQL-backed tests and 27 Playwright tests. The exact result for this checkpoint is recorded after its final push. No deployment is implied. Remaining staging/recovery/product work is listed in `docs/BUILD_STATUS.md`.
+The current qualified baseline is `b843e7417e26b43a31610631603d203f58ecacd5`, release-gate `36682049077`, with 213 PostgreSQL-backed tests and 35 Playwright tests; production/staging Compose validation and production image construction passed. No deployment is implied. Remaining staging/recovery/product work is listed in `docs/BUILD_STATUS.md`.

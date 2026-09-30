@@ -56,9 +56,11 @@ and use **Remove unused** only for a confirmed setup mistake with no foreign-key
 business references. Referenced records return a conflict and must be archived
 instead. Restoring a Track retains safe regional palette allocation.
 
-**Build roster** starts with a compact private-draft identity step and then
-redirects into the full Builder. Opening the start page creates nothing. The
-Workday and initial draft are created only after **Start private draft**.
+An authorized manager opens the full Builder from an empty calendar date or
+`/manage/workdays/new`; the selected date is prefilled. Opening an unsaved
+Builder creates no Workday or draft. Creation and later editing use the same
+Builder: **Save & Preview** persists the private draft, Preview shows the
+proposed crew result, and **Publish** makes it authoritative.
 
 Online Sources separates source health from mapping work. Unmapped observations
 and unique source identities are a mapping backlog, not provider warnings.

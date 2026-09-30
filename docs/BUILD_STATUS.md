@@ -1,8 +1,8 @@
-# Build status — 2026-09-29
+# Build status — 2026-10-01
 
 ## Current source and deployment boundary
 
-This checkpoint is based on exact qualified `main` SHA `d4373aee6273de6f8d09167d3da8567df735ce25` (release-gate run `36612942208`): 204 PostgreSQL-backed tests and 27 Playwright tests passed with the complete release gate. No staging or production deployment is part of this pass; the previously observed private staging deployment must not be inferred to contain newer source.
+This checkpoint is based on exact qualified `main` SHA `b843e7417e26b43a31610631603d203f58ecacd5` (release-gate run `36682049077`): 213 PostgreSQL-backed tests and 35 Playwright tests passed with the complete release gate, including production/staging Compose validation and production image construction. CI is not a staging redeploy or production deployment; no deployment is implied by this checkpoint.
 
 Local development and qualification remain Docker-free. PostgreSQL integration, Playwright, Compose validation, and production image construction are authoritative only when executed by the exact-head GitHub release gate unless a native/remote development PostgreSQL URL and local browser environment are explicitly available.
 
@@ -20,7 +20,9 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 
 ## Qualification baseline
 
-The Leave checkpoint at exact SHA `1cff0b50c0cb4044214dde646c0956e8e6df5029` is **QUALIFIED** by release-gate run `36652200053`: **208 PostgreSQL-backed tests**, **31 Playwright tests**, production/staging Compose validation, and production image build passed. This qualified checkpoint includes flexible multiple Positions, Move/Keep both/Cancel, one person-level travel plan, one Person/day Hours aggregation, Open Position multi-Position consistency, Vehicle master data, Position ordering/history, Audit, native Builder time inputs, Builder HTML error recovery, and the complete advisory Leave workflow.
+The historical Leave checkpoint at exact SHA `1cff0b50c0cb4044214dde646c0956e8e6df5029` was **QUALIFIED** by release-gate run `36652200053`: **208 PostgreSQL-backed tests**, **31 Playwright tests**, production/staging Compose validation, and production image build passed. It established flexible multiple Positions, Move/Keep both/Cancel, one person-level travel plan, one Person/day Hours aggregation, Open Position multi-Position consistency, Vehicle master data, Position ordering/history, Audit, native Builder time inputs, Builder HTML error recovery, and the complete advisory Leave workflow.
+
+The current Race Day timing checkpoint at `b843e7417e26b43a31610631603d203f58ecacd5` is **QUALIFIED** by release-gate run `36682049077`. It adds automatic Race Day timing, snapshotted Track default travel, call-time derivation, explicit timing override/reset preservation, adoption of available programme timing into the Builder, and the existing Operations/TravelLeg/accommodation model. Race timing is category-scoped: Trials and non-racing Workdays retain their manual timing behavior.
 
 ## Outstanding product backlog
 

@@ -161,11 +161,23 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Check | Status | Operator evidence / procedure |
 |---|---|---|
 | Create incomplete Workday | PENDING | Confirm warnings do not block manual work. |
+| Unified Builder creation | PENDING | Open an empty calendar date and `/manage/workdays/new`; confirm date prefill and no Workday until Save & Preview. |
+| Live Position/Person/Vehicle search | PENDING | Confirm search, selection, and scoped results in the Builder. |
 | Race Day workflow | PENDING | Edit → Preview → Publish. |
+| Race Day automatic timing | PENDING | Confirm programme timing derives Start, On track, and Finish and remains advisory to explicit Manager choices. |
+| Track default travel snapshot | PENDING | Confirm Track travel derives the default crew call and published timing does not change after master-data edit. |
+| Call-time derivation and explicit reset | PENDING | Confirm vehicle/self travel behavior, explicit timing override, and reset to calculation. |
+| Generated travel | PENDING | Confirm eligible overnight travel creates the parent-linked prior-day Travel Day and publishes atomically. |
 | Non-Race-Day category | PENDING | Confirm race-only wording/fields are absent where appropriate. |
 | Private draft creation | PENDING | Verify employee cannot see it. |
 | Edit details and Day note | PENDING | Include date and time changes. |
 | Add position slots | PENDING | Exercise base position plus numbered slots. |
+| Multiple Positions and Move/Keep/Cancel | PENDING | Assign one Person twice and verify each explicit conflict choice, independent row timing/notes, and shared travel. |
+| Person-level synchronized travel | PENDING | Change travel on one of a Person's rows and confirm the shared plan and combined span. |
+| Regional Vehicles | PENDING | Confirm scoped create/edit/archive and Builder selection for company and rental-style records. |
+| Base Position ordering | PENDING | Confirm configured catalogue order is used operationally. |
+| Audit scope and redaction | PENDING | Confirm Admin global/Manager regional reads and redacted detail; Sub-Manager/read-only denial. |
+| Leave management and warning override | PENDING | Create inclusive leave, observe Builder/Preview warning, and deliberately save an authorized override. |
 | ASSIGNED / OPEN / TBC / MANAGER_ACTION_REQUIRED | PENDING | Verify distinct states. |
 | Assignment/private note controls | PENDING | Verify visibility separately. |
 | Person-specific start/end | PENDING | Confirm effective displayed span. |
@@ -311,5 +323,4 @@ These items do not block active staging development unless they reveal a structu
 | Production monitoring/alerting | NOT IN CURRENT SCOPE | Operations design. |
 | Branch protection/release controls | NOT IN CURRENT SCOPE | Production release governance. |
 | Immutable release tag/image | NOT IN CURRENT SCOPE | Required at Foundation freeze/promotion, not each active staging change. |
-| Operations/Travel, Accommodation, provider ingest, full vehicle operations | NOT IN CURRENT SCOPE | Future product phase. |
 | Abandoned/rescheduled workflow, logo upload, major recovery redesign | NOT IN CURRENT SCOPE | Future product phase. |
