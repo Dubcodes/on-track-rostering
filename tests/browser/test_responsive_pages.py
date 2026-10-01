@@ -6,8 +6,8 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import date, timedelta
 from datetime import time as clock_time
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
@@ -315,7 +315,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             workday_id=travel_workday.id,
             revision_number=1,
             state="PUBLISHED",
-            work_date=date.today().replace(day=8),
+            work_date=local_today().replace(day=8),
             track_name_snapshot="Operations Transit",
 
             title="Travel to race meeting",
@@ -347,6 +347,35 @@ def browser_site():  # type: ignore[no-untyped-def]
             ]
         )
         travel_workday.current_published_revision_id = travel_revision.id
+        navigation_workday = Workday(region_id=region.id, created_by_user_id=manager.id)
+        db.add(navigation_workday)
+        db.flush()
+        navigation_revision = WorkdayRevision(
+            workday_id=navigation_workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=local_today() - timedelta(days=1),
+            track_id=track.id,
+            track_name_snapshot=track.name,
+            title="Browser previous-day navigation",
+            start_time=clock_time(8),
+            end_time=clock_time(17),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add(navigation_revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=navigation_revision.id,
+                base_position_id=position.id,
+                display_name_snapshot=position.name,
+                person_id=person.id,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        navigation_workday.current_published_revision_id = navigation_revision.id
         open_workday = Workday(region_id=region.id, created_by_user_id=manager.id)
         db.add(open_workday)
         db.flush()
@@ -609,6 +638,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             "admin": (admin.email, "12345678"),
             "viewer": (viewer.email, "112233"),
             "workday_id": str(workday.id),
+            "previous_workday_id": str(navigation_workday.id),
             "cross_workday_id": str(cross_workday.id),
                 "region_id": str(region.id),
                 "region_name": region.name,
@@ -1503,8 +1533,13 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page.wait_for_url("**/manage/workdays/new?date=2040-01-15")
     assert page.locator('input[name="work_date"]').input_value() == "2040-01-15"
     page.goto(base_url + "/month")
-    assert page.get_by_text("Operations Transit", exact=True).count() == 1
-    assert page.get_by_text("Travel lead", exact=True).count() == 1
+    calendar = page.locator(".calendar-grid")
+    travel_card = calendar.locator(".shift-card").filter(
+        has=calendar.locator(".shift-track", has_text="Operations Transit")
+    )
+    assert travel_card.count() == 1
+    assert travel_card.locator(".shift-track", has_text="Operations Transit").count() == 1
+    assert travel_card.get_by_text("Travel lead", exact=True).count() == 1
     assert page.locator(".available-shift-dot", has_text="Open").count() == 1
     _capture_page(page, f"month-{width}.png")
     if width == 1280:
@@ -1825,7 +1860,7 @@ def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type:
     page.goto(base_url + f"/day/{values['workday_id']}")
     original = page.url
     previous_url = page.locator("[data-day-nav]").get_attribute("data-prev-url")
-    assert previous_url
+    assert previous_url == f"/day/{values['previous_workday_id']}"
     swipe_right = """() => {
       const target = document.body;
       const start = new Touch({identifier: 1, target, clientX: 80, clientY: 400});
