@@ -370,8 +370,8 @@ def browser_site():  # type: ignore[no-untyped-def]
                 revision_id=navigation_revision.id,
                 base_position_id=position.id,
                 display_name_snapshot=position.name,
-                person_id=person.id,
-                person_name_snapshot=person.display_name,
+                person_id=manager_person.id,
+                person_name_snapshot=manager_person.display_name,
                 status="ASSIGNED",
             )
         )
@@ -1534,9 +1534,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.locator('input[name="work_date"]').input_value() == "2040-01-15"
     page.goto(base_url + "/month")
     calendar = page.locator(".calendar-grid")
-    travel_card = calendar.locator(".shift-card").filter(
-        has=calendar.locator(".shift-track", has_text="Operations Transit")
-    )
+    travel_card = calendar.locator(".shift-card", has_text="Operations Transit")
     assert travel_card.count() == 1
     assert travel_card.locator(".shift-track", has_text="Operations Transit").count() == 1
     assert travel_card.get_by_text("Travel lead", exact=True).count() == 1
