@@ -9,11 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditEvent, HumanChange
-from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
+from app.catalog.models import BasePosition, CrewGroup, Region, Track, TrackMap, Vehicle
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
     ExternalTrackMapping,
+    TransitionSourceReference,
 )
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.rostering.models import (
@@ -41,6 +42,17 @@ def safe_data_export(db: Session) -> bytes:
     exports = (
         ("regions.csv", Region, ("id", "name", "lifecycle", "decline_policy", "statutory_holiday_region")),
         ("tracks.csv", Track, ("id", "region_id", "name", "palette_slot", "map_reference", "default_travel_minutes", "lifecycle")),
+        (
+            "track_maps.csv",
+            TrackMap,
+            (
+                "track_id", "automatic_file_name", "automatic_content_type", "automatic_hash",
+                "automatic_width", "automatic_height", "automatic_bytes", "automatic_source_url",
+                "automatic_status", "automatic_checked_at", "automatic_error", "manual_file_name",
+                "manual_content_type", "manual_hash", "manual_width", "manual_height", "manual_bytes",
+                "manual_updated_at", "has_manual_override",
+            ),
+        ),
         ("crew_groups.csv", CrewGroup, ("id", "name", "lifecycle")),
         ("base_positions.csv", BasePosition, ("id", "crew_group_id", "name", "lifecycle")),
         (
@@ -169,6 +181,8 @@ def safe_data_export(db: Session) -> bytes:
                 "discipline",
                 "event_kind",
                 "status",
+                "meeting_name",
+                "programme_status",
                 "first_trial_time",
                 "first_race_time",
                 "last_race_time",
@@ -176,6 +190,10 @@ def safe_data_export(db: Session) -> bytes:
                 "presentation_provider",
                 "created_at",
                 "updated_at",
+                "detail_checked_at",
+                "next_detail_due_at",
+                "detail_failure_count",
+                "latest_detail_error",
             ),
         ),
         (
@@ -213,6 +231,14 @@ def safe_data_export(db: Session) -> bytes:
                 "track_id",
                 "confirmed_by_user_id",
                 "confirmed_at",
+            ),
+        ),
+        (
+            "transition_source_references.csv",
+            TransitionSourceReference,
+            (
+                "id", "source", "entity_kind", "external_key", "target_type", "target_id",
+                "payload_hash", "imported_at",
             ),
         ),
         (

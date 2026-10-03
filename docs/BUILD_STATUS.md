@@ -1,8 +1,10 @@
-# Build status — 2026-10-01
+# Build status — 2026-10-03
 
 ## Current source and deployment boundary
 
-This checkpoint is based on exact qualified `main` SHA `b843e7417e26b43a31610631603d203f58ecacd5` (release-gate run `36682049077`): 213 PostgreSQL-backed tests and 35 Playwright tests passed with the complete release gate, including production/staging Compose validation and production image construction. CI is not a staging redeploy or production deployment; no deployment is implied by this checkpoint.
+The current qualified predecessor is exact `main` SHA `2cd94d1649c84dd3f090c04c0f4558be2b2fc658` (release-gate run `36917382750`): 213 PostgreSQL-backed tests and 35 Playwright tests passed with the complete release gate, including production/staging Compose validation and production image construction. CI is not a staging redeploy or production deployment; no deployment is implied by this checkpoint.
+
+The racing-programme, scheduler, Track-map, regional-account, personal-fortnight, and transition-import work described below is implemented in the current source tree but remains unqualified until its own exact-head release gate succeeds.
 
 Local development and qualification remain Docker-free. PostgreSQL integration, Playwright, Compose validation, and production image construction are authoritative only when executed by the exact-head GitHub release gate unless a native/remote development PostgreSQL URL and local browser environment are explicitly available.
 
@@ -17,12 +19,13 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 - Admin-global and Manager-region-scoped Audit workspace with Region/date/actor/action/text filtering and redacted structured detail. Sub-Manager and read-only roles have no audit access.
 - Inclusive whole-date Person leave/unavailability with scoped Manager/Admin administration, preserved cancellation history, existing-roster conflict links, advisory Builder/Open-application warnings, deliberate roster override, Preview warnings, and management-only notes.
 - Consolidated Master Data, Crew, Accounts, Hours, Audit, Settings, external calendar/import/source management, configurable branding, provider-neutral racing evidence, Operations, TravelLegs, accommodation, notification delivery, and personal offline read models.
+- Stable racing programme detail parsing and correction, private-draft synchronization/application, an advisory-locked refresh scheduler, trusted persistent Track maps with scoped manual overrides, regional account linking/invitations, role-independent personal fortnight totals, and an atomic allowlisted Deputy capture transition importer.
 
 ## Qualification baseline
 
 The historical Leave checkpoint at exact SHA `1cff0b50c0cb4044214dde646c0956e8e6df5029` was **QUALIFIED** by release-gate run `36652200053`: **208 PostgreSQL-backed tests**, **31 Playwright tests**, production/staging Compose validation, and production image build passed. It established flexible multiple Positions, Move/Keep both/Cancel, one person-level travel plan, one Person/day Hours aggregation, Open Position multi-Position consistency, Vehicle master data, Position ordering/history, Audit, native Builder time inputs, Builder HTML error recovery, and the complete advisory Leave workflow.
 
-The current Race Day timing checkpoint at `b843e7417e26b43a31610631603d203f58ecacd5` is **QUALIFIED** by release-gate run `36682049077`. It adds automatic Race Day timing, snapshotted Track default travel, call-time derivation, explicit timing override/reset preservation, adoption of available programme timing into the Builder, and the existing Operations/TravelLeg/accommodation model. Race timing is category-scoped: Trials and non-racing Workdays retain their manual timing behavior.
+The current qualified documentation/timing predecessor at `2cd94d1649c84dd3f090c04c0f4558be2b2fc658` is **QUALIFIED** by release-gate run `36917382750`. Race timing is category-scoped: Trials and non-racing Workdays retain their manual timing behavior.
 
 ## Outstanding product backlog
 
@@ -32,7 +35,7 @@ The current Race Day timing checkpoint at `b843e7417e26b43a31610631603d203f58eca
 - Full abandoned/rescheduled Workday workflow and employee availability response after moved or abandoned days.
 - Remaining responsive/layout polish and full physical-device/operator staging qualification.
 - Real Web Push delivery with deployment-owned VAPID/scheduler configuration; real passkey/TOTP ceremonies; complete role/direct-request/privacy/offline/restart/log matrix.
-- Recovery codes, monitored production scheduler, immutable release promotion, production secrets/RP identity, and backup/restore rehearsal.
+- Recovery codes, scheduler operations monitoring/alerting, immutable release promotion, production secrets/RP identity, and backup/restore rehearsal for both PostgreSQL and the application-data volume.
 
 ## Known architecture constraint
 

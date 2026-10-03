@@ -2,14 +2,14 @@
 
 ## Runtime
 
-One FastAPI application renders Jinja pages and serves small JSON read models. SQLAlchemy 2 talks to PostgreSQL 17; Alembic owns schema changes. On the Windows development machine, FastAPI, Alembic, tests, and tooling run directly under Python against a native/local or explicitly configured remote PostgreSQL database supplied through `DATABASE_URL`. Docker is excluded from local development and qualification. The retained Compose stack runs the app and internal database only on the separate Docker/Portainer deployment server. Vanilla JavaScript adds view switching, sequential next-day prefetch, PWA registration, and read-only offline cache behavior.
+One FastAPI application renders Jinja pages and serves small JSON read models. A second process from the same codebase runs bounded scheduled racing refreshes under a PostgreSQL advisory lock. SQLAlchemy 2 talks to PostgreSQL 17; Alembic owns schema changes. On the Windows development machine, FastAPI, Alembic, tests, and tooling run directly under Python against a native/local or explicitly configured remote PostgreSQL database supplied through `DATABASE_URL`. Docker is excluded from local development and qualification. The retained Compose stack runs app, scheduler, and internal database only on the separate Docker/Portainer deployment server. Vanilla JavaScript adds view switching, sequential next-day prefetch, PWA registration, and read-only offline cache behavior.
 
 ## Bounded modules
 
 - `app/core`: configuration, database/session factory, enums, time and NZ holiday calculations.
 - `app/branding`: the singleton persisted global product name and its validation/read service. Authentication middleware resolves it once per request, and the shared template context exposes `branding` without route-level queries.
 - `app/auth`: Argon2id credentials, WebAuthn ceremonies, encrypted/replay-resistant TOTP, login throttling, trusted devices, fresh authentication, trusted-proxy network authority, CSRF/origin checks, invitation activation, and the central policy layer.
-- `app/accounts`: Manager/Admin signup approval, explicit person linking, and pending/active/revoked privilege administration.
+- `app/accounts`: Manager/Admin signup approval, regional existing-account/person linking, one-time regional invitations, and pending/active/revoked privilege administration.
 - `app/identity`: users, people, one-to-one links, scoped role grants, invitations, pending signup, trusted devices, and passkey public-key storage.
 - `app/catalog`: Admin global/region policy administration plus Manager-scoped regional tracks and Vehicles, stable palette-slot allocation, and Admin Crew Group/Base Position administration. Base Position display order is persistent catalogue data with the former operational sequence retained as a deterministic null/legacy fallback. Vehicle ownership and mutation are Region-scoped; published assignments retain vehicle-name snapshots. Active tracks have distinct slots 1–20 per region. Allocation locks the destination Region within the caller's transaction; a partial unique index is the final database guard. Track UUIDs are identity; theme CSS owns colours, not master data or revisions.
 - `app/rostering`: operations, stable workday identity, draft/published revisions, structured publication diff, authoritative person/day participation, event slots, assignments, programme source/override fields, standard-travel calculation and TravelLeg projection, linked generated Travel Days, allowances, publish transaction, and management routes.
@@ -17,11 +17,10 @@ One FastAPI application renders Jinja pages and serves small JSON read models. S
 - `app/crew`: scoped regional crew search, creation, archive lifecycle, group membership, and Manager capability decisions.
 - `app/positions`: effective capability resolution with explicit provenance and precedence.
 - `app/employee`: intentionally small Month/Day read models and Settings views.
-- `app/external_calendar`: provider-neutral racing observations, canonical
-  field-aware reconciliation/provenance, Admin Track mapping and typed neutral
-  import, per-user planning display preferences, and transaction-safe adoption
-  into a private Workday draft. Provider adapters remain boundaries; published
-  roster reads never query provider-specific data.
+- `app/external_calendar`: provider-neutral racing observations, stable-identity correction, canonical field-aware reconciliation/provenance, meeting programme parsing and detail cadence, Admin Track mapping and typed neutral import, per-user planning display preferences, and transaction-safe adoption/application into a private Workday draft. Provider adapters remain boundaries; published roster reads never query provider-specific data.
+- `app/track_maps`: trusted Love Racing discovery, image validation/cache metadata, persistent file storage, manual override precedence, and scoped map routes.
+- `app/transition_import`: allowlisted parsing, human preview, idempotency references, and atomic one-time migration of published schedule captures without Users, auth, payroll, breaks, or notifications.
+- `app/scheduler`: database-singleton provider, programme, and Track-map refresh orchestration with bounded cadence/backoff.
 - `app/hours`: employee and region-scoped management fortnight totals from current published spans.
 - `app/audit`: redacted security audit, human publication history, and the Admin-global/Manager-region-scoped Audit read surface.
 - `app/unavailability`: `PersonUnavailability` lifecycle, inclusive centralized date/range lookup, overlap validation, scheduled-roster conflict read model, scoped management routes, and date-only redacted audit events. Admin and a Region's Manager may mutate records; Sub-Managers receive date-only Builder warnings through ordinary roster authority.
@@ -65,8 +64,10 @@ Global operational policy is kept separate from branding in the persisted single
 ## Delivery worker
 
 Authoritative transactions add deterministic `NotificationEvent` keys but never call a push provider. `python -m app.cli deliver-notifications` generates deterministic two-day, night-before, and one-hour events from current published person/day starts, then claims due rows with PostgreSQL `FOR UPDATE SKIP LOCKED`. Five-minute leases recover abandoned claims. Publication audience is the union of prior and new assignees. A unique event/subscription delivery row makes completed delivery idempotent. HTTP 404/410 deactivates an endpoint; transient failures back off and stop at the configured attempt limit.
-# Live racing source boundary
+## Live racing source boundary
 
 Provider adapters under `app/external_calendar/providers/` fetch and normalize public planning evidence without database access. `app.external_calendar.refresh.refresh_provider()` is the single orchestration path for Admin and CLI refreshes. It updates `ExternalProviderState`, calls the existing field-aware reconciler, and records a redacted audit summary. A provider component may be partial; a fatal refresh never deletes previous canonical data.
 
-The shared HTTP boundary has fixed provider URLs, bounded time/response size, and no startup fetch. Provider-specific names and parsing do not leak into Month, Day, or Workday templates.
+The shared HTTP boundary has fixed provider URLs, bounded time/response size, and no startup fetch. Programme and map refreshes validate stable identities and trusted hosts; errors retain last-good canonical facts and files. Provider-specific parsing does not leak into authoritative published snapshots.
+
+The scheduler's advisory lock is held by a dedicated PostgreSQL connection for the whole cycle, independent of ORM transaction commits. Production and staging share a persistent `/app/data` volume between app and scheduler. Recovery therefore requires the PostgreSQL backup and application-data volume together.

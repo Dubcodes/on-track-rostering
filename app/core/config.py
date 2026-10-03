@@ -52,7 +52,9 @@ class Settings(BaseSettings):
     racing_source_max_bytes: int = Field(default=2_000_000, ge=100_000, le=10_000_000)
     racing_source_lookback_days: int = Field(default=14, ge=0, le=90)
     racing_source_horizon_days: int = Field(default=366, ge=30, le=730)
-    racing_sources_enabled_default: bool = False
+    racing_sources_enabled_default: bool = True
+    data_dir: Path = Path("data")
+    scheduler_interval_seconds: int = Field(default=1800, ge=60, le=86400)
 
     @field_validator("allowed_hosts", "trusted_proxy_cidrs", mode="before")
     @classmethod

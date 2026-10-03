@@ -15,12 +15,15 @@ from app.catalog.models import Region, Track
 from app.core.time import parse_time, utcnow
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation, ExternalTrackMapping
 from app.rostering.models import Workday, WorkdayRevision
-from app.rostering.service import create_workday
+from app.rostering.service import create_workday, ensure_draft
 from app.rostering.timing import derive_race_day_timing
 
 DISCIPLINES = {"THOROUGHBRED", "HARNESS"}
 EVENT_KINDS = {"RACE", "TRIAL"}
-CANONICAL_FIELDS = ("first_trial_time", "first_race_time", "last_race_time", "race_count", "status")
+CANONICAL_FIELDS = (
+    "meeting_name", "programme_status", "first_trial_time", "first_race_time",
+    "last_race_time", "race_count", "status",
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +146,17 @@ def reconcile_observation(
         "discipline": value.discipline,
         "event_kind": value.event_kind,
     }
+    same_provider_identity = bool(
+        event
+        and value.provider_event_id
+        and db.scalar(
+            select(ExternalEventObservation.id).where(
+                ExternalEventObservation.event_id == event.id,
+                ExternalEventObservation.provider == provider,
+                ExternalEventObservation.provider_event_id == value.provider_event_id,
+            ).limit(1)
+        )
+    )
     observation = ExternalEventObservation(
         event_id=event.id if event else None,
         provider=provider,
@@ -157,6 +171,7 @@ def reconcile_observation(
     )
     db.add(observation)
     if event:
+        previous = {field: getattr(event, field) for field in CANONICAL_FIELDS}
         provenance = {key: list(sources) for key, sources in (event.field_provenance or {}).items()}
         enriched = False
         conflict = identity_conflict
@@ -164,11 +179,21 @@ def reconcile_observation(
             raw = value.facts.get(field)
             incoming = parse_time(str(raw)) if raw and field.endswith("_time") else raw
             current = getattr(event, field)
-            if incoming is not None and current is None:
+            if (
+                field == "programme_status"
+                and current == "COMPLETE"
+                and incoming in {"PARTIAL", "AWAITING_SCHEDULE", "DISCOVERED"}
+            ):
+                incoming = None
+            if incoming is not None and (current is None or state == "CREATED"):
                 setattr(event, field, incoming)
                 enriched = state != "CREATED"
             elif incoming is not None and current is not None and incoming != current:
-                conflict = True
+                if same_provider_identity and not identity_conflict:
+                    setattr(event, field, incoming)
+                    enriched = True
+                else:
+                    conflict = True
             if incoming is not None and incoming == getattr(event, field):
                 provenance[field] = sorted(set(provenance.get(field, [])) | {provider})
         event.field_provenance = provenance
@@ -176,7 +201,50 @@ def reconcile_observation(
             state = observation.reconciliation_state = "ENRICHED"
         if conflict:
             state = observation.reconciliation_state = "CONFLICT"
+        if not identity_conflict:
+            _sync_unpublished_linked_draft(db, event, previous)
     return event, state
+
+
+def _sync_unpublished_linked_draft(
+    db: Session, event: ExternalCalendarEvent, previous: dict[str, object]
+) -> None:
+    workday = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
+    if not workday or workday.current_published_revision_id or not workday.current_draft_revision_id:
+        return
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    if not draft:
+        return
+    generic_titles = {"Race Day", "Trials", "RACE_DAY", "TRIALS", ""}
+    if event.meeting_name and (
+        draft.title in generic_titles or draft.title == previous.get("meeting_name")
+    ):
+        draft.title = event.meeting_name
+    for field in ("first_trial_time", "first_race_time", "last_race_time", "race_count"):
+        incoming = getattr(event, field)
+        if incoming is not None and (
+            getattr(draft, field) is None or getattr(draft, field) == previous.get(field)
+        ):
+            setattr(draft, field, incoming)
+    if workday.category == "RACE_DAY":
+        track = db.get(Track, draft.track_id) if draft.track_id else None
+        region = db.get(Region, workday.region_id)
+        if track and region:
+            timing = derive_race_day_timing(
+                work_date=draft.work_date,
+                first_race_time=draft.first_race_time,
+                last_race_time=draft.last_race_time,
+                setup_lead_minutes=region.lead_minutes_race_day,
+                track_travel_minutes=draft.track_travel_minutes,
+                pack_up_minutes=draft.pack_up_minutes,
+                return_travel_minutes=draft.return_travel_minutes,
+            )
+            if not draft.on_track_time_is_override:
+                draft.on_track_time = timing.on_track
+            if not draft.start_time_is_override:
+                draft.start_time = timing.start
+            if not draft.end_time_is_override:
+                draft.end_time = timing.finish
 
 
 def event_evidence(db: Session, event: ExternalCalendarEvent) -> dict[str, object]:
@@ -306,14 +374,14 @@ def adopt_external_event(
     if existing:
         return existing, False
     day_type = "Race Day" if event.event_kind == "RACE" else "Trials"
-    meeting_name = day_type
+    meeting_name = event.meeting_name or day_type
     observations = db.scalars(
         select(ExternalEventObservation)
         .where(ExternalEventObservation.event_id == event.id)
         .order_by(ExternalEventObservation.retrieved_at.desc())
     )
     for observation in observations:
-        candidate = (
+        candidate = event.meeting_name or (
             observation.parsed_facts.get("programme_title")
             or observation.parsed_facts.get("meeting_name")
             or observation.raw_payload.get("title")
@@ -361,3 +429,55 @@ def adopt_external_event(
         draft.end_time = timing.finish
     db.flush()
     return workday, True
+
+
+def apply_latest_programme_to_draft(
+    db: Session,
+    workday: Workday,
+    actor: Actor,
+) -> WorkdayRevision:
+    """Copy current source facts into a private draft without touching publication."""
+    require_manage_region(actor, workday.region_id)
+    if not workday.external_event_id:
+        raise ValueError("This Workday is not linked to a racing source.")
+    event = db.get(ExternalCalendarEvent, workday.external_event_id)
+    if not event:
+        raise ValueError("The linked source event is unavailable.")
+    draft = ensure_draft(db, workday, actor.user_id, commit=False)
+    source_names = {
+        str(row.parsed_facts.get("meeting_name") or "").strip()
+        for row in db.scalars(
+            select(ExternalEventObservation).where(
+                ExternalEventObservation.event_id == event.id
+            )
+        )
+    }
+    if event.meeting_name and (
+        draft.title in {"Race Day", "Trials", "RACE_DAY", "TRIALS", ""}
+        or draft.title in source_names
+    ):
+        draft.title = event.meeting_name
+    for field in ("first_trial_time", "first_race_time", "last_race_time", "race_count"):
+        value = getattr(event, field)
+        if value is not None:
+            setattr(draft, field, value)
+    if workday.category == "RACE_DAY":
+        region = db.get(Region, workday.region_id)
+        if region:
+            timing = derive_race_day_timing(
+                work_date=draft.work_date,
+                first_race_time=draft.first_race_time,
+                last_race_time=draft.last_race_time,
+                setup_lead_minutes=region.lead_minutes_race_day,
+                track_travel_minutes=draft.track_travel_minutes,
+                pack_up_minutes=draft.pack_up_minutes,
+                return_travel_minutes=draft.return_travel_minutes,
+            )
+            if not draft.on_track_time_is_override:
+                draft.on_track_time = timing.on_track
+            if not draft.start_time_is_override:
+                draft.start_time = timing.start
+            if not draft.end_time_is_override:
+                draft.end_time = timing.finish
+    db.flush()
+    return draft

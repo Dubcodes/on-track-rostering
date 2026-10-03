@@ -24,10 +24,11 @@
 </section>
 {% endmacro %}
 
-{% macro track_controls(tracks, archived_tracks, regions, csrf_token) %}
+{% macro track_controls(tracks, archived_tracks, regions, csrf_token, map_by_track={}) %}
 <section class="panel" id="tracks">
   <div class="section-heading"><div><p class="eyebrow">Venue master data</p><h2>Active Tracks</h2></div></div>
   {% for track in tracks %}
+  {% set track_map = map_by_track.get(track.id) %}
   <details class="control-record"><summary><span><i class="track-dot" data-presentation="{{ track.palette_slot|track_token }}"></i> <strong>{{ track.name }}</strong></span><span class="badge">Active</span></summary>
     <form method="post" action="/manage/catalog/tracks/{{ track.id }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ACTIVE">
@@ -35,6 +36,23 @@
       <label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == track.region_id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
       <label>Map reference<input name="map_reference" value="{{ track.map_reference or '' }}"></label><label>Default travel to Track (minutes)<input type="number" min="0" max="1440" name="default_travel_minutes" value="{{ track.default_travel_minutes if track.default_travel_minutes is not none else '' }}"><small>Used to calculate the default Race Day vehicle call time. Individual assignment Start times may still override it.</small></label><button>Save track</button>
     </form>
+    <section class="map-admin-controls">
+      <h3>Track map</h3>
+      {% if track_map and track_map.has_manual_override %}
+        <p><span class="badge">Manual override</span> {{ track_map.manual_width }}×{{ track_map.manual_height }} · {{ track_map.manual_updated_at|display_datetime }}</p>
+        <a class="button secondary" href="/track-maps/{{ track.id }}" target="_blank">View map</a>
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/reset"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Reset to automatic</button></form>
+      {% elif track_map and track_map.automatic_file_name %}
+        <p><span class="badge">Automatic available</span> {{ track_map.automatic_width }}×{{ track_map.automatic_height }} · checked {{ track_map.automatic_checked_at|display_datetime }}</p>
+        <a class="button secondary" href="/track-maps/{{ track.id }}" target="_blank">View map</a>
+      {% else %}
+        <p class="muted">Automatic {% if track_map %}{{ track_map.automatic_status|lower }}{% else %}unchecked{% endif %}{% if track_map and track_map.automatic_error %} · {{ track_map.automatic_error }}{% endif %}</p>
+      {% endif %}
+      <div class="action-row">
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/upload" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>JPEG, PNG or WebP up to 15 MB<input type="file" name="image" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" required></label><button>Upload better map</button></form>
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/refresh"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Refresh automatic</button></form>
+      </div>
+    </section>
     <div class="row-actions danger-actions"><form method="post" action="/manage/catalog/tracks/{{ track.id }}/lifecycle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ARCHIVED"><button class="secondary">Archive</button></form><form method="post" action="/manage/catalog/tracks/{{ track.id }}/remove-unused" onsubmit="return confirm('Permanently remove this unused Track?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm_remove" value="yes"><button class="secondary">Remove unused</button></form></div>
   </details>
   {% else %}<p class="muted">No active Tracks.</p>{% endfor %}

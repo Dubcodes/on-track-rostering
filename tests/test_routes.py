@@ -1822,12 +1822,16 @@ def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> 
     assert "Saturday 24 October 2026" in manual_day.text
 
 
-def test_online_source_controls_are_admin_only_and_render_refresh_feedback(
+def test_online_source_status_is_regional_but_controls_are_admin_only(
     routed_db, monkeypatch
 ) -> None:  # type: ignore[no-untyped-def]
     manager = TestClient(app)
     manager_csrf = _login(manager, "manager@example.test", "123456")
-    assert manager.get("/admin/online-sources").status_code == 403
+    manager_page = manager.get("/admin/online-sources")
+    assert manager_page.status_code == 200
+    assert "Mapping status" in manager_page.text
+    assert "/admin/online-sources/LOVE_RACING/toggle" not in manager_page.text
+    assert "Download source mapping template" not in manager_page.text
     assert manager.post(
         "/admin/online-sources/LOVE_RACING/toggle",
         data={"csrf_token": manager_csrf},

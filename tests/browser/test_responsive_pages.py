@@ -934,7 +934,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
         + values["region_name"]
         + '"}]}'
     )
-    page.get_by_role("button", name="Parse and preview").click()
+    page.get_by_role("button", name="Parse and preview", exact=True).click()
     assert page.get_by_text("Preview summary", exact=True).count() == 1
     assert page.get_by_text("create 1", exact=False).count() >= 1
     assert page.get_by_role("button", name="Import these records").count() == 1
@@ -959,7 +959,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
         + values["region_name"]
         + '"}]}'
     )
-    page.get_by_role("button", name="Parse and preview").click()
+    page.get_by_role("button", name="Parse and preview", exact=True).click()
     conflict_details = page.locator("details.control-record").filter(
         has_text="External Track Mappings"
     )
@@ -968,6 +968,28 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     assert conflict_details.get_by_text("Conflict", exact=True).count() == 1
     assert page.get_by_role("button", name="Import these records").count() == 0
     assert page.get_by_text("Resolve conflicts", exact=False).count() == 1
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(base_url + "/admin/data-import")
+    transition_capture = (
+        "Deputy Web Capture\nSchedule Area References\n"
+        '[{"areaId":"browser-area","areaName":"Director"}]\n'
+        "Extracted Schedule Shift Records\n"
+        '[{"shiftId":"browser-transition-' + str(width) + '",'
+        '"employeeId":"browser-person-' + str(width) + '",'
+        '"employeeName":"Browser Transition Crew",'
+        '"locationName":"T- ' + values["track_name"] + '",'
+        '"areaId":"browser-area",'
+        '"start":"2032-02-01T20:00:00Z",'
+        '"end":"2032-02-02T04:00:00Z",'
+        '"note":"8 races 1210 | 1630",'
+        '"isPublished":true,"isOpen":false}]'
+    )
+    page.locator('textarea[name="pasted_capture"]').fill(transition_capture)
+    page.get_by_role("button", name="Parse and preview transition").click()
+    assert page.get_by_role("heading", name="Transition preview").count() == 1
+    assert page.get_by_text("Browser Transition Crew: create Person", exact=False).count() == 1
+    assert page.get_by_role("button", name="Apply this transition atomically").count() == 1
     _assert_no_horizontal_overflow(page)
 
     page.goto(base_url + "/settings#calendar")
@@ -1334,6 +1356,8 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
     )
     page.goto(base_url + "/month")
+    assert page.locator(".fortnight-total-marker").count() >= 1
+    assert page.locator(".fortnight-total-marker strong").first.inner_text().strip()
     assert page.locator(".shift-card.cross-region").count() == 1
     assert page.locator(".shift-card.cross-region").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
@@ -1506,6 +1530,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         f"/manage/workdays/{values['workday_id']}/preview",
         "/manage/crew",
         "/manage/accounts",
+        "/admin/online-sources",
         "/manage/catalog",
         "/manage/hours",
     ):

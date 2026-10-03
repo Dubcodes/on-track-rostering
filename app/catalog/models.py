@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -54,6 +56,31 @@ class Track(Base):
     default_travel_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TrackMap(Base):
+    __tablename__ = "track_maps"
+    track_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tracks.id", ondelete="CASCADE"), primary_key=True
+    )
+    automatic_file_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    automatic_content_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    automatic_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    automatic_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    automatic_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    automatic_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    automatic_source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    automatic_status: Mapped[str] = mapped_column(String(24), default="UNCHECKED")
+    automatic_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    automatic_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    manual_file_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    manual_content_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    manual_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    manual_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    manual_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    manual_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    manual_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    has_manual_override: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class CrewGroup(Base):

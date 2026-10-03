@@ -20,12 +20,18 @@ class ExternalCalendarEvent(Base):
     discipline: Mapped[str] = mapped_column(String(24))
     event_kind: Mapped[str] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(24), default="SCHEDULED")
+    meeting_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    programme_status: Mapped[str] = mapped_column(String(24), default="DISCOVERED")
     first_trial_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     first_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     last_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     race_count: Mapped[int | None] = mapped_column(nullable=True)
     field_provenance: Mapped[dict[str, list[str]]] = mapped_column(JSON, default=dict)
     presentation_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    detail_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_detail_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detail_failure_count: Mapped[int] = mapped_column(default=0)
+    latest_detail_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -63,7 +69,8 @@ class ExternalTrackMapping(Base):
 class ExternalProviderState(Base):
     __tablename__ = "external_provider_states"
     provider: Mapped[str] = mapped_column(String(40), primary_key=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    explicitly_configured: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(40), default="NOT_CONFIGURED")
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -71,6 +78,22 @@ class ExternalProviderState(Base):
     events_created: Mapped[int] = mapped_column(default=0)
     events_enriched: Mapped[int] = mapped_column(default=0)
     warning_count: Mapped[int] = mapped_column(default=0)
+    failure_count: Mapped[int] = mapped_column(default=0)
+    next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    latest_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class TransitionSourceReference(Base):
+    __tablename__ = "transition_source_references"
+    __table_args__ = (UniqueConstraint("source", "entity_kind", "external_key"),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    entity_kind: Mapped[str] = mapped_column(String(40))
+    external_key: Mapped[str] = mapped_column(String(200))
+    target_type: Mapped[str] = mapped_column(String(40))
+    target_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class CalendarDisplayPreference(Base):

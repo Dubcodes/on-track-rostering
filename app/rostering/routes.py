@@ -17,6 +17,8 @@ from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, RacingDiscipline, WorkdayCategory, WorkdayStatus
 from app.core.time import parse_time
+from app.external_calendar.models import ExternalCalendarEvent
+from app.external_calendar.service import apply_latest_programme_to_draft
 from app.identity.models import Person, UserPersonLink
 from app.notifications.service import record_event
 from app.positions.ordering import catalog_position_order, position_order
@@ -507,6 +509,22 @@ def _builder_context(
     builder_error = extra.pop("builder_error", request.query_params.get("error"))
     editable_regions = _editable_regions(db, request)
     region = db.get(Region, workday.region_id)
+    source_event = (
+        db.get(ExternalCalendarEvent, workday.external_event_id)
+        if workday.external_event_id
+        else None
+    )
+    programme_changed = bool(
+        source_event
+        and (
+            (source_event.meeting_name and source_event.meeting_name != draft.title)
+            or any(
+                getattr(source_event, field) is not None
+                and getattr(source_event, field) != getattr(draft, field)
+                for field in ("first_race_time", "last_race_time", "race_count")
+            )
+        )
+    )
     return context(
         request,
         new_mode=False,
@@ -536,6 +554,8 @@ def _builder_context(
         transport_labels=TRANSPORT_LABELS,
         setup_lead_minutes=region.lead_minutes_race_day if region else 120,
         generated_travel=generated_travel,
+        source_event=source_event,
+        programme_changed=programme_changed,
         builder_error=builder_error,
         **extra,
     )
@@ -733,6 +753,34 @@ def edit_workday(workday_id: uuid.UUID, request: Request, db: Session = Depends(
         return RedirectResponse(f"/manage/workdays/{workday.generated_from_workday_id}", status_code=303)
     draft = ensure_draft(db, workday, request.state.user.id)
     return templates.TemplateResponse("workday_builder.html", _builder_context(db, request, workday, draft))
+
+
+@router.post("/workdays/{workday_id}/apply-latest-programme")
+def apply_latest_programme(
+    workday_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    workday = db.get(Workday, workday_id)
+    if not workday:
+        raise HTTPException(404)
+    try:
+        apply_latest_programme_to_draft(db, workday, request.state.actor)
+        record_audit(
+            db,
+            "workday.programme_applied",
+            "workday",
+            workday.id,
+            request.state.user.id,
+            region_id=workday.region_id,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(f"/manage/workdays/{workday.id}?programme=applied", status_code=303)
 
 
 @router.post("/workdays/{workday_id}/status")

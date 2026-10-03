@@ -120,7 +120,7 @@ def parse_event_tiles(html: str, *, reference: date) -> tuple[list[ProviderObser
                 source_track_name=track,
                 discipline="THOROUGHBRED",
                 event_kind="RACE",
-                facts={"status": "SCHEDULED"},
+                facts={"status": "SCHEDULED", "meeting_name": row.get("heading")},
                 raw_payload={"title": row.get("heading"), "date": row["date"], "venue": body, "url": row.get("href")},
             )
         )
@@ -164,7 +164,10 @@ def parse_calendar_json(raw: str) -> tuple[list[ProviderObservation], list[str]]
                 source_track_name=track,
                 discipline="THOROUGHBRED",
                 event_kind=kind,
-                facts={"status": "SCHEDULED"},
+                facts={
+                    "status": "SCHEDULED",
+                    "meeting_name": str(record.get("Club") or "").strip() or None,
+                },
                 raw_payload={key: record.get(key) for key in ("DayID", "RaceDate", "WebMeetingType", "Racecourse", "Club")},
             )
         )

@@ -10,12 +10,15 @@ PostgreSQL 17 is the production database from the first migration. Alembic is th
 
 GitHub `main` may already be a Portainer deployment source, so committed migrations are append-only production artifacts. Do not rewrite an existing migration unless deployment history has first been established and the correction is explicitly safe. New schema changes receive a new revision, support blank-database upgrades, and preserve existing data. Downgrades are documented recovery tools, not an automatic production rollback strategy.
 
-External racing data is planning evidence, not roster authority. Provider
-observations reconcile into one canonical event with field provenance; they may
-fill missing facts but cannot overwrite a conflicting known value. Creating a
-roster from an event produces one private Workday draft transactionally. Only
-Preview → Publish changes the authoritative employee roster, and later source
-updates never rewrite an operational draft or publication.
+External racing data is planning evidence, not roster authority. Provider observations reconcile into one canonical event with field provenance. A stable identity from the same provider may correct programme facts, while cross-provider disagreement and date/Track movement remain review conflicts; partial data cannot downgrade a complete programme. Creating a roster from an event produces one private Workday draft transactionally. Later source updates may synchronize only that linked unpublished draft. Applying latest facts to an already-published Workday first creates a private draft. Only Preview → Publish changes the authoritative employee roster.
+
+## Scheduled source refresh and persistent Track maps
+
+The deployment runs a scheduler process from the same application image. One dedicated PostgreSQL advisory-lock connection owns a whole cycle so ORM commits cannot release singleton ownership. Discovery, programme detail, and map refreshes have separate cadence and bounded failure backoff. Official maps are accepted only from trusted Love Racing hosts after file-signature and dimension validation. A regional Manager's manual image wins until reset. Last-good automatic files survive upstream failure, and `/app/data` is a named volume backed up with PostgreSQL.
+
+## Isolated one-time transition import
+
+Deputy transition capture is a manual, finite migration boundary rather than a runtime integration. Parsing accepts only named capture sections and allowlisted schedule fields. Apply is atomic and idempotent, creates rosterable People but never accounts, preserves existing On Track publications, skips unresolved locations, publishes without notification events, and retains only sanitized source-reference keys/hashes needed for replay safety. Authentication, cookies, credentials, payroll, pay rates, timesheets, approvals, and break data are ignored and never stored.
 
 ## Windows local development excludes Docker
 

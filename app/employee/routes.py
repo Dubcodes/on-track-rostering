@@ -31,7 +31,7 @@ from app.auth.security import (
     verify_credential,
     verify_csrf,
 )
-from app.catalog.models import BasePosition, Region, Track
+from app.catalog.models import BasePosition, Region, Track, TrackMap
 from app.catalog.presentation import track_token
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role, WorkdayCategory
@@ -43,7 +43,7 @@ from app.external_calendar.models import CalendarDisplayPreference, ExternalCale
 from app.external_calendar.read_models import calendar_preference, external_calendar_items
 from app.external_calendar.service import event_evidence
 from app.help.content import help_topic
-from app.hours.service import fortnight_bounds
+from app.hours.service import format_minutes, fortnight_bounds, published_hours
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notices.service import prominent_notice, recent_notices, relevant_notice_region_ids
 from app.notifications.models import NotificationPreference, PushSubscription
@@ -60,6 +60,7 @@ from app.rostering.models import (
 )
 from app.rostering.participation import active_published_assignments, person_day_participation
 from app.rostering.service import decline_published_assignment
+from app.track_maps.service import effective_map
 from app.web import context, month_grid, templates
 
 router = APIRouter()
@@ -161,7 +162,7 @@ def month_view(
         can_manage_region(request.state.actor, region_id)
         for region_id in db.scalars(select(Region.id).where(Region.lifecycle == "ACTIVE"))
     )
-    fortnight_markers: dict[date, str] = {}
+    fortnight_markers: dict[date, dict[str, str]] = {}
     if request.state.actor.person_id:
         current_start, _ = fortnight_bounds(today=today)
         first_grid_day = grid[0][0]["date"]
@@ -170,7 +171,18 @@ def month_view(
         for marker_offset in range(first_offset, first_offset + 5):
             marker_date = current_start + timedelta(days=marker_offset * 14 + 13)
             if first_grid_day <= marker_date <= last_grid_day:
-                fortnight_markers[marker_date] = f"/hours?offset={marker_offset}"
+                fortnight_start, fortnight_end = fortnight_bounds(marker_offset, today=today)
+                hours_rows = published_hours(
+                    db,
+                    actor=request.state.actor,
+                    start=fortnight_start,
+                    end=fortnight_end,
+                    management=False,
+                )
+                fortnight_markers[marker_date] = {
+                    "url": f"/hours?offset={marker_offset}",
+                    "total": format_minutes(sum(int(row["minutes"]) for row in hours_rows)),
+                }
     return templates.TemplateResponse(
         "month.html",
         context(
@@ -296,6 +308,18 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     source_event = (
         db.get(ExternalCalendarEvent, workday.external_event_id) if workday.external_event_id else None
     )
+    track_map = effective_map(db.get(TrackMap, revision.track_id)) if revision.track_id else None
+    programme_changed = bool(
+        source_event
+        and (
+            (source_event.meeting_name and source_event.meeting_name != revision.title)
+            or any(
+                getattr(source_event, field) is not None
+                and getattr(source_event, field) != getattr(revision, field)
+                for field in ("first_race_time", "last_race_time", "race_count")
+            )
+        )
+    )
     previous_workday_id, next_workday_id = adjacent_published_workdays(
         db, request.state.actor, revision.work_date
     )
@@ -335,6 +359,9 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
                 revision.work_date, region.statutory_holiday_region or "" if region else ""
             ),
             source_evidence=event_evidence(db, source_event) if source_event else None,
+            source_event=source_event,
+            programme_changed=programme_changed,
+            track_map=track_map,
             source_title=(
                 f"Raw {'Race' if source_event.event_kind == 'RACE' else 'Trial'} Day Data"
                 if source_event

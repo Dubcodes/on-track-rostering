@@ -122,6 +122,9 @@ def refresh_provider(
         assert state is not None
         state.status = result.status
         state.last_success_at = utcnow()
+        state.failure_count = 0
+        state.latest_error = None
+        state.next_refresh_at = utcnow() + timedelta(hours=48)
         state.observations_found = result.observations
         state.events_created = result.created
         state.events_enriched = result.enriched
@@ -157,6 +160,11 @@ def refresh_provider(
         assert state is not None
         state.status = "ERROR"
         state.warning_count = 1
+        state.failure_count += 1
+        state.latest_error = f"{type(exc).__name__}: {str(exc)[:400]}"
+        state.next_refresh_at = utcnow() + timedelta(
+            minutes=min(360, 15 * (2 ** min(state.failure_count - 1, 5)))
+        )
         result = RefreshResult(provider, "ERROR", warnings=[f"{type(exc).__name__}: {exc}"])
         record_audit(
             db,

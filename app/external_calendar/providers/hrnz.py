@@ -275,6 +275,7 @@ def parse_race_dates_month(
             facts["venue_evidence"] = venue
         if programme:
             facts["programme_title"] = programme.title
+            facts["meeting_name"] = programme.title
             if programme.programme_id:
                 facts["programme_id"] = programme.programme_id
         source_name = venue or club

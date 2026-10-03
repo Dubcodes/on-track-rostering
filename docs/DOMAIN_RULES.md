@@ -1,6 +1,10 @@
 # Domain rules
 
 - On Track stores authoritative workdays directly. External calendar/programme records are planning assistance.
+- Same-provider observations with the same stable meeting identity may correct programme facts. A partial or awaiting schedule never downgrades a complete programme. Date or Track identity changes remain conflicts for review.
+- Source facts may update only an unpublished linked draft automatically. Published revisions are immutable; applying the latest programme creates or updates a private draft and still requires Preview → Publish.
+- Automatic Track maps come only from trusted Love Racing hosts and validated JPEG/PNG/WebP content. A Manager's manual image for their Region takes precedence until explicitly reset; a failed refresh retains the last good automatic image.
+- The racing scheduler is database-singleton work. Provider discovery runs on a bounded 48-hour cadence, while detail cadence tightens as race day approaches and backs off after failures. Source failure never blocks manual Workday creation or editing.
 - `On Track Rostering` is the internal project name. User-facing product identity comes only from global Admin-configurable branding; changing it does not change authorization, roster data, or internal/database identity.
 - Workday categories have stable codes: Race Day, Trials, Travel Day, Rig Day, Office Day, Training Day, Other.
 - Publication follows Draft → Preview → Publish. Drafts are invisible to crew; authorized Managers can rediscover draft-only days and unpublished changes from Month/List without replacing the published crew view.
@@ -33,5 +37,8 @@
 - Notification generation is an idempotent event-outbox concern. Roster-change audience includes both removed and newly assigned users. Reminder keys bind publication, person, and reminder kind. Push delivery failure must never roll back roster publication or employee decline.
 - Employee and Manager capability preferences are independent decision families. Clearing either family never removes the other family or published `WORKED` history.
 - Fortnight totals use only the current published revision and the assigned person's authoritative start/end span. Allowance entitlements never increase that worked total.
+- Personal fortnight totals depend on a User–Person link, not on holding an Employee role, and never infer or deduct unpaid breaks.
+- Regional Managers may link in-scope existing accounts and People and create one-time Employee, Contractor, or Sub-Manager invitations. Those actions do not merge account identity with roster identity or grant out-of-scope authority.
+- The one-time Deputy capture importer is an isolated transition boundary: manually supplied text only, allowlisted published schedule fields only, People but never Users, existing publications win, unresolved locations skip safely, and the apply transaction emits no roster notifications.
 - The upcoming-work feed returns today only when the person is rostered today, followed by at most the next three actual published workdays across month boundaries; the client prefetches those server-selected days sequentially.
 - Deferred: cancellation rebooking/availability confirmation and configurable Open Position auto-accept require separate policy workflows; current applications remain Manager-approved.

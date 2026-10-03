@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
+from app.auth.policy import can_administer_person, can_administer_user
 from app.auth.security import active_device_count, require_fresh_auth, verify_csrf
-from app.auth.service import approve_signup, grant_role, revoke_role_grant
+from app.auth.service import approve_signup, create_invitation, grant_role, revoke_role_grant
 from app.catalog.models import Region
 from app.core.database import get_db
 from app.core.enums import Role
@@ -64,6 +65,10 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
             User.id.in_(linked_user_ids) | User.id.in_(granted_user_ids)
         )
     users = list(db.scalars(users_query.order_by(User.display_name)))
+    invitations_query = select(Invitation)
+    if not request.state.actor.is_admin:
+        invitations_query = invitations_query.where(Invitation.region_id.in_(region_ids))
+    invitations_query = invitations_query.order_by(Invitation.created_at.desc()).limit(50)
     return templates.TemplateResponse(
         "accounts.html",
         context(
@@ -87,11 +92,8 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 if request.state.actor.is_admin
                 else {}
             ),
-            invitations=(
-                list(db.scalars(select(Invitation).order_by(Invitation.created_at.desc()).limit(50)))
-                if request.state.actor.is_admin
-                else []
-            ),
+            invitations=list(db.scalars(invitations_query)),
+            unlinked_users=[user for user in users if db.get(UserPersonLink, user.id) is None],
             account_roles=[role.value for role in Role],
             grants=list(db.scalars(grants_query.order_by(RoleGrant.granted_at.desc()))),
             grant_roles=(
@@ -100,6 +102,88 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 else [Role.SUB_MANAGER.value]
             ),
         ),
+    )
+
+
+@router.post("/link-person")
+def link_existing_person(
+    request: Request,
+    user_id: uuid.UUID = Form(...),
+    person_id: uuid.UUID = Form(...),
+    region_id: uuid.UUID = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    region_ids = {region.id for region in _regions(request, db)}
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    if region_id not in region_ids:
+        raise HTTPException(403)
+    user = db.get(User, user_id)
+    person = db.get(Person, person_id)
+    if not user or not person:
+        raise HTTPException(404)
+    if db.get(UserPersonLink, user.id):
+        raise HTTPException(409, "That account already has a crew identity.")
+    if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
+        raise HTTPException(409, "That crew identity is already linked to an account.")
+    if not can_administer_person(request.state.actor, person, region_id):
+        raise HTTPException(403, "The crew identity is outside this regional scope.")
+    if not can_administer_user(db, request.state.actor, user, region_id):
+        raise HTTPException(403, "The account is outside this regional scope.")
+    db.add(UserPersonLink(user_id=user.id, person_id=person.id))
+    record_audit(
+        db,
+        "account.person_linked",
+        "user",
+        user.id,
+        request.state.user.id,
+        region_id=region_id,
+        detail={"person_id": str(person.id)},
+    )
+    db.commit()
+    return RedirectResponse("/manage/accounts?linked=1", status_code=303)
+
+
+@router.post("/invitations")
+def create_regional_invitation(
+    request: Request,
+    email: str = Form(...),
+    display_name: str = Form(...),
+    person_id: str = Form(""),
+    role: str = Form(...),
+    region_id: uuid.UUID = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    region_ids = {region.id for region in _regions(request, db)}
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    if region_id not in region_ids:
+        raise HTTPException(403)
+    if role not in {Role.EMPLOYEE.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
+        raise HTTPException(403, "Regional invitations cannot grant that role.")
+    linked_person_id = optional_uuid(person_id, "crew identity")
+    if linked_person_id:
+        person = db.get(Person, linked_person_id)
+        if not person or not can_administer_person(request.state.actor, person, region_id):
+            raise HTTPException(403, "The crew identity is outside this regional scope.")
+    try:
+        _invitation, raw = create_invitation(
+            db,
+            email=email,
+            display_name=display_name,
+            person_id=linked_person_id,
+            role=role,
+            region_id=region_id,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return templates.TemplateResponse(
+        "invitation_created.html",
+        context(request, invitation_url=f"/invite#token={raw}", destination="/manage/accounts"),
+        headers={"Cache-Control": "no-store"},
     )
 
 

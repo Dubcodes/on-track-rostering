@@ -11,7 +11,7 @@ from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.policy import can_administer_region, require_admin
 from app.auth.security import verify_csrf
-from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
+from app.catalog.models import BasePosition, CrewGroup, Region, Track, TrackMap, Vehicle
 from app.catalog.service import (
     allocate_palette_slot,
     business_reference_tables,
@@ -54,6 +54,10 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
     visible_tracks = list(
         db.scalars(select(Track).where(Track.region_id.in_(region_ids)).order_by(Track.name))
     )
+    map_by_track = {
+        row.track_id: row
+        for row in db.scalars(select(TrackMap).where(TrackMap.track_id.in_([t.id for t in visible_tracks])))
+    }
     active_region_ids = {row.id for row in active_regions}
     vehicle_statement = select(Vehicle).order_by(Vehicle.name)
     if not request.state.actor.is_admin:
@@ -75,6 +79,7 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
                 for row in visible_tracks
                 if row.lifecycle == Lifecycle.ARCHIVED.value or row.region_id not in active_region_ids
             ],
+            map_by_track=map_by_track,
             groups=list(db.scalars(select(CrewGroup).order_by(CrewGroup.name))),
             positions=sorted(db.scalars(select(BasePosition)), key=catalog_position_order),
             vehicles=vehicles,

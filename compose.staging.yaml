@@ -32,7 +32,10 @@ services:
       ONTRACK_TRUSTED_PROXY_CIDRS: ${STAGING_ONTRACK_TRUSTED_PROXY_CIDRS:?Set the staging proxy CIDRs}
       ONTRACK_WEBAUTHN_RP_ID: ${STAGING_ONTRACK_WEBAUTHN_RP_ID:?Set the staging RP ID}
       ONTRACK_WEBAUTHN_ORIGIN: ${STAGING_ONTRACK_WEBAUTHN_ORIGIN:?Set the exact staging HTTPS origin}
+      ONTRACK_DATA_DIR: /app/data
       TZ: ${TZ:-Pacific/Auckland}
+    volumes:
+      - ontrack_staging_app_data:/app/data
     depends_on:
       staging_db:
         condition: service_healthy
@@ -43,6 +46,28 @@ services:
       retries: 12
     networks: [ontrack_staging_internal]
 
+  staging_scheduler:
+    build:
+      context: .
+      args:
+        BUILD_ID: ${STAGING_ONTRACK_BUILD_ID:-}
+    restart: unless-stopped
+    command: ["python", "-m", "app.scheduler"]
+    environment:
+      ONTRACK_DATABASE_URL: postgresql+psycopg://${STAGING_POSTGRES_USER:-ontrack_staging}:${STAGING_POSTGRES_PASSWORD}@staging_db:5432/${STAGING_POSTGRES_DB:-ontrack_staging}
+      ONTRACK_SECRET_KEY: ${STAGING_ONTRACK_SECRET_KEY:?Set a staging-only 32+ character secret}
+      ONTRACK_CREDENTIAL_PEPPER: ${STAGING_ONTRACK_CREDENTIAL_PEPPER:?Set a separate staging-only pepper}
+      ONTRACK_COOKIE_SECURE: "true"
+      ONTRACK_ALLOWED_HOSTS: ${STAGING_ONTRACK_ALLOWED_HOSTS:?Set the staging hostname}
+      ONTRACK_DATA_DIR: /app/data
+      TZ: ${TZ:-Pacific/Auckland}
+    volumes:
+      - ontrack_staging_app_data:/app/data
+    depends_on:
+      staging_app:
+        condition: service_healthy
+    networks: [ontrack_staging_internal]
+
 networks:
   ontrack_staging_internal:
     name: ontrack_staging_internal
@@ -50,3 +75,5 @@ networks:
 volumes:
   ontrack_staging_postgres_data:
     name: ontrack_staging_postgres_data
+  ontrack_staging_app_data:
+    name: ontrack_staging_app_data

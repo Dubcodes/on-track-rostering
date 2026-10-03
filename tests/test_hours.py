@@ -233,3 +233,47 @@ def test_management_hours_are_region_scoped_for_viewer(db) -> None:  # type: ign
         management=True,
     )
     assert [row["person"] for row in rows] == ["Amy"]
+
+
+def test_personal_hours_depend_on_person_link_not_role(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Central")
+    creator = User(
+        email="creator-hours@example.test",
+        display_name="Creator",
+        credential_hash=hash_credential("123456"),
+        credential_kind="pin",
+    )
+    person = Person(display_name="Linked Contractor")
+    contractor = User(
+        email="contractor-hours@example.test",
+        display_name="Linked Contractor",
+        credential_hash=hash_credential("654321"),
+        credential_kind="pin",
+    )
+    db.add_all([region, creator, person, contractor])
+    db.flush()
+    db.add_all(
+        [
+            UserPersonLink(user_id=contractor.id, person_id=person.id),
+            RoleGrant(user_id=contractor.id, role=Role.CONTRACTOR.value, region_id=region.id),
+        ]
+    )
+    _published_day(
+        db,
+        creator=creator,
+        region=region,
+        person=person,
+        work_date=date(2026, 10, 20),
+        start=time(8),
+        end=time(16),
+    )
+    db.commit()
+
+    rows = published_hours(
+        db,
+        actor=actor_for(db, contractor),
+        start=date(2026, 10, 19),
+        end=date(2026, 11, 1),
+        management=False,
+    )
+    assert [(row["person"], row["minutes"]) for row in rows] == [("Linked Contractor", 480)]

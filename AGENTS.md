@@ -3,12 +3,12 @@
 Read this before changing the repository.
 
 - On Track is the authoritative roster. Manual entry must always work and external racing data must never block rostering.
-- Never modify, configure, deploy, or connect to Re-Deputy. It is a read-only behavioral reference only. No Deputy dependency, credential, identifier, database, secret, volume, or production file belongs here.
+- Never modify, configure, deploy, or connect to Re-Deputy. It is a read-only behavioral reference only. The bounded, manually supplied transition-capture importer may retain idempotency references in its isolated transition table, but no live Deputy dependency, credential, cookie, token, authentication flow, database, secret, volume, or production file belongs here.
 - This Windows development machine is Docker-free. Never run, start, repair, install, or configure Docker or Docker Desktop here. Keep Compose files solely for deployment on the separate Docker/Portainer server.
 - Production Portainer deploys the GitHub `main` branch. Keep `main` deployable, use repository-relative Linux deployment paths, never commit secrets, and never push without explicit user authorization.
 - Run FastAPI, Alembic, tests, and tooling directly under Windows/Python. Use PostgreSQL through `DATABASE_URL`, backed by a native/local installation or an explicitly configured remote development instance.
 - PostgreSQL and Alembic are required. SQLite is acceptable only for narrow deterministic unit tests; it is never PostgreSQL integration qualification. If no usable PostgreSQL URL is configured, report PostgreSQL checks as pending rather than substituting SQLite.
-- Keep the application server-rendered and operationally simple: FastAPI, Jinja, SQLAlchemy, PostgreSQL, modest vanilla JS, one deployable app.
+- Keep the application server-rendered and operationally simple: FastAPI, Jinja, SQLAlchemy, PostgreSQL, modest vanilla JS, one application codebase plus its bounded scheduler process.
 - Keep domain modules bounded. Do not grow monolithic `main.py` or `database.py` files.
 - Published workdays are immutable snapshots. Employee reads use only `current_published_revision_id`; edits occur in a private draft and become visible only through Preview → atomic Publish.
 - Treat committed Alembic revisions as append-only production artifacts unless deployment history proves a rewrite is safe. Open applications bind to a published revision/slot; selection changes a draft. Employee decline creates a new immutable publication atomically.

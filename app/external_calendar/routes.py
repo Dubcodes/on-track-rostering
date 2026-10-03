@@ -20,6 +20,7 @@ from app.catalog.models import Region, Track
 from app.catalog.presentation import track_token
 from app.catalog.service import allocate_palette_slot, normalized_track_match
 from app.core.database import get_db
+from app.core.enums import Role
 from app.external_calendar.importer import apply_bundle, parse_bundle, preview_bundle
 from app.external_calendar.inventory import (
     confirmed_mapping_rows,
@@ -40,6 +41,12 @@ from app.external_calendar.service import (
     normalized_key,
 )
 from app.rostering.models import Workday
+from app.transition_import.service import (
+    apply_capture,
+    parse_capture,
+    preview_capture,
+    validate_payload,
+)
 from app.web import context, templates
 
 router = APIRouter()
@@ -57,6 +64,26 @@ def _bundle_text(pasted_json: str, upload: UploadFile | None) -> str:
             raise HTTPException(413, "Import bundle is too large.")
         return data.decode("utf-8")
     raise HTTPException(400, "Paste JSON or upload a JSON file.")
+
+
+def _transition_text(pasted_capture: str, upload: UploadFile | None) -> str:
+    if pasted_capture.strip():
+        raw = pasted_capture
+    elif upload and upload.filename:
+        if not upload.filename.lower().endswith(".txt"):
+            raise ValueError("Upload a .txt Deputy transition capture.")
+        data = upload.file.read(5_000_001)
+        if len(data) > 5_000_000:
+            raise ValueError("Deputy transition capture is larger than 5 MB.")
+        try:
+            raw = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Deputy transition capture must be UTF-8 text.") from exc
+    else:
+        raise ValueError("Paste or upload a Deputy transition capture.")
+    if len(raw.encode("utf-8")) > 5_000_000:
+        raise ValueError("Deputy transition capture is larger than 5 MB.")
+    return raw
 
 
 @router.get("/admin/data-import", response_class=HTMLResponse)
@@ -79,7 +106,9 @@ def import_preview(
     try:
         bundle = parse_bundle(raw)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        return templates.TemplateResponse(
+            "data_import.html", context(request, import_error=str(exc)), status_code=400
+        )
     plan = preview_bundle(db, bundle)
     return templates.TemplateResponse(
         "data_import.html",
@@ -111,17 +140,93 @@ def import_apply(
     return RedirectResponse("/admin/data-import?imported=1", status_code=303)
 
 
+@router.post("/admin/data-import/deputy-preview", response_class=HTMLResponse)
+def deputy_import_preview(
+    request: Request,
+    pasted_capture: str = Form(""),
+    transition_upload: UploadFile | None = File(None),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    try:
+        payload = parse_capture(_transition_text(pasted_capture, transition_upload))
+        plan = preview_capture(db, payload)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "data_import.html", context(request, transition_error=str(exc)), status_code=400
+        )
+    return templates.TemplateResponse(
+        "data_import.html",
+        context(
+            request,
+            transition_plan=plan,
+            transition_json=json.dumps(payload, separators=(",", ":")),
+        ),
+    )
+
+
+@router.post("/admin/data-import/deputy-apply")
+def deputy_import_apply(
+    request: Request,
+    transition_json: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    try:
+        payload = validate_payload(json.loads(transition_json))
+        counts = apply_capture(db, payload, request.state.user.id)
+        record_audit(
+            db,
+            "transition_import.applied",
+            "transition_capture",
+            None,
+            request.state.user.id,
+            detail={"source": payload["source"], "counts": counts},
+        )
+        db.commit()
+    except (json.JSONDecodeError, ValueError) as exc:
+        db.rollback()
+        return templates.TemplateResponse(
+            "data_import.html", context(request, transition_error=str(exc)), status_code=409
+        )
+    return RedirectResponse("/admin/data-import?transition_imported=1", status_code=303)
+
+
 @router.get("/admin/online-sources", response_class=HTMLResponse)
 def sources_page(request: Request, db: Session = Depends(get_db)):
-    require_admin(request.state.actor)
+    actor = request.state.actor
+    if not actor.is_admin and not any(
+        Role.MANAGER.value in roles for roles in actor.regional_roles.values()
+    ):
+        raise HTTPException(403, "Manager access required")
     return _sources_response(request, db)
 
 
 def _sources_response(request: Request, db: Session, *, refresh_result=None):
+    actor = request.state.actor
+    region_ids = None if actor.is_admin else {
+        region_id
+        for region_id, roles in actor.regional_roles.items()
+        if Role.MANAGER.value in roles
+    }
     states = ensure_provider_states(db)
-    unmatched = source_inventory(db, unmatched_only=True)
-    observations = list(db.scalars(select(ExternalEventObservation)))
-    mappings = list(db.scalars(select(ExternalTrackMapping)))
+    unmatched = source_inventory(db, unmatched_only=True) if actor.is_admin else []
+    observation_query = select(ExternalEventObservation)
+    mapping_query = select(ExternalTrackMapping)
+    if region_ids is not None:
+        observation_query = (
+            observation_query
+            .join(ExternalCalendarEvent, ExternalEventObservation.event_id == ExternalCalendarEvent.id)
+            .join(Track, ExternalCalendarEvent.track_id == Track.id)
+            .where(Track.region_id.in_(region_ids))
+        )
+        mapping_query = mapping_query.join(Track).where(Track.region_id.in_(region_ids))
+    observations = list(db.scalars(observation_query))
+    mappings = list(db.scalars(mapping_query))
     provider_metrics: dict[str, dict[str, int]] = {}
     for provider, _label in PROVIDERS:
         provider_observations = [row for row in observations if row.provider == provider]
@@ -140,26 +245,22 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
                 if row.reconciliation_state == "CONFLICT"
             ),
         }
-    conflict_observations = list(
-        db.scalars(
-            select(ExternalEventObservation)
-            .where(ExternalEventObservation.reconciliation_state == "CONFLICT")
-            .order_by(ExternalEventObservation.retrieved_at.desc())
-            .limit(100)
-        )
-    )
+    conflict_observations = [
+        row for row in observations if row.reconciliation_state == "CONFLICT"
+    ][:100]
     conflicts = [
         {"observation": row, "event": db.get(ExternalCalendarEvent, row.event_id)}
         for row in conflict_observations
     ]
-    tracks = list(
-        db.scalars(
-            select(Track)
+    track_query = (
+        select(Track)
             .join(Region, Region.id == Track.region_id)
             .where(Track.lifecycle == "ACTIVE", Region.lifecycle == "ACTIVE")
             .order_by(Track.name)
-        )
     )
+    if region_ids is not None:
+        track_query = track_query.where(Track.region_id.in_(region_ids))
+    tracks = list(db.scalars(track_query))
     recent_refreshes = list(
         db.scalars(
             select(AuditEvent)
@@ -167,7 +268,15 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
             .order_by(AuditEvent.occurred_at.desc())
             .limit(5)
         )
-    )
+    ) if actor.is_admin else []
+    confirmed_mappings = confirmed_mapping_rows(db)
+    if region_ids is not None:
+        confirmed_mappings = [
+            row for row in confirmed_mappings if row["region"].id in region_ids
+        ]
+    region_query = select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)
+    if region_ids is not None:
+        region_query = region_query.where(Region.id.in_(region_ids))
     return templates.TemplateResponse(
         "online_sources.html",
         context(
@@ -178,12 +287,11 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
             unmatched=unmatched,
             conflicts=conflicts,
             tracks=tracks,
-            regions=list(
-                db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name))
-            ),
-            confirmed_mappings=confirmed_mapping_rows(db),
+            regions=list(db.scalars(region_query)),
+            confirmed_mappings=confirmed_mappings,
             recent_refreshes=recent_refreshes,
             refresh_result=refresh_result,
+            sources_admin=actor.is_admin,
         ),
     )
 
@@ -202,6 +310,7 @@ def toggle_provider(
         raise HTTPException(404, "Provider is not configurable.")
     state = ensure_provider_states(db)[provider]
     state.enabled = not state.enabled
+    state.explicitly_configured = True
     state.status = "READY" if state.enabled else "DISABLED"
     record_audit(
         db,

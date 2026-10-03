@@ -22,14 +22,20 @@ The Admin page creates regions, tracks, base positions, people, linked accounts,
 
 The operational continuation adds regional Crew View and crew management, employee base-position preferences, explicit Open-position applications with Manager draft selection, policy-driven authoritative decline, privilege-safe account approval and role grants, WebAuthn passkeys, optional encrypted TOTP, fortnight hours, isolated offline roster caches, and an idempotent Web Push delivery worker.
 
+Public racing sources are planning evidence only. On Track refreshes the next 48 hours on a bounded scheduler, enriches Love Racing meetings with programme times, and keeps manual rostering available through every source failure. A Manager can apply the latest facts to a private draft; published snapshots are never rewritten. Official Track maps are cached under `ONTRACK_DATA_DIR`, with a scoped manual override that takes precedence.
+
+The Data Import workspace also has an isolated one-time Deputy capture mode. It reads only published schedule rows from a manually supplied text capture, creates People without accounts, skips unresolved operational locations, and never imports authentication, payroll, timesheet, or break data.
+
 WebAuthn defaults to `localhost` and `http://localhost:8000`; use that exact origin in local development or update both RP/origin settings consistently. Production requires HTTPS and deployment-specific RP/origin values. Web Push remains visibly unavailable until real VAPID public/private keys are supplied in environment configuration. Process its outbox independently of the web request:
 
 ```powershell
 .\.venv\Scripts\python.exe -m app.cli deliver-notifications --limit 50
 ```
 
+For development-only scheduler observation, run `python -m app.scheduler` in a separate terminal. The deployment Compose files run the same module as a singleton scheduler service. Do not run it against production from a development workstation.
+
 ## Deployment
 
-The retained production and isolated-staging Compose files are for the separate Docker/Portainer server only. PostgreSQL is not published to that server's host, and every project, network, and volume is independent of Re-Deputy. During active development staging may follow a CI-qualified `main`; production promotion freezes one exact qualified revision. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The retained production and isolated-staging Compose files are for the separate Docker/Portainer server only. PostgreSQL is not published to that server's host, and every project, network, and volume is independent of Re-Deputy. Back up both the PostgreSQL volume and the application-data volume: the latter contains Track map images while the database contains their hashes and metadata. During active development staging may follow a CI-qualified `main`; production promotion freezes one exact qualified revision. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 See [docs/TESTING.md](docs/TESTING.md), [docs/SECURITY.md](docs/SECURITY.md), and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
