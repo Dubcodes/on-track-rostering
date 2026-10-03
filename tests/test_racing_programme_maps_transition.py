@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import struct
 from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 
 from sqlalchemy import func, select
@@ -149,8 +148,8 @@ def test_webp_dimension_variants_are_validated() -> None:
     assert image_dimensions(lossless) == (width, height)
 
 
-def test_manual_map_precedes_automatic_and_reset_restores_it(db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    map_directory = (Path.cwd() / ".pytest-tmp").resolve()
+def test_manual_map_precedes_automatic_and_reset_restores_it(db, monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    map_directory = tmp_path.resolve()
     monkeypatch.setattr("app.track_maps.service._directory", lambda: map_directory)
     _user, _region, track = _foundation(db)
     row = TrackMap(
