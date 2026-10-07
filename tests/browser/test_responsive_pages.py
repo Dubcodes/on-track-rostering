@@ -439,7 +439,10 @@ def browser_site():  # type: ignore[no-untyped-def]
             external_track_name=track.name,
             discipline="THOROUGHBRED",
             event_kind="RACE",
+            meeting_name="Racing Browser Track @ Browser Track",
+            programme_status="COMPLETE",
             first_race_time=clock_time(12, 30),
+            last_race_time=clock_time(17, 24),
             race_count=8,
             presentation_provider="LOVE_RACING",
             field_provenance={"race_count": ["LOVE_RACING"]},
@@ -595,6 +598,17 @@ def browser_site():  # type: ignore[no-untyped-def]
                     raw_payload={"race_count": 9},
                     mapping_state="MAPPED",
                     reconciliation_state="CONFLICT",
+                ),
+                ExternalEventObservation(
+                    event_id=external_event.id,
+                    provider="LOVE_RACING",
+                    provider_event_id=f"browser-programme-{suffix}",
+                    source_track_name=track.name,
+                    payload_hash=uuid.uuid4().hex,
+                    parsed_facts={"race_count": 8},
+                    raw_payload={"race_count": 8},
+                    mapping_state="MAPPED",
+                    reconciliation_state="MATCHED",
                 ),
                 ExternalEventObservation(
                     event_id=linked_race_event.id,
@@ -852,7 +866,7 @@ def test_master_data_palette_changes_with_theme(browser_site, width: int) -> Non
     context.close()
 
 
-@pytest.mark.parametrize("width", [1280, 320])
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
 def test_external_source_import_preferences_and_detail(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
     context = browser.new_context(viewport={"width": width, "height": 900})
@@ -870,6 +884,10 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     _capture_page(page, f"external-event-normal-{width}.png")
     event_card.click()
     assert page.get_by_text("Raw Race Day Data").count() == 1
+    assert page.get_by_role("heading", name="Racing Browser Track @ Browser Track").count() == 1
+    assert page.get_by_text("First trial", exact=True).count() == 0
+    assert page.get_by_text("Programme source", exact=True).count() == 1
+    assert page.get_by_role("button", name="Refresh programme now").count() == 1
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"external-event-detail-{width}.png")
 
@@ -878,10 +896,11 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     assert page.get_by_text("6 observations", exact=False).count() == 1
     assert page.get_by_text("Source identifies a club", exact=False).count() == 1
     assert page.get_by_text("Conflicting observations").count() == 1
-    assert page.get_by_role("button", name="Refresh now").count() == 2
+    assert page.get_by_role("button", name="Refresh calendar now").count() == 2
     assert page.get_by_text("PARTIAL", exact=True).count() == 1
     assert page.get_by_text("Source health", exact=True).count() == 3
     assert page.get_by_text("Mapping status", exact=True).count() == 3
+    assert page.get_by_text("Programme detail", exact=True).count() == 1
     assert page.get_by_text("Actual warnings / errors", exact=True).count() == 3
     assert page.get_by_text("Unmapped identities", exact=True).count() == 3
     assert page.get_by_text("Unmapped observations", exact=True).count() == 3
@@ -1598,9 +1617,10 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         ".search-picker-group > span"
     ).first.inner_text().casefold().endswith(" crew")
     assert person_picker.get_by_text("Other regions", exact=True).is_visible()
-    assert person_picker.get_by_text(
+    same_date_messages = person_picker.get_by_text(
         "No position history recorded; also rostered this date", exact=True
-    ).is_visible()
+    )
+    assert same_date_messages.first.is_visible()
     same_date_warning = person_picker.locator(
         '.same-date-warning[title="Already rostered on this date"]'
     ).first
@@ -1732,9 +1752,10 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         )
         position_aware_option.wait_for(state="visible")
         assert "Preferred or approved" in position_aware_option.inner_text()
-        assert new_person_picker.get_by_text(
+        new_same_date_messages = new_person_picker.get_by_text(
             "No position history recorded; also rostered this date", exact=True
-        ).is_visible()
+        )
+        assert new_same_date_messages.first.is_visible()
         new_person_input.fill("John Smith")
         duplicate_options = new_person_picker.locator(
             '[data-picker-option][data-label="John Smith"]:visible'

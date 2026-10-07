@@ -4,7 +4,7 @@ import uuid
 import warnings
 import zipfile
 from calendar import monthrange
-from datetime import date, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -1820,6 +1820,87 @@ def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> 
     manual_day = employee.get(f"/day/{manual_workday_id}")
     assert "Raw Race Day Data" not in manual_day.text
     assert "Saturday 24 October 2026" in manual_day.text
+
+
+def test_race_programme_health_presentation_and_manual_retry_authorization(
+    routed_db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (_region_id, track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        event = ExternalCalendarEvent(
+            event_date=date(2026, 10, 9),
+            track_id=track_id,
+            external_track_name="Taupo",
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            status="SCHEDULED",
+            meeting_name="Racing Taupo @ Taupo",
+            programme_status="PARTIAL",
+            first_race_time=time(12, 34),
+            last_race_time=time(17, 24),
+            race_count=9,
+            detail_checked_at=datetime(2026, 10, 8, 7, 5, tzinfo=UTC),
+            next_detail_due_at=datetime(2026, 10, 8, 9, 5, tzinfo=UTC),
+            detail_failure_count=1,
+            latest_detail_error="Source response exceeded the configured size limit.",
+        )
+        db.add(event)
+        db.flush()
+        db.add(
+            ExternalEventObservation(
+                event_id=event.id,
+                provider="LOVE_RACING",
+                provider_event_id="55962",
+                payload_hash="taupo-programme-observation",
+                source_track_name="Taupo",
+                parsed_facts={},
+                raw_payload={},
+                mapping_state="MAPPED",
+                reconciliation_state="MATCHED",
+            )
+        )
+        db.commit()
+        event_id = event.id
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    detail = manager.get(f"/external-events/{event_id}")
+    assert detail.status_code == 200
+    assert "Racing Taupo @ Taupo" in detail.text
+    assert "First race" in detail.text and "12:34" in detail.text
+    assert "First trial" not in detail.text
+    assert "Programme source" in detail.text
+    assert "Last detail check" in detail.text and "Next automatic retry" in detail.text
+    assert "Source response exceeded the configured size limit." in detail.text
+    assert "Refresh programme now" in detail.text
+
+    monkeypatch.setattr("app.external_calendar.routes.local_today", lambda: date(2026, 10, 8))
+    sources = manager.get("/admin/online-sources")
+    assert sources.status_code == 200
+    assert "Programme detail" in sources.text
+    assert "Failed upcoming" in sources.text
+    assert "Programme detail warning" in sources.text
+
+    calls: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        "app.external_calendar.routes.refresh_love_racing_programme",
+        lambda _db, refreshed_event: calls.append(refreshed_event.id) or "ENRICHED",
+    )
+    refreshed = manager.post(
+        f"/external-events/{event_id}/refresh-programme",
+        data={"csrf_token": manager_csrf},
+        follow_redirects=False,
+    )
+    assert refreshed.status_code == 303
+    assert refreshed.headers["location"].endswith("?programme_refresh=refreshed")
+    assert calls == [event_id]
+
+    submanager = TestClient(app)
+    submanager_csrf = _login(submanager, "submanager@example.test", "445566")
+    assert submanager.post(
+        f"/external-events/{event_id}/refresh-programme",
+        data={"csrf_token": submanager_csrf},
+    ).status_code == 403
 
 
 def test_online_source_status_is_regional_but_controls_are_admin_only(

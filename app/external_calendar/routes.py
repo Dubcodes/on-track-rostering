@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.policy import (
+    can_administer_region,
     can_manage_region,
     external_calendar_region_ids,
     require_admin,
@@ -21,6 +22,8 @@ from app.catalog.presentation import track_token
 from app.catalog.service import allocate_palette_slot, normalized_track_match
 from app.core.database import get_db
 from app.core.enums import Role
+from app.core.time import local_today
+from app.external_calendar.detail_refresh import refresh_love_racing_programme
 from app.external_calendar.importer import apply_bundle, parse_bundle, preview_bundle
 from app.external_calendar.inventory import (
     confirmed_mapping_rows,
@@ -245,6 +248,37 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
                 if row.reconciliation_state == "CONFLICT"
             ),
         }
+    today = local_today()
+    programme_query = (
+        select(ExternalCalendarEvent)
+        .join(ExternalEventObservation)
+        .where(
+            ExternalEventObservation.provider == "LOVE_RACING",
+            ExternalEventObservation.provider_event_id.is_not(None),
+            ExternalEventObservation.mapping_state == "MAPPED",
+            ExternalCalendarEvent.event_kind == "RACE",
+            ExternalCalendarEvent.event_date >= today,
+        )
+        .distinct()
+    )
+    if region_ids is not None:
+        programme_query = programme_query.join(Track).where(Track.region_id.in_(region_ids))
+    programme_events = list(db.scalars(programme_query))
+    provider_metrics["LOVE_RACING"].update(
+        {
+            "programme_complete": sum(event.programme_status == "COMPLETE" for event in programme_events),
+            "programme_partial": sum(
+                event.programme_status in {"PARTIAL", "AWAITING_SCHEDULE", "DISCOVERED"}
+                for event in programme_events
+            ),
+            "programme_failed": sum(event.detail_failure_count > 0 for event in programme_events),
+            "programme_never_checked": sum(event.detail_checked_at is None for event in programme_events),
+            "programme_near_term_failed": sum(
+                event.detail_failure_count > 0 and (event.event_date - today).days <= 3
+                for event in programme_events
+            ),
+        }
+    )
     conflict_observations = [
         row for row in observations if row.reconciliation_state == "CONFLICT"
     ][:100]
@@ -473,6 +507,16 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
     if track is None or (visible_regions is not None and track.region_id not in visible_regions):
         raise HTTPException(404, "External event not found")
     workday = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
+    has_programme_identity = bool(
+        db.scalar(
+            select(ExternalEventObservation.id).where(
+                ExternalEventObservation.event_id == event.id,
+                ExternalEventObservation.provider == "LOVE_RACING",
+                ExternalEventObservation.provider_event_id.is_not(None),
+                ExternalEventObservation.mapping_state == "MAPPED",
+            ).limit(1)
+        )
+    )
     return templates.TemplateResponse(
         "external_event.html",
         context(
@@ -482,9 +526,48 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
             workday=workday,
             evidence=event_evidence(db, event),
             can_build=bool(track and can_manage_region(request.state.actor, track.region_id)),
+            can_refresh_programme=bool(
+                track
+                and event.event_kind == "RACE"
+                and has_programme_identity
+                and can_administer_region(request.state.actor, track.region_id)
+            ),
+            programme_refresh=request.query_params.get("programme_refresh"),
             presentation=track_token(track.palette_slot if track else None),
         ),
     )
+
+
+@router.post("/external-events/{event_id}/refresh-programme")
+def refresh_event_programme(
+    event_id: uuid.UUID, request: Request, csrf_token: str = Form(...), db: Session = Depends(get_db)
+):
+    verify_csrf(request, csrf_token)
+    event = db.get(ExternalCalendarEvent, event_id)
+    track = db.get(Track, event.track_id) if event and event.track_id else None
+    if not event or not track:
+        raise HTTPException(404, "External event not found")
+    if event.event_kind != "RACE":
+        raise HTTPException(409, "Programme refresh is available only for race events.")
+    if not can_administer_region(request.state.actor, track.region_id):
+        raise HTTPException(403, "Manager access for this Track's Region is required")
+    try:
+        outcome = refresh_love_racing_programme(db, event)
+        record_audit(
+            db,
+            "external_programme.refreshed",
+            "external_calendar_event",
+            event.id,
+            request.state.user.id,
+            region_id=track.region_id,
+            detail={"provider": "LOVE_RACING", "outcome": outcome},
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    state = "failed" if outcome == "ERROR" else "refreshed"
+    return RedirectResponse(f"/external-events/{event.id}?programme_refresh={state}", status_code=303)
 
 
 @router.post("/external-events/{event_id}/build")

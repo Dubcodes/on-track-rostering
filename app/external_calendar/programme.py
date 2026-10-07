@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from html.parser import HTMLParser
 
-from app.core.time import parse_time
-
 
 @dataclass(frozen=True)
 class ProgrammeResult:
@@ -48,7 +46,7 @@ class _ProgrammeParser(HTMLParser):
             self.titles.append(values["content"])
         if tag == "title":
             self.capture_title = True
-        if tag in {"h1", "h2"}:
+        if tag in {"h1", "h2", "h3"}:
             self.capture_heading = True
             self.heading_parts = []
         if tag == "table" and self.table_depth is None:
@@ -82,7 +80,7 @@ class _ProgrammeParser(HTMLParser):
             self.table_depth = None
         if tag == "title":
             self.capture_title = False
-        if tag in {"h1", "h2"} and self.capture_heading:
+        if tag in {"h1", "h2", "h3"} and self.capture_heading:
             heading = " ".join("".join(self.heading_parts).split())
             if heading:
                 self.titles.append(heading)
@@ -91,7 +89,14 @@ class _ProgrammeParser(HTMLParser):
 
 
 def _meeting_name(candidates: list[str]) -> str | None:
-    generic = {"raceinfo", "meeting overview", "loveracing", "loveracing.nz"}
+    generic = {
+        "raceinfo",
+        "meetings / fields",
+        "meeting overview",
+        "loveracing",
+        "loveracing.nz",
+    }
+    usable: list[str] = []
     for raw in candidates:
         value = re.sub(
             r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?\s*"
@@ -103,13 +108,50 @@ def _meeting_name(candidates: list[str]) -> str | None:
         for part in re.split(r"\s*[|–—]\s*", value):
             clean = part.strip(" -|–—:")
             key = clean.casefold()
-            if not clean or key in generic or "meeting overview" in key or "loveracing" in key:
+            if (
+                not clean
+                or key in generic
+                or "meeting overview" in key
+                or "meetings / fields" in key
+                or "loveracing" in key
+            ):
                 continue
             if re.search(r"\brace\s+\d+\b", clean, re.IGNORECASE):
                 continue
             if 2 <= len(clean) <= 160:
-                return clean
-    return None
+                usable.append(clean)
+    if not usable:
+        return None
+    return max(usable, key=lambda value: ("@" in value, "racing" in value.casefold(), len(value)))
+
+
+_PROGRAMME_CLOCK = re.compile(
+    r"^(?:(?P<hour24>[01]\d|2[0-3]):(?P<minute24>[0-5]\d)|"
+    r"(?P<hour12>1[0-2]|[1-9]):(?P<minute12>[0-5]\d)\s*(?P<meridiem>a\.?m\.?|p\.?m\.?))$",
+    re.IGNORECASE,
+)
+
+
+def parse_programme_clock(value: str) -> time:
+    """Parse the explicit clock formats published by programme providers.
+
+    Roster-entry parsing deliberately has a different, compact input contract.
+    Keeping this parser here prevents a public-source convention from widening
+    that operational input surface.
+    """
+    match = _PROGRAMME_CLOCK.fullmatch(" ".join(value.split()))
+    if not match:
+        raise ValueError("Programme clock must be an unambiguous HH:MM or h:MM am/pm value.")
+    if match["hour24"]:
+        return time(int(match["hour24"]), int(match["minute24"]))
+    hour = int(match["hour12"])
+    minute = int(match["minute12"])
+    meridiem = match["meridiem"].casefold().replace(".", "")
+    if meridiem == "am":
+        hour = 0 if hour == 12 else hour
+    else:
+        hour = 12 if hour == 12 else hour + 12
+    return time(hour, minute)
 
 
 def parse_love_racing_programme(html: str) -> ProgrammeResult:
@@ -130,7 +172,7 @@ def parse_love_racing_programme(html: str) -> ProgrammeResult:
             if number <= 0:
                 continue
             try:
-                scheduled_start = parse_time(row[1][1])
+                scheduled_start = parse_programme_clock(row[1][1])
             except ValueError:
                 scheduled_start = None
                 diagnostics.append(f"Race {number} had an invalid scheduled start.")

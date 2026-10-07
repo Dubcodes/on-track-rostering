@@ -74,8 +74,12 @@ def refresh_love_racing_programme(
         facts: dict[str, object] = {
             "programme_status": programme.status,
             "race_count": programme.race_count,
-            "first_race_time": programme.first_race_time,
-            "last_race_time": programme.last_race_time,
+            "first_race_time": (
+                programme.first_race_time.strftime("%H:%M") if programme.first_race_time else None
+            ),
+            "last_race_time": (
+                programme.last_race_time.strftime("%H:%M") if programme.last_race_time else None
+            ),
         }
         if programme.meeting_name:
             facts["meeting_name"] = programme.meeting_name
