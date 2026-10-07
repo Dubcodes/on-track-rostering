@@ -58,7 +58,11 @@ def scheduler_tick(db: Session, *, now=None) -> dict[str, object]:  # type: igno
                 provider_results[provider] = result.status
             else:
                 provider_results[provider] = "NOT_DUE"
-        programmes = refresh_due_programmes(db, now=now)
+        programmes = (
+            refresh_due_programmes(db, now=now)
+            if states["LOVE_RACING"].enabled
+            else {"checked": 0, "updated": 0, "failed": 0, "status": "DISABLED"}
+        )
         settings = get_settings()
         client = SourceHTTPClient(
             timeout=settings.racing_source_timeout_seconds,

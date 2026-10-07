@@ -14,7 +14,7 @@ External racing data is planning evidence, not roster authority. Provider observ
 
 ## Scheduled source refresh and persistent Track maps
 
-The deployment runs a scheduler process from the same application image. One dedicated PostgreSQL advisory-lock connection owns a whole cycle so ORM commits cannot release singleton ownership. Discovery, programme detail, and map refreshes have separate cadence and bounded failure backoff. Official maps are accepted only from trusted Love Racing hosts after file-signature and dimension validation. A regional Manager's manual image wins until reset. Last-good automatic files survive upstream failure, and `/app/data` is a named volume backed up with PostgreSQL.
+The deployment runs a scheduler process from the same application image. One dedicated PostgreSQL advisory-lock connection owns a whole cycle so ORM commits cannot release singleton ownership. Discovery, programme detail, and map refreshes have separate cadence and bounded failure backoff. Disabling a racing provider suppresses that provider's automatic discovery and programme-detail requests; Track-map refresh remains independent. Official maps are accepted only from trusted Love Racing hosts after file-signature and dimension validation. A regional Manager's manual image wins until reset. Last-good automatic files survive upstream failure, and `/app/data` is a named volume backed up with PostgreSQL.
 
 ## Isolated one-time transition import
 

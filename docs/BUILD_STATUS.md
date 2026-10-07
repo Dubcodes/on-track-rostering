@@ -2,9 +2,9 @@
 
 ## Current source and deployment boundary
 
-The current qualified predecessor is exact `main` SHA `2cd94d1649c84dd3f090c04c0f4558be2b2fc658` (release-gate run `36917382750`): 213 PostgreSQL-backed tests and 35 Playwright tests passed with the complete release gate, including production/staging Compose validation and production image construction. CI is not a staging redeploy or production deployment; no deployment is implied by this checkpoint.
+The current qualified `main` is exact SHA `c221fe75bd86c255c5c3313d0ca999e018b9d78c` (release-gate run `37113924431`): 222 PostgreSQL-backed tests and 35 Playwright tests passed, dependency audit was clean, production/staging Compose validation and the staging build-ID guard passed, and production image construction passed. CI is not a staging redeploy or production deployment; no deployment is implied by this checkpoint.
 
-The racing-programme, scheduler, Track-map, regional-account, personal-fortnight, and transition-import work described below is implemented in the current source tree but remains unqualified until its own exact-head release gate succeeds.
+This qualified source includes racing-programme parsing/correction and provenance, the advisory-locked scheduler, persistent Track maps and manual overrides, regional Account linking/invitations, role-independent personal-fortnight Hours, and the isolated allowlisted Deputy transition importer.
 
 Local development and qualification remain Docker-free. PostgreSQL integration, Playwright, Compose validation, and production image construction are authoritative only when executed by the exact-head GitHub release gate unless a native/remote development PostgreSQL URL and local browser environment are explicitly available.
 
@@ -25,7 +25,7 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 
 The historical Leave checkpoint at exact SHA `1cff0b50c0cb4044214dde646c0956e8e6df5029` was **QUALIFIED** by release-gate run `36652200053`: **208 PostgreSQL-backed tests**, **31 Playwright tests**, production/staging Compose validation, and production image build passed. It established flexible multiple Positions, Move/Keep both/Cancel, one person-level travel plan, one Person/day Hours aggregation, Open Position multi-Position consistency, Vehicle master data, Position ordering/history, Audit, native Builder time inputs, Builder HTML error recovery, and the complete advisory Leave workflow.
 
-The current qualified documentation/timing predecessor at `2cd94d1649c84dd3f090c04c0f4558be2b2fc658` is **QUALIFIED** by release-gate run `36917382750`. Race timing is category-scoped: Trials and non-racing Workdays retain their manual timing behavior.
+The earlier documentation/timing checkpoint at `2cd94d1649c84dd3f090c04c0f4558be2b2fc658` was **QUALIFIED** by release-gate run `36917382750`. Race timing is category-scoped: Trials and non-racing Workdays retain their manual timing behavior.
 
 ## Outstanding product backlog
 

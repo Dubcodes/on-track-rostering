@@ -69,7 +69,7 @@ def test_programme_cadence_and_backoff_are_deterministic() -> None:
     assert failure_backoff(99) == timedelta(hours=6)
 
 
-def test_scheduler_tick_honours_singleton_and_disabled_provider_state(db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_scheduler_tick_skips_disabled_love_racing_details_but_refreshes_maps(db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     now = datetime(2026, 10, 3, 9, tzinfo=UTC)
     states = {
         provider: SimpleNamespace(enabled=False, next_refresh_at=None, last_success_at=None)
@@ -81,9 +81,19 @@ def test_scheduler_tick_honours_singleton_and_disabled_provider_state(db, monkey
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("provider refresh called")),
     )
     monkeypatch.setattr(
-        "app.scheduler.refresh_due_programmes", lambda _db, *, now: {"checked": 2, "updated": 1}
+        "app.scheduler.refresh_due_programmes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("programme refresh called")),
     )
-    monkeypatch.setattr("app.scheduler.due_tracks", lambda _db: [])
+    track = SimpleNamespace()
+    monkeypatch.setattr("app.scheduler.due_tracks", lambda _db: [track])
+    monkeypatch.setattr(
+        "app.scheduler.refresh_automatic_map",
+        lambda _db, refreshed_track, _client: (
+            refreshed_track is track
+            or (_ for _ in ()).throw(AssertionError("unexpected map track"))
+        )
+        and SimpleNamespace(automatic_status="AVAILABLE"),
+    )
 
     with scheduler_lock(db) as acquired:
         assert acquired is True
@@ -91,9 +101,36 @@ def test_scheduler_tick_honours_singleton_and_disabled_provider_state(db, monkey
     assert result == {
         "status": "ok",
         "providers": {"LOVE_RACING": "DISABLED", "HRNZ": "DISABLED"},
-        "programmes": {"checked": 2, "updated": 1},
-        "maps": {"checked": 0, "failed": 0},
+        "programmes": {"checked": 0, "updated": 0, "failed": 0, "status": "DISABLED"},
+        "maps": {"checked": 1, "failed": 0},
     }
+
+
+def test_scheduler_tick_runs_love_racing_details_only_when_enabled(db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    now = datetime(2026, 10, 3, 9, tzinfo=UTC)
+    states = {
+        "LOVE_RACING": SimpleNamespace(enabled=True, next_refresh_at=None, last_success_at=None),
+        "HRNZ": SimpleNamespace(enabled=False, next_refresh_at=None, last_success_at=None),
+    }
+    refreshes: list[str] = []
+    programme_calls: list[datetime] = []
+    monkeypatch.setattr("app.scheduler.ensure_provider_states", lambda _db: states)
+    monkeypatch.setattr(
+        "app.scheduler.refresh_provider",
+        lambda _db, provider: refreshes.append(provider) or SimpleNamespace(status="OK"),
+    )
+    monkeypatch.setattr(
+        "app.scheduler.refresh_due_programmes",
+        lambda _db, *, now: programme_calls.append(now) or {"checked": 1, "updated": 1, "failed": 0},
+    )
+    monkeypatch.setattr("app.scheduler.due_tracks", lambda _db: [])
+
+    result = scheduler_tick(db, now=now)
+
+    assert refreshes == ["LOVE_RACING"]
+    assert programme_calls == [now]
+    assert result["providers"] == {"LOVE_RACING": "OK", "HRNZ": "DISABLED"}
+    assert result["programmes"] == {"checked": 1, "updated": 1, "failed": 0}
 
 
 def test_same_provider_updates_facts_but_partial_never_erases_complete(db) -> None:  # type: ignore[no-untyped-def]

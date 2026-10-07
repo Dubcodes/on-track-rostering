@@ -460,8 +460,11 @@ def browser_site():  # type: ignore[no-untyped-def]
         db.add(linked_race_event)
         db.flush()
         workday.external_event_id = linked_race_event.id
+        trial_date = local_today() + timedelta(days=1)
+        if trial_date == local_today().replace(day=8):
+            trial_date += timedelta(days=1)
         trial_event = ExternalCalendarEvent(
-            event_date=local_today() + timedelta(days=1),
+            event_date=trial_date,
             track_id=track.id,
             external_track_name=track.name,
             discipline="THOROUGHBRED",

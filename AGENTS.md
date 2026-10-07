@@ -15,7 +15,7 @@ Read this before changing the repository.
 - Enforce authorization server-side through `app/auth/policy.py`. Roles are capabilities plus independent region visibility, not a numeric hierarchy. Accounts and rosterable people are separate identities.
 - Never expose private assignment notes to unrelated crew or Viewers. Public signup grants no role or roster access. Never log credentials, tokens, cookies, hashes, or MFA secrets.
 - Six numeric digits is the normal minimum credential; Admin requires 8+ digits or a 12+ character password. Privilege elevation must invalidate/reclassify trusted sessions and require fresh authentication.
-- No payroll, leave system, or automatic unpaid-break deduction. Allowances and public holidays are informational.
+- On Track is not payroll: it does not calculate wages, leave balances or entitlements, process payroll, or automatically deduct unpaid breaks. Leave/unavailability is operational roster-awareness only, not HR/payroll leave accounting. Hours are the complete effective rostered Person/day span and are never reduced by meal-break or Deputy break fields; allowances and public holidays are informational.
 - Employee Month/Day APIs must stay purpose-built and small. Offline v1 is read-only and user-namespaced.
 - People may work across regions and disciplines. Base positions own capability history; numbered event slots do not become separate qualifications.
 - Prefer archive lifecycles over hard deletion of referenced master data.
