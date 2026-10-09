@@ -36,6 +36,6 @@ For development-only scheduler observation, run `python -m app.scheduler` in a s
 
 ## Deployment
 
-The retained production and isolated-staging Compose files are for the separate Docker/Portainer server only. PostgreSQL is not published to that server's host, and every project, network, and volume is independent of Re-Deputy. Back up both the PostgreSQL volume and the application-data volume: the latter contains Track map images while the database contains their hashes and metadata. During active development staging may follow a CI-qualified `main`; production promotion freezes one exact qualified revision. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The retained production and isolated-staging Compose files are for the separate Docker/Portainer server only. Portainer reads stack configuration from Git but pulls one CI-qualified GHCR application image for both web and scheduler services; it never builds source. PostgreSQL is not published to that server's host, and every project, network, and volume is independent of Re-Deputy. Back up both the PostgreSQL volume and the application-data volume: the latter contains Track map images while the database contains their hashes and metadata. Staging may pull the qualified `:staging` image; production promotion pins one immutable `sha-<commit>` image. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 See [docs/TESTING.md](docs/TESTING.md), [docs/SECURITY.md](docs/SECURITY.md), and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

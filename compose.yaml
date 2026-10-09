@@ -18,10 +18,7 @@ services:
     networks: [ontrack_internal]
 
   app:
-    build:
-      context: .
-      args:
-        BUILD_ID: ${ONTRACK_BUILD_ID:?Set the exact qualified Git SHA}
+    image: ${ONTRACK_IMAGE:?Set ONTRACK_IMAGE to an exact qualified SHA image}
     restart: unless-stopped
     env_file:
       - path: .env
@@ -47,10 +44,7 @@ services:
     networks: [ontrack_internal]
 
   scheduler:
-    build:
-      context: .
-      args:
-        BUILD_ID: ${ONTRACK_BUILD_ID:?Set the exact qualified Git SHA}
+    image: ${ONTRACK_IMAGE:?Set ONTRACK_IMAGE to an exact qualified SHA image}
     restart: unless-stopped
     command: ["python", "-m", "app.scheduler"]
     env_file:

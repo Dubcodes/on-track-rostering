@@ -56,6 +56,26 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     scheduler_interval_seconds: int = Field(default=1800, ge=60, le=86400)
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: object,
+        env_settings: object,
+        dotenv_settings: object,
+        file_secret_settings: object,
+    ) -> tuple[object, ...]:
+        def without_runtime_build_id(source: object) -> dict[str, object]:
+            values = source()  # type: ignore[operator]
+            return {key: value for key, value in values.items() if key != "build_id"}
+
+        return (
+            init_settings,
+            lambda: without_runtime_build_id(env_settings),
+            lambda: without_runtime_build_id(dotenv_settings),
+            file_secret_settings,
+        )
+
     @field_validator("allowed_hosts", "trusted_proxy_cidrs", mode="before")
     @classmethod
     def split_csv(cls, value: object) -> object:

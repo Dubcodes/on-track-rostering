@@ -18,10 +18,8 @@ services:
     networks: [ontrack_staging_internal]
 
   staging_app:
-    build:
-      context: .
-      args:
-        BUILD_ID: ${STAGING_ONTRACK_BUILD_ID:-}
+    image: ${STAGING_ONTRACK_IMAGE:-ghcr.io/dubcodes/on-track-rostering:staging}
+    pull_policy: always
     restart: unless-stopped
     environment:
       ONTRACK_DATABASE_URL: postgresql+psycopg://${STAGING_POSTGRES_USER:-ontrack_staging}:${STAGING_POSTGRES_PASSWORD}@staging_db:5432/${STAGING_POSTGRES_DB:-ontrack_staging}
@@ -47,10 +45,8 @@ services:
     networks: [ontrack_staging_internal]
 
   staging_scheduler:
-    build:
-      context: .
-      args:
-        BUILD_ID: ${STAGING_ONTRACK_BUILD_ID:-}
+    image: ${STAGING_ONTRACK_IMAGE:-ghcr.io/dubcodes/on-track-rostering:staging}
+    pull_policy: always
     restart: unless-stopped
     command: ["python", "-m", "app.scheduler"]
     environment:

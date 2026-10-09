@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   qualify:
     runs-on: ubuntu-latest
@@ -30,7 +34,7 @@ jobs:
       POSTGRES_DB: ontrack
       POSTGRES_USER: ontrack
       POSTGRES_PASSWORD: ci-only-password
-      ONTRACK_BUILD_ID: ${{ github.sha }}
+      IMAGE_REPOSITORY: ghcr.io/dubcodes/on-track-rostering
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,7 +46,42 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: echo "ONTRACK_RUN_BROWSER_TESTS=1" >> "$GITHUB_ENV"
       - run: python scripts/release_gate.py
-      - run: docker compose config --quiet
-      - run: docker compose --env-file .env.staging.example -f compose.staging.yaml config --quiet
-      - run: STAGING_ONTRACK_BUILD_ID= docker compose --env-file .env.staging.example -f compose.staging.yaml config --quiet
-      - run: docker build --build-arg BUILD_ID="$GITHUB_SHA" -t ontrack-rostering:ci .
+      - name: Validate production Compose image contract
+        env:
+          ONTRACK_IMAGE: ghcr.io/dubcodes/on-track-rostering:sha-${{ github.sha }}
+        run: |
+          docker compose config --quiet
+          docker compose config --format json > /tmp/ontrack-production-compose.json
+          python scripts/validate_compose_image_contract.py /tmp/ontrack-production-compose.json app scheduler
+      - name: Validate staging Compose image contract
+        run: |
+          docker compose --env-file .env.staging.example -f compose.staging.yaml config --quiet
+          docker compose --env-file .env.staging.example -f compose.staging.yaml config --format json > /tmp/ontrack-staging-compose.json
+          python scripts/validate_compose_image_contract.py /tmp/ontrack-staging-compose.json staging_app staging_scheduler
+      - name: Build qualified application image
+        run: |
+          docker build --build-arg BUILD_ID="$GITHUB_SHA" \
+            -t ontrack-rostering:ci \
+            -t "$IMAGE_REPOSITORY:sha-$GITHUB_SHA" .
+      - name: Verify embedded image build ID
+        run: test "$(docker run --rm --entrypoint cat ontrack-rostering:ci /app/.ontrack-build-id)" = "$GITHUB_SHA"
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable qualified image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker push "$IMAGE_REPOSITORY:sha-$GITHUB_SHA"
+      - name: Publish staging tag only for current main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [ "$GITHUB_SHA" != "$remote_main" ]; then
+            echo "Workflow SHA is no longer origin/main; immutable image remains published and staging is unchanged."
+            exit 0
+          fi
+          docker image tag "$IMAGE_REPOSITORY:sha-$GITHUB_SHA" "$IMAGE_REPOSITORY:staging"
+          docker push "$IMAGE_REPOSITORY:staging"

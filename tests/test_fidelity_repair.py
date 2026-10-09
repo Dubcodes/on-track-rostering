@@ -848,16 +848,27 @@ def test_retention_defaults_export_excludes_secrets_and_housekeeping_dry_run(db,
     get_settings.cache_clear()
 
 
-def test_staging_build_id_optional_but_production_explicit() -> None:
+def test_portainer_uses_shared_registry_images_with_production_pinning() -> None:
     staging = open("compose.staging.yaml", encoding="utf-8").read()
     staging_example = open(".env.staging.example", encoding="utf-8").read()
     production = open("compose.yaml", encoding="utf-8").read()
     dockerfile = open("Dockerfile", encoding="utf-8").read()
-    assert "${STAGING_ONTRACK_BUILD_ID:-}" in staging
-    assert "\nSTAGING_ONTRACK_BUILD_ID=" not in staging_example
-    assert "# STAGING_ONTRACK_BUILD_ID=<qualified-git-sha>" in staging_example
-    assert "${ONTRACK_BUILD_ID:?" in production
+    staging_image = "${STAGING_ONTRACK_IMAGE:-ghcr.io/dubcodes/on-track-rostering:staging}"
+    production_image = "${ONTRACK_IMAGE:?Set ONTRACK_IMAGE to an exact qualified SHA image}"
+    assert staging.count(staging_image) == 2 and staging.count("pull_policy: always") == 2
+    assert production.count(production_image) == 2
+    assert "STAGING_ONTRACK_BUILD_ID" not in staging and "ONTRACK_BUILD_ID" not in production
+    assert "STAGING_ONTRACK_IMAGE=ghcr.io/dubcodes/on-track-rostering:staging" in staging_example
     assert ".ontrack-build-id" in dockerfile and "sha256sum" in dockerfile
+
+
+def test_runtime_build_id_cannot_override_embedded_image_identity(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app.core.config import _image_build_id
+
+    monkeypatch.setenv("ONTRACK_BUILD_ID", "forged-runtime-build-id")
+    get_settings.cache_clear()
+    assert get_settings().build_id == _image_build_id()
+    get_settings.cache_clear()
 
 
 def test_admin_retention_copy_and_compact_checkbox_remain_concise() -> None:
