@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+import warnings
 from datetime import date, time, timedelta
 
 import pytest
@@ -10,15 +11,22 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from fastapi.testclient import TestClient
+
 from app.auth.policy import Actor
 from app.auth.security import hash_credential
 from app.auth.service import activate_pending_grants
 from app.catalog.models import BasePosition, Region, Track
 from app.catalog.service import allocate_palette_slot
+from app.core.enums import Role
 from app.core.time import local_today, utcnow
-from app.external_calendar.models import ExternalCalendarEvent
+from app.external_calendar.detail_refresh import due_love_racing_events
+from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
 from app.external_calendar.service import adopt_external_event
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
+from app.main import app
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
 from app.notifications.service import encrypt_subscription, generate_reminders, process_pending
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
@@ -64,6 +72,75 @@ def _authority(factory) -> tuple[uuid.UUID, uuid.UUID]:  # type: ignore[no-untyp
         db.add(RoleGrant(user_id=user.id, role="MANAGER", region_id=region.id))
         db.commit()
         return user.id, region.id
+
+
+def test_postgres_programme_queries_deduplicate_json_events(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    with pg_factory() as db:
+        region = Region(name=f"Programme Region {suffix}")
+        admin = User(
+            email=f"programme-admin-{suffix}@example.com",
+            display_name="Programme Admin",
+            credential_hash=hash_credential("12345678"),
+            credential_kind="pin",
+        )
+        db.add_all([region, admin])
+        db.flush()
+        track = Track(name=f"Programme Track {suffix}", region_id=region.id, palette_slot=1)
+        db.add(track)
+        db.flush()
+        db.add(RoleGrant(user_id=admin.id, role=Role.ADMIN.value, region_id=None))
+        event = ExternalCalendarEvent(
+            event_date=local_today() + timedelta(days=1),
+            track_id=track.id,
+            external_track_name="Programme Track",
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            status="SCHEDULED",
+            programme_status="PARTIAL",
+            field_provenance={"programme_status": ["LOVE_RACING"]},
+        )
+        db.add(event)
+        db.flush()
+        db.add_all(
+            [
+                ExternalEventObservation(
+                    event_id=event.id,
+                    provider="LOVE_RACING",
+                    provider_event_id=f"programme-{suffix}",
+                    payload_hash=f"programme-{suffix}-{index}",
+                    source_track_name="Programme Track",
+                    parsed_facts={},
+                    raw_payload={},
+                    mapping_state="MAPPED",
+                    reconciliation_state="MATCHED",
+                )
+                for index in range(3)
+            ]
+        )
+        db.commit()
+        event_id = event.id
+
+    with pg_factory() as db:
+        assert [
+            event.id for event in due_love_racing_events(db, now=utcnow()) if event.id == event_id
+        ] == [event_id]
+
+    with TestClient(app) as client:
+        login = client.post(
+            "/login",
+            data={
+                "email": f"programme-admin-{suffix}@example.com",
+                "credential": "12345678",
+                "next": "/month",
+            },
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+        response = client.get("/admin/online-sources")
+    assert response.status_code == 200
+    programme_detail = response.text.split("<h3>Programme detail</h3>", 1)[1].split("</dl>", 1)[0]
+    assert "<dt>Partial / Awaiting</dt><dd>1</dd>" in programme_detail
 
 
 def test_simultaneous_track_creation_allocates_distinct_palette_slots(pg_factory) -> None:  # type: ignore[no-untyped-def]

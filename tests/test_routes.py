@@ -1836,6 +1836,7 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
             status="SCHEDULED",
             meeting_name="Racing Taupo @ Taupo",
             programme_status="PARTIAL",
+            field_provenance={"programme_status": ["LOVE_RACING"]},
             first_race_time=time(12, 34),
             last_race_time=time(17, 24),
             race_count=9,
@@ -1859,6 +1860,32 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
                 reconciliation_state="MATCHED",
             )
         )
+        db.add_all(
+            [
+                ExternalEventObservation(
+                    event_id=event.id,
+                    provider="LOVE_RACING",
+                    provider_event_id="55962",
+                    payload_hash="taupo-programme-observation-duplicate-1",
+                    source_track_name="Taupo",
+                    parsed_facts={},
+                    raw_payload={},
+                    mapping_state="MAPPED",
+                    reconciliation_state="MATCHED",
+                ),
+                ExternalEventObservation(
+                    event_id=event.id,
+                    provider="LOVE_RACING",
+                    provider_event_id="55962",
+                    payload_hash="taupo-programme-observation-duplicate-2",
+                    source_track_name="Taupo",
+                    parsed_facts={},
+                    raw_payload={},
+                    mapping_state="MAPPED",
+                    reconciliation_state="MATCHED",
+                ),
+            ]
+        )
         db.commit()
         event_id = event.id
 
@@ -1880,6 +1907,8 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
     assert "Programme detail" in sources.text
     assert "Failed upcoming" in sources.text
     assert "Programme detail warning" in sources.text
+    programme_detail = sources.text.split("<h3>Programme detail</h3>", 1)[1].split("</dl>", 1)[0]
+    assert "<dt>Partial / Awaiting</dt><dd>1</dd>" in programme_detail
 
     calls: list[uuid.UUID] = []
     monkeypatch.setattr(

@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditEvent
@@ -249,17 +249,21 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
             ),
         }
     today = local_today()
-    programme_query = (
-        select(ExternalCalendarEvent)
-        .join(ExternalEventObservation)
-        .where(
+    programme_identity_exists = exists(
+        select(1).where(
+            ExternalEventObservation.event_id == ExternalCalendarEvent.id,
             ExternalEventObservation.provider == "LOVE_RACING",
             ExternalEventObservation.provider_event_id.is_not(None),
             ExternalEventObservation.mapping_state == "MAPPED",
+        )
+    )
+    programme_query = (
+        select(ExternalCalendarEvent)
+        .where(
+            programme_identity_exists,
             ExternalCalendarEvent.event_kind == "RACE",
             ExternalCalendarEvent.event_date >= today,
         )
-        .distinct()
     )
     if region_ids is not None:
         programme_query = programme_query.join(Track).where(Track.region_id.in_(region_ids))

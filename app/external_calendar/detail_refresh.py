@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -17,17 +17,21 @@ from app.external_calendar.service import ProviderObservation, reconcile_observa
 
 def due_love_racing_events(db: Session, *, now=None) -> list[ExternalCalendarEvent]:  # type: ignore[no-untyped-def]
     now = now or utcnow()
+    programme_identity_exists = exists(
+        select(1).where(
+            ExternalEventObservation.event_id == ExternalCalendarEvent.id,
+            ExternalEventObservation.provider == "LOVE_RACING",
+            ExternalEventObservation.provider_event_id.is_not(None),
+        )
+    )
     events = list(
         db.scalars(
             select(ExternalCalendarEvent)
-            .join(ExternalEventObservation)
             .where(
-                ExternalEventObservation.provider == "LOVE_RACING",
-                ExternalEventObservation.provider_event_id.is_not(None),
+                programme_identity_exists,
                 ExternalCalendarEvent.event_kind == "RACE",
                 ExternalCalendarEvent.event_date >= now.astimezone(get_settings().timezone).date(),
             )
-            .distinct()
             .order_by(ExternalCalendarEvent.event_date)
         )
     )
