@@ -2397,8 +2397,8 @@ def test_contractor_management_and_personal_surface_is_responsive(
     assert page.locator('a[href="/hours"]').is_visible()
     assert page.locator('a[href="/crew"]').count() == 0
     assert page.locator('a[href="/manage/accounts"]').count() == 0
-    assert page.goto(base_url + "/crew").status == 403
-    assert page.goto(base_url + "/manage/accounts").status == 403
     _assert_no_horizontal_overflow(page)
     assert not errors
+    assert page.goto(base_url + "/crew").status == 403
+    assert page.goto(base_url + "/manage/accounts").status == 403
     contractor_context.close()
