@@ -558,6 +558,125 @@ def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -
     assert repeated.status_code == 400
 
 
+def test_manager_contractor_invitation_scope_activation_and_limited_surface(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, employee_person_id) = routed_db
+    with factory() as db:
+        other_region_id = db.scalar(select(Region.id).where(Region.id != region_id))
+        contractor = Person(
+            display_name="Scoped Contractor",
+            email="scoped-contractor@example.com",
+            home_region_id=region_id,
+        )
+        outside = Person(
+            display_name="Outside Contractor",
+            email="outside-contractor@example.com",
+            home_region_id=other_region_id,
+        )
+        db.add_all([contractor, outside])
+        db.commit()
+        contractor_id, outside_id = contractor.id, outside.id
+
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    outside_attempt = manager.post(
+        f"/manage/accounts/contractors/{outside_id}/invite",
+        data={"email": "outside-contractor@example.com", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert outside_attempt.status_code == 403
+    created = manager.post(
+        f"/manage/accounts/contractors/{contractor_id}/invite",
+        data={"email": "scoped-contractor@example.com", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert created.status_code == 200
+    match = re.search(r'value="/invite#token=([A-Za-z0-9_-]+)"', created.text)
+    assert match
+    raw = match.group(1)
+
+    public = TestClient(app)
+    activated = public.post(
+        "/invite/activate",
+        data={"token": raw, "display_name": "Scoped Contractor", "credential": "246810"},
+        follow_redirects=False,
+    )
+    assert activated.status_code == 303
+    assert public.post(
+        "/invite/activate",
+        data={"token": raw, "display_name": "Scoped Contractor", "credential": "246810"},
+    ).status_code == 400
+    with factory() as db:
+        account = db.scalar(select(User).where(User.email == "scoped-contractor@example.com"))
+        assert account and account.contractor_access_expires_at is not None
+        link = db.get(UserPersonLink, account.id)
+        assert link and link.person_id == contractor_id
+    crew_management = manager.get(f"/manage/crew?region_id={region_id}")
+    assert "Scoped Contractor" in crew_management.text
+    assert "Contractor" in crew_management.text and "Access until" in crew_management.text
+
+    own_day = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=local_today() + timedelta(days=3),
+        rows=[
+            (contractor_id, "Scoped Contractor", "Own detail", True),
+            (employee_person_id, "Amy Crew", "Unrelated detail", True),
+        ],
+    )
+    unrelated_day = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=local_today() + timedelta(days=4),
+        rows=[(employee_person_id, "Amy Crew", "Unrelated only", True)],
+    )
+    contractor_client = TestClient(app)
+    _login(contractor_client, "scoped-contractor@example.com", "246810")
+    month = contractor_client.get("/month")
+    assert month.status_code == 200 and f'/day/{own_day}' in month.text
+    assert f'/day/{unrelated_day}' not in month.text
+    day = contractor_client.get(f"/day/{own_day}")
+    assert "Scoped Contractor" in day.text and "Own detail" in day.text
+    assert "Amy Crew" not in day.text and "Unrelated detail" not in day.text
+    assert contractor_client.get("/crew").status_code == 403
+    assert contractor_client.get("/manage/accounts").status_code == 403
+    assert contractor_client.get("/manage/crew").status_code == 403
+    assert contractor_client.get("/admin").status_code == 403
+    settings = contractor_client.get("/settings")
+    assert 'href="/hours"' in settings.text
+    assert 'href="/crew"' not in settings.text
+    assert 'href="/manage/workdays/new"' not in settings.text
+
+    with factory() as db:
+        account = db.scalar(select(User).where(User.email == "scoped-contractor@example.com"))
+        account.contractor_manual_extension_at = utcnow() - timedelta(days=60)
+        account.contractor_access_expires_at = utcnow() - timedelta(seconds=1)
+        db.commit()
+        before = account.contractor_access_expires_at
+    assert contractor_client.get("/month", follow_redirects=False).status_code == 303
+    assert contractor_client.post(
+        "/login",
+        data={
+            "email": "scoped-contractor@example.com",
+            "credential": "246810",
+            "next": "/month",
+        },
+        follow_redirects=False,
+    ).status_code == 400
+    extended = manager.post(
+        f"/manage/accounts/contractors/{account.id}/extend",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert extended.status_code == 303
+    with factory() as db:
+        refreshed = db.get(User, account.id)
+        assert refreshed.contractor_access_expires_at.date() >= before.date()
+        assert refreshed.status == "ACTIVE"
+        assert db.get(Person, contractor_id) is not None
+
+
 def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, _position_id, _person_id) = routed_db
     public = TestClient(app)
@@ -583,7 +702,11 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
     admin_csrf = _login(admin, "admin@example.test", "99887766")
     toggled = admin.post(
         "/admin/system-settings",
-        data={"public_signup_enabled": "true", "csrf_token": admin_csrf},
+        data={
+            "public_signup_enabled": "true",
+            "contractor_inactivity_days": "45",
+            "csrf_token": admin_csrf,
+        },
         follow_redirects=False,
     )
     assert toggled.status_code == 303
@@ -608,6 +731,7 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
     with factory() as db:
         settings = db.get(SystemSettings, 1)
         assert settings and settings.public_signup_enabled is True
+        assert settings.contractor_inactivity_days == 45
         signup_id = db.scalar(
             select(SignupRequest.id).where(SignupRequest.email == "candidate@example.com")
         )

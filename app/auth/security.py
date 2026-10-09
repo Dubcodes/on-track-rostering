@@ -212,7 +212,15 @@ def resolve_device(db: Session, raw_token: str) -> tuple[User, TrustedDevice] | 
     if not device or device.revoked_at or expires_at <= now:
         return None
     user = db.get(User, device.user_id)
-    if not user or user.status != "ACTIVE" or user.auth_epoch != device.auth_epoch:
+    contractor_expiry = user.contractor_access_expires_at if user else None
+    if contractor_expiry and contractor_expiry.tzinfo is None:
+        contractor_expiry = contractor_expiry.replace(tzinfo=UTC)
+    if (
+        not user
+        or user.status != "ACTIVE"
+        or user.auth_epoch != device.auth_epoch
+        or (contractor_expiry is not None and contractor_expiry <= now)
+    ):
         if device and not device.revoked_at:
             device.revoked_at = now
             db.commit()

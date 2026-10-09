@@ -16,6 +16,7 @@ from app.core.database import get_db
 from app.core.enums import Role
 from app.core.forms import optional_uuid
 from app.core.time import utcnow
+from app.identity.contractor_access import refresh_contractor_access
 from app.identity.models import Invitation, Person, RoleGrant, SignupRequest, User, UserPersonLink
 from app.web import context, templates
 
@@ -69,6 +70,40 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
     if not request.state.actor.is_admin:
         invitations_query = invitations_query.where(Invitation.region_id.in_(region_ids))
     invitations_query = invitations_query.order_by(Invitation.created_at.desc()).limit(50)
+    contractor_rows = list(
+        db.execute(
+            select(User, Person)
+            .join(UserPersonLink, UserPersonLink.user_id == User.id)
+            .join(Person, Person.id == UserPersonLink.person_id)
+            .join(RoleGrant, RoleGrant.user_id == User.id)
+            .where(
+                RoleGrant.role == Role.CONTRACTOR.value,
+                RoleGrant.status == "ACTIVE",
+                Person.home_region_id.in_(region_ids),
+            )
+            .order_by(Person.display_name)
+        ).all()
+    )
+    now = utcnow()
+    contractor_accounts = []
+    for account, person in contractor_rows:
+        expires_at = account.contractor_access_expires_at
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=now.tzinfo)
+        contractor_accounts.append(
+            {
+                "user": account,
+                "person": person,
+                "expires_at": expires_at,
+                "access_status": (
+                    "Disabled"
+                    if account.status == "DISABLED"
+                    else "Expired"
+                    if account.status == "EXPIRED" or (expires_at and expires_at <= now)
+                    else "Active"
+                ),
+            }
+        )
     return templates.TemplateResponse(
         "accounts.html",
         context(
@@ -93,6 +128,8 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 else {}
             ),
             invitations=list(db.scalars(invitations_query)),
+            contractor_accounts=contractor_accounts,
+            contractor_inactivity_days=request.state.system_settings.contractor_inactivity_days,
             unlinked_users=[user for user in users if db.get(UserPersonLink, user.id) is None],
             account_roles=[role.value for role in Role],
             grants=list(db.scalars(grants_query.order_by(RoleGrant.granted_at.desc()))),
@@ -185,6 +222,129 @@ def create_regional_invitation(
         context(request, invitation_url=f"/invite#token={raw}", destination="/manage/accounts"),
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.post("/contractors/{person_id}/invite")
+def invite_contractor(
+    person_id: uuid.UUID,
+    request: Request,
+    email: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    region_ids = {region.id for region in _regions(request, db)}
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    person = db.get(Person, person_id)
+    if (
+        not person
+        or person.home_region_id not in region_ids
+        or not can_administer_person(request.state.actor, person, person.home_region_id)
+    ):
+        raise HTTPException(403, "The crew identity is outside this regional scope.")
+    if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
+        raise HTTPException(409, "That crew identity already has a linked account.")
+    try:
+        _invitation, raw = create_invitation(
+            db,
+            email=email,
+            display_name=person.display_name,
+            person_id=person.id,
+            role=Role.CONTRACTOR.value,
+            region_id=person.home_region_id,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return templates.TemplateResponse(
+        "invitation_created.html",
+        context(
+            request,
+            invitation_url=f"/invite#token={raw}",
+            destination="/manage/accounts#contractor-access",
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/contractors/{user_id}/extend")
+def extend_contractor_access(
+    user_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    region_ids = {region.id for region in _regions(request, db)}
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    user = db.get(User, user_id)
+    link = db.get(UserPersonLink, user_id) if user else None
+    person = db.get(Person, link.person_id) if link else None
+    if (
+        not user
+        or not person
+        or person.home_region_id not in region_ids
+        or not can_administer_person(request.state.actor, person, person.home_region_id)
+    ):
+        raise HTTPException(403, "The Contractor account is outside this regional scope.")
+    if not db.scalar(
+        select(RoleGrant.id).where(
+            RoleGrant.user_id == user.id,
+            RoleGrant.role == Role.CONTRACTOR.value,
+            RoleGrant.status == "ACTIVE",
+        )
+    ):
+        raise HTTPException(409, "That account is not an active Contractor account.")
+    now = utcnow()
+    result = refresh_contractor_access(
+        db,
+        user,
+        manual_extension_at=now,
+        actor_user_id=request.state.user.id,
+        reason="manual extension",
+    )
+    record_audit(
+        db,
+        "contractor.access.extended",
+        "user",
+        user.id,
+        request.state.user.id,
+        region_id=person.home_region_id,
+        detail={"access_expires_at": result.expires_at.isoformat() if result.expires_at else None},
+    )
+    db.commit()
+    return RedirectResponse("/manage/accounts?contractor=extended#contractor-access", status_code=303)
+
+
+@router.post("/invitations/{invitation_id}/revoke")
+def revoke_regional_invitation(
+    invitation_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    region_ids = {region.id for region in _regions(request, db)}
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    invitation = db.get(Invitation, invitation_id)
+    if (
+        not invitation
+        or invitation.region_id not in region_ids
+        or invitation.consumed_at
+        or invitation.revoked_at
+    ):
+        raise HTTPException(409, "Invitation is unavailable.")
+    invitation.revoked_at = utcnow()
+    record_audit(
+        db,
+        "invitation.revoked",
+        "invitation",
+        invitation.id,
+        request.state.user.id,
+        region_id=invitation.region_id,
+    )
+    db.commit()
+    return RedirectResponse("/manage/accounts#contractor-access", status_code=303)
 
 
 @router.post("/signup-requests/{signup_id}/approve")

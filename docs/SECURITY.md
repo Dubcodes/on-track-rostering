@@ -8,6 +8,8 @@ The first Admin can only be created from `python -m app.cli create-admin`; no pu
 
 Invitations use 40-byte URL-safe random tokens; only SHA-256 hashes are stored. They expire, are single-use, and a new invitation revokes unused invitations for that email. Activation locks the row and links an available person without manufacturing a second identity.
 
+Contractor invitations require an explicit Person link and fixed Contractor role/scope. The resulting account has no Crew View or management surface, and direct-route policy checks enforce the same boundary as navigation. Temporary access expiry is checked at login and trusted-device resolution; bounded refresh also marks the account expired, advances its auth epoch, revokes devices, and emits redacted audit events without deleting identity or roster history.
+
 ## Sessions and elevation
 
 Trusted-device cookies contain opaque random tokens; only hashes are stored. Session cookies are HttpOnly, SameSite=Lax, and Secure when configured. CSRF cookies are SameSite=Strict and compared with a server-stored hash on every mutation. Origin and Sec-Fetch-Site are checked as defense in depth.

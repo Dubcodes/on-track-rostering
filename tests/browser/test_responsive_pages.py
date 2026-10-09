@@ -77,7 +77,19 @@ def browser_site():  # type: ignore[no-untyped-def]
             credential_hash=hash_credential("112233"),
             credential_kind="pin",
         )
+        contractor = User(
+            email=f"contractor-{suffix}@example.com",
+            display_name="Browser Contractor",
+            credential_hash=hash_credential("246810"),
+            credential_kind="pin",
+            contractor_manual_extension_at=utcnow(),
+            contractor_access_expires_at=utcnow() + timedelta(days=60),
+        )
         person = Person(display_name="Browser Crew Member")
+        contractor_person = Person(
+            display_name="Browser Contractor",
+            email=contractor.email,
+        )
         manager_person = Person(display_name="Browser Roster Manager")
         other_person = Person(display_name="Unrelated Browser Crew")
         leave_managed_person = Person(display_name="Browser Leave Managed Crew")
@@ -90,7 +102,9 @@ def browser_site():  # type: ignore[no-untyped-def]
                 employee,
                 admin,
                 viewer,
+                contractor,
                 person,
+                contractor_person,
                 manager_person,
                 other_person,
                 leave_managed_person,
@@ -121,6 +135,7 @@ def browser_site():  # type: ignore[no-untyped-def]
         duplicate_a = Person(display_name="John Smith", home_region_id=cross_region.id)
         duplicate_b = Person(display_name="John Smith", home_region_id=cross_region.id)
         person.home_region_id = region.id
+        contractor_person.home_region_id = region.id
         manager_person.home_region_id = region.id
         leave_managed_person.home_region_id = region.id
         db.add_all(
@@ -141,11 +156,13 @@ def browser_site():  # type: ignore[no-untyped-def]
         db.add_all(
             [
                 UserPersonLink(user_id=employee.id, person_id=person.id),
+                UserPersonLink(user_id=contractor.id, person_id=contractor_person.id),
                 UserPersonLink(user_id=manager.id, person_id=manager_person.id),
                 RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
                 RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
+                RoleGrant(user_id=contractor.id, role=Role.CONTRACTOR.value, region_id=region.id),
                 NotificationPreference(user_id=employee.id, weekly_digest=True),
                 PositionCapability(
                     person_id=other_person.id,
@@ -304,6 +321,49 @@ def browser_site():  # type: ignore[no-untyped-def]
             )
         )
         cross_workday.current_published_revision_id = cross_revision.id
+        contractor_workday = Workday(region_id=region.id, created_by_user_id=manager.id)
+        db.add(contractor_workday)
+        db.flush()
+        contractor_revision = WorkdayRevision(
+            workday_id=contractor_workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=local_today() + timedelta(days=2),
+            track_id=track.id,
+            track_name_snapshot=track.name,
+            title="Contractor browser day",
+            start_time=clock_time(8),
+            end_time=clock_time(17),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add(contractor_revision)
+        db.flush()
+        db.add_all(
+            [
+                Assignment(
+                    revision_id=contractor_revision.id,
+                    base_position_id=position.id,
+                    display_name_snapshot="Contract camera",
+                    person_id=contractor_person.id,
+                    person_name_snapshot=contractor_person.display_name,
+                    status="ASSIGNED",
+                    note="Contractor own browser detail",
+                    note_private=True,
+                ),
+                Assignment(
+                    revision_id=contractor_revision.id,
+                    base_position_id=head_on.id,
+                    display_name_snapshot="Unrelated browser role",
+                    person_id=other_person.id,
+                    person_name_snapshot=other_person.display_name,
+                    status="ASSIGNED",
+                    note="Hidden from contractor",
+                    note_private=True,
+                ),
+            ]
+        )
+        contractor_workday.current_published_revision_id = contractor_revision.id
         travel_workday = Workday(
             region_id=region.id,
             category="TRAVEL_DAY",
@@ -654,6 +714,8 @@ def browser_site():  # type: ignore[no-untyped-def]
             "employee": (employee.email, "654321"),
             "admin": (admin.email, "12345678"),
             "viewer": (viewer.email, "112233"),
+            "contractor": (contractor.email, "246810"),
+            "contractor_workday_id": str(contractor_workday.id),
             "workday_id": str(workday.id),
             "cross_workday_id": str(cross_workday.id),
                 "region_id": str(region.id),
@@ -2290,3 +2352,50 @@ def test_race_day_builder_live_timing_and_override_resets(browser_site, width: i
     _assert_no_horizontal_overflow(page)
     assert not errors
     context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_contractor_management_and_personal_surface_is_responsive(
+    browser_site, width: int
+) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    manager_context = browser.new_context(
+        viewport={"width": width, "height": 1000}, has_touch=width <= 760
+    )
+    page = manager_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/manage/accounts#contractor-access")
+    section = page.locator("#contractor-access")
+    assert section.get_by_role("heading", name="Contractor access").is_visible()
+    assert section.get_by_text("Browser Contractor", exact=True).is_visible()
+    assert section.get_by_text("Account linked", exact=False).is_visible()
+    assert section.get_by_role("button", name="Extend access").is_visible()
+    section.get_by_text("Invite a Contractor Person", exact=True).click()
+    invite_form = section.locator('form[action*="/contractors/"][action$="/invite"]').first
+    assert invite_form.locator('input[name="email"]').is_visible()
+    assert invite_form.get_by_role("button", name="Invite Contractor").is_visible()
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    manager_context.close()
+
+    contractor_context = browser.new_context(
+        viewport={"width": width, "height": 900}, has_touch=width <= 760
+    )
+    page = contractor_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["contractor"])
+    _assert_page(page, base_url + "/month")
+    assert page.get_by_text("Contractor browser day", exact=True).count() >= 1
+    _assert_page(page, base_url + f"/day/{values['contractor_workday_id']}")
+    assert page.get_by_text("Contractor own browser detail", exact=True).is_visible()
+    assert page.get_by_text("Hidden from contractor", exact=True).count() == 0
+    page.goto(base_url + "/settings")
+    assert page.locator('a[href="/hours"]').is_visible()
+    assert page.locator('a[href="/crew"]').count() == 0
+    assert page.locator('a[href="/manage/accounts"]').count() == 0
+    assert page.goto(base_url + "/crew").status == 403
+    assert page.goto(base_url + "/manage/accounts").status == 403
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    contractor_context.close()

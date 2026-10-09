@@ -22,6 +22,12 @@ class User(Base):
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
     theme: Mapped[str] = mapped_column(String(24), default="jade")
     auth_epoch: Mapped[int] = mapped_column(default=1)
+    contractor_manual_extension_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    contractor_access_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     grants: Mapped[list[RoleGrant]] = relationship(

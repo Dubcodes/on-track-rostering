@@ -41,6 +41,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
     actor = getattr(request.state, "actor", None)
     show_manage = bool(
         actor
+        and not actor.is_contractor
         and (
             actor.is_admin
             or any({"MANAGER", "SUB_MANAGER"} & set(roles) for roles in actor.regional_roles.values())
@@ -48,6 +49,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
     )
     show_crew = bool(
         actor
+        and not actor.is_contractor
         and (
             actor.is_admin
             or any(
@@ -57,16 +59,24 @@ def context(request: Request, **values: object) -> dict[str, object]:
         )
     )
     show_open_positions = bool(
-        actor and actor.person_id and any("EMPLOYEE" in roles for roles in actor.regional_roles.values())
+        actor
+        and not actor.is_contractor
+        and actor.person_id
+        and any("EMPLOYEE" in roles for roles in actor.regional_roles.values())
     )
     show_accounts = bool(
-        actor and (actor.is_admin or any("MANAGER" in roles for roles in actor.regional_roles.values()))
+        actor
+        and not actor.is_contractor
+        and (actor.is_admin or any("MANAGER" in roles for roles in actor.regional_roles.values()))
     )
     show_regional_admin = bool(
-        actor and (actor.is_admin or any("MANAGER" in roles for roles in actor.regional_roles.values()))
+        actor
+        and not actor.is_contractor
+        and (actor.is_admin or any("MANAGER" in roles for roles in actor.regional_roles.values()))
     )
     show_hours_management = bool(
         actor
+        and not actor.is_contractor
         and (
             actor.is_admin
             or any(

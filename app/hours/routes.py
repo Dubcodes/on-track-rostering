@@ -72,9 +72,12 @@ def employee_hours(request: Request, offset: int = Query(0), db: Session = Depen
 
 @router.get("/manage/hours", response_class=HTMLResponse)
 def management_hours(request: Request, offset: int = Query(0), db: Session = Depends(get_db)):
-    if not request.state.actor.is_admin and not any(
-        {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
-        for roles in request.state.actor.regional_roles.values()
+    if request.state.actor.is_contractor or (
+        not request.state.actor.is_admin
+        and not any(
+            {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
+            for roles in request.state.actor.regional_roles.values()
+        )
     ):
         raise HTTPException(403, "Regional hours visibility required.")
     offset = _offset(offset)

@@ -4,7 +4,7 @@
 
 | Area | Delivered behavior | Primary implementation | Evidence / boundary |
 |---|---|---|---|
-| Identity/security | Separate Users and People, scoped roles, invitations/signup review, trusted devices, fresh auth, passkeys and optional TOTP | `app/identity`, `app/accounts`, `app/auth` | Security/route tests; real authenticator and recovery operations remain staging work |
+| Identity/security | Separate Users and People, scoped roles, invitations/signup review, temporary Contractor invitation/monotonic expiry/reactivation, trusted devices, fresh auth, passkeys and optional TOTP | `app/identity`, `app/accounts`, `app/auth` | Security/route/browser tests; Contractor inactivity defaults to 30 days; real authenticator and recovery operations remain staging work |
 | Roster authority | Stable Workday, one shared private draft, exact optimistic locking, immutable publication, Preview/diff/history, Open applications, decline and cancellation | `app/rostering`, `app/open_positions` | Route/domain tests plus PostgreSQL concurrency suite |
 | Builder | Unified identity/timing/notes/travel/assignments form; native time controls; collapsed secondary sections; live Position, Person and Vehicle search; human HTML validation errors | Builder template/JS and rostering routes/service | Focused route and Playwright behavior/geometry coverage |
 | Multi-Position Person | Same Person may hold multiple stable slots, including via Open Position selection; immediate Move/Keep both/Cancel dialog; timing/notes remain per Position while person-level travel is synchronized | `app/static/builder.js`, `app/rostering/service.py`, `app/open_positions` | Save/publish/domain and responsive browser coverage; inconsistent travel POSTs are rejected |

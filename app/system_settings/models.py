@@ -16,6 +16,7 @@ class SystemSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     public_signup_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    contractor_inactivity_days: Mapped[int] = mapped_column(Integer, default=30)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

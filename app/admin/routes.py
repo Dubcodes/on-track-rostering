@@ -128,17 +128,22 @@ def update_system_branding(
 def update_system_settings(
     request: Request,
     public_signup_enabled: bool = Form(False),
+    contractor_inactivity_days: int = Form(30),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
     previous = request.state.system_settings.public_signup_enabled
-    row = update_operational_settings(
-        db,
-        public_signup_enabled=public_signup_enabled,
-        actor_user_id=request.state.user.id,
-    )
+    try:
+        row = update_operational_settings(
+            db,
+            public_signup_enabled=public_signup_enabled,
+            contractor_inactivity_days=contractor_inactivity_days,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     record_audit(
         db,
         "system_settings.updated",
@@ -148,6 +153,7 @@ def update_system_settings(
         detail={
             "public_signup_enabled": row.public_signup_enabled,
             "previous_public_signup_enabled": previous,
+            "contractor_inactivity_days": row.contractor_inactivity_days,
         },
     )
     db.commit()
@@ -256,6 +262,8 @@ def create_user(
     if db.scalar(select(User.id).where(User.email == user_email)):
         raise HTTPException(409, "An account already uses that email.")
     person = _active_reference(db, Person, person_id, "crew identity") if person_id else None
+    if role == Role.CONTRACTOR.value and person is None:
+        raise HTTPException(400, "Contractor access must be linked to a crew identity.")
     if person and db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
         raise HTTPException(409, "That crew identity is already linked to an account.")
     user = User(
@@ -275,6 +283,16 @@ def create_user(
                 user_id=user.id, role=role, region_id=scoped_region, granted_by_user_id=request.state.user.id
             )
         )
+        if role == Role.CONTRACTOR.value:
+            from app.identity.contractor_access import refresh_contractor_access
+
+            refresh_contractor_access(
+                db,
+                user,
+                manual_extension_at=utcnow(),
+                actor_user_id=request.state.user.id,
+                reason="direct account creation",
+            )
         record_audit(
             db,
             "user.created",
@@ -367,6 +385,17 @@ def update_user_status(
     user.status = account_status
     user.auth_epoch += 1
     now = utcnow()
+    if account_status == "ACTIVE":
+        from app.identity.contractor_access import is_contractor_user, refresh_contractor_access
+
+        if is_contractor_user(db, user.id):
+            refresh_contractor_access(
+                db,
+                user,
+                manual_extension_at=now,
+                actor_user_id=request.state.user.id,
+                reason="admin activation",
+            )
     for device in db.scalars(
         select(TrustedDevice).where(
             TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None)

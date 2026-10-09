@@ -73,9 +73,9 @@ def adjacent_published_workdays(
 
 def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[str, object]]:
     broad_roles = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
-    broad_month = actor.is_admin or any(
+    broad_month = not actor.is_contractor and (actor.is_admin or any(
         bool(set(roles) & broad_roles) for roles in actor.regional_roles.values()
-    )
+    ))
     statement = (
         select(Workday, WorkdayRevision, Region, Track.palette_slot)
         .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)

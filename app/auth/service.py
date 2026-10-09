@@ -69,6 +69,8 @@ def create_invitation(
             raise ValueError("The selected crew identity is archived.")
         if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person_id)):
             raise ValueError("The selected crew identity is already linked to an account.")
+    elif role == Role.CONTRACTOR.value:
+        raise ValueError("Contractor invitations must link the intended crew identity.")
     now = utcnow()
     if db.scalar(
         select(Invitation.id).where(
@@ -120,6 +122,7 @@ def activate_pending_grants(
     )
     now = utcnow()
     activated = 0
+    contractor_activated = False
     admin_eligible = bool(user.credential_admin_eligible)
     if secret and not credential_error(secret, Role.ADMIN.value):
         user.credential_admin_eligible = True
@@ -130,6 +133,7 @@ def activate_pending_grants(
         grant.status = "ACTIVE"
         grant.activated_at = now
         activated += 1
+        contractor_activated = contractor_activated or grant.role == Role.CONTRACTOR.value
         record_audit(
             db,
             "role_grant.activated",
@@ -138,6 +142,16 @@ def activate_pending_grants(
             user.id,
             region_id=grant.region_id,
             detail={"role": grant.role},
+        )
+    if contractor_activated:
+        from app.identity.contractor_access import refresh_contractor_access
+
+        refresh_contractor_access(
+            db,
+            user,
+            manual_extension_at=now,
+            actor_user_id=user.id,
+            reason="contractor grant activation",
         )
     if activated:
         user.auth_epoch += 1
@@ -158,6 +172,25 @@ def grant_role(
         raise ValueError("Select an active region for this role grant.")
     if not can_grant_role(actor, role, region_id):
         raise PermissionError("You cannot grant that role and scope.")
+    active_roles = set(
+        db.scalars(
+            select(RoleGrant.role).where(
+                RoleGrant.user_id == target_user.id,
+                RoleGrant.status != "REVOKED",
+            )
+        )
+    )
+    if role == Role.CONTRACTOR.value and active_roles:
+        raise ValueError("Contractor access must be the account's only role.")
+    if role != Role.CONTRACTOR.value and Role.CONTRACTOR.value in active_roles:
+        raise ValueError("Revoke Contractor access before granting another role.")
+    if role == Role.CONTRACTOR.value:
+        link = db.get(UserPersonLink, target_user.id)
+        person = db.get(Person, link.person_id) if link else None
+        if not person or person.lifecycle != "ACTIVE":
+            raise ValueError("Contractor access requires an active linked crew identity.")
+        if person.home_region_id != region_id:
+            raise ValueError("Contractor access must use the linked Person's Primary region.")
     if not actor.is_admin and region_id is not None and not can_administer_user(
         db, actor, target_user, region_id
     ):
@@ -342,6 +375,16 @@ def activate_invitation(db: Session, raw_token: str, display_name: str, secret: 
             granted_by_user_id=invite.created_by_user_id,
         )
     )
+    if invite.role == Role.CONTRACTOR.value:
+        from app.identity.contractor_access import refresh_contractor_access
+
+        refresh_contractor_access(
+            db,
+            user,
+            manual_extension_at=now,
+            actor_user_id=invite.created_by_user_id,
+            reason="invitation activation",
+        )
     invite.consumed_at = now
     invite.activated_user_id = user.id
     record_audit(db, "invitation.activated", "user", user.id, user.id, region_id=invite.region_id)

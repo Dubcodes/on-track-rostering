@@ -14,6 +14,7 @@ from app.core.time import utcnow
 from app.external_calendar.detail_refresh import refresh_due_programmes
 from app.external_calendar.http import SourceHTTPClient
 from app.external_calendar.refresh import ensure_provider_states, refresh_provider
+from app.identity.contractor_access import refresh_all_contractor_access
 from app.track_maps.service import due_tracks, refresh_automatic_map
 
 logger = logging.getLogger(__name__)
@@ -74,11 +75,14 @@ def scheduler_tick(db: Session, *, now=None) -> dict[str, object]:  # type: igno
             maps["checked"] += 1
             maps["failed"] += row.automatic_status == "ERROR"
         db.commit()
+        contractors = refresh_all_contractor_access(db, now=now)
+        db.commit()
         return {
             "status": "ok",
             "providers": provider_results,
             "programmes": programmes,
             "maps": maps,
+            "contractors": contractors,
         }
 
 

@@ -27,6 +27,12 @@ class Actor:
     def is_admin(self) -> bool:
         return Role.ADMIN.value in self.global_roles
 
+    @property
+    def is_contractor(self) -> bool:
+        return Role.CONTRACTOR.value in self.global_roles or any(
+            Role.CONTRACTOR.value in roles for roles in self.regional_roles.values()
+        )
+
     def roles_for(self, region_id: uuid.UUID) -> frozenset[str]:
         return self.global_roles | self.regional_roles.get(region_id, frozenset())
 
@@ -41,6 +47,23 @@ def actor_for(db: Session, user: User) -> Actor:
             global_roles.add(grant.role)
         else:
             regional.setdefault(grant.region_id, set()).add(grant.role)
+    contractor_regions = {
+        region_id
+        for region_id, roles in regional.items()
+        if Role.CONTRACTOR.value in roles
+    }
+    if Role.CONTRACTOR.value in global_roles or contractor_regions:
+        # Contractor is deliberately an exclusive authority surface. If legacy or
+        # manually inconsistent grants coexist, fail closed to personal access.
+        global_roles = (
+            {Role.CONTRACTOR.value}
+            if Role.CONTRACTOR.value in global_roles
+            else set()
+        )
+        regional = {
+            region_id: {Role.CONTRACTOR.value}
+            for region_id in contractor_regions
+        }
     link = db.get(UserPersonLink, user.id)
     return Actor(
         user_id=user.id,
@@ -51,10 +74,14 @@ def actor_for(db: Session, user: User) -> Actor:
 
 
 def can_manage_region(actor: Actor, region_id: uuid.UUID) -> bool:
+    if actor.is_contractor:
+        return False
     return actor.is_admin or bool(actor.roles_for(region_id) & {Role.MANAGER.value, Role.SUB_MANAGER.value})
 
 
 def can_administer_region(actor: Actor, region_id: uuid.UUID) -> bool:
+    if actor.is_contractor:
+        return False
     return actor.is_admin or Role.MANAGER.value in actor.roles_for(region_id)
 
 
@@ -98,12 +125,16 @@ def can_grant_role(actor: Actor, role: str, region_id: uuid.UUID | None) -> bool
 
 
 def can_crew_view(actor: Actor, region_id: uuid.UUID) -> bool:
+    if actor.is_contractor:
+        return False
     allowed = {Role.EMPLOYEE.value, Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
     return actor.is_admin or bool(actor.roles_for(region_id) & allowed)
 
 
 def external_calendar_region_ids(db: Session, actor: Actor) -> set[uuid.UUID] | None:
     """Regions whose planning calendar the actor may see; ``None`` means global."""
+    if actor.is_contractor:
+        return set()
     if actor.is_admin:
         return None
     planning_roles = {
@@ -129,6 +160,8 @@ def external_calendar_region_ids(db: Session, actor: Actor) -> set[uuid.UUID] | 
 
 def can_view_management_detail(actor: Actor, region_id: uuid.UUID) -> bool:
     """Read-only operational/HR detail, independent from roster write authority."""
+    if actor.is_contractor:
+        return False
     allowed = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
     return actor.is_admin or bool(actor.roles_for(region_id) & allowed)
 

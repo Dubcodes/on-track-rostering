@@ -13,8 +13,8 @@ from app.auth.security import verify_csrf
 from app.auth.service import validated_email
 from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region
 from app.core.database import get_db
-from app.core.enums import CapabilitySignal, Lifecycle
-from app.identity.models import Person, UserPersonLink
+from app.core.enums import CapabilitySignal, Lifecycle, Role
+from app.identity.models import Person, RoleGrant, User, UserPersonLink
 from app.positions.service import set_preference_signal
 from app.rostering.models import PositionCapability
 from app.web import context, templates
@@ -59,6 +59,7 @@ def crew_management(
     memberships: dict[uuid.UUID, set[uuid.UUID]] = {person.id: set() for person in people}
     capabilities: dict[uuid.UUID, dict[uuid.UUID, set[str]]] = {person.id: {} for person in people}
     linked: set[uuid.UUID] = set()
+    contractor_accounts: dict[uuid.UUID, User] = {}
     if person_ids:
         for person_id, group_id in db.execute(
             select(PersonCrewGroup.person_id, PersonCrewGroup.crew_group_id).where(
@@ -73,6 +74,19 @@ def crew_management(
         linked = set(
             db.scalars(select(UserPersonLink.person_id).where(UserPersonLink.person_id.in_(person_ids)))
         )
+        contractor_accounts = {
+            person_id: account
+            for person_id, account in db.execute(
+                select(UserPersonLink.person_id, User)
+                .join(User, User.id == UserPersonLink.user_id)
+                .join(RoleGrant, RoleGrant.user_id == User.id)
+                .where(
+                    UserPersonLink.person_id.in_(person_ids),
+                    RoleGrant.role == Role.CONTRACTOR.value,
+                    RoleGrant.status == "ACTIVE",
+                )
+            )
+        }
     return templates.TemplateResponse(
         "crew_management.html",
         context(
@@ -95,6 +109,7 @@ def crew_management(
             memberships=memberships,
             capabilities=capabilities,
             linked=linked,
+            contractor_accounts=contractor_accounts,
             region_names={region.id: region.name for region in regions},
             query=q,
             show_archived=show_archived,

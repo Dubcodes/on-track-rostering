@@ -21,7 +21,8 @@ from app.core.enums import (
     WorkdayStatus,
 )
 from app.core.time import utcnow
-from app.identity.models import Person, User
+from app.identity.contractor_access import refresh_contractor_access
+from app.identity.models import Person, User, UserPersonLink
 from app.notifications.service import record_event
 from app.positions.service import set_signal
 from app.rostering.conflicts import publication_conflicts
@@ -1221,6 +1222,28 @@ def publish(
                     "revision_id": str(draft.id),
                 },
             )
+        assigned_person_ids = set(
+            db.scalars(
+                select(Assignment.person_id).where(
+                    Assignment.revision_id == draft.id,
+                    Assignment.status == AssignmentStatus.ASSIGNED.value,
+                    Assignment.person_id.is_not(None),
+                )
+            )
+        )
+        if assigned_person_ids:
+            contractor_users = db.scalars(
+                select(User)
+                .join(UserPersonLink, UserPersonLink.user_id == User.id)
+                .where(UserPersonLink.person_id.in_(assigned_person_ids))
+            )
+            for contractor_user in contractor_users:
+                refresh_contractor_access(
+                    db,
+                    contractor_user,
+                    actor_user_id=actor_user_id,
+                    reason="roster publication",
+                )
     return draft
 
 

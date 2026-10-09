@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import binascii
 import uuid
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -39,6 +40,7 @@ from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.forms import optional_uuid
+from app.core.time import utcnow
 from app.identity.models import SignupRequest, TrustedDevice, User, WebAuthnChallenge
 from app.web import context, templates
 
@@ -62,6 +64,11 @@ def login(
     email = normalise_email(email)
     keys = throttle_keys(email, resolve_request(request).client_address)
     user = db.scalar(select(User).where(User.email == email, User.status == "ACTIVE"))
+    contractor_expiry = user.contractor_access_expires_at if user else None
+    if contractor_expiry and contractor_expiry.tzinfo is None:
+        contractor_expiry = contractor_expiry.replace(tzinfo=UTC)
+    if user and contractor_expiry and contractor_expiry <= utcnow():
+        user = None
     if (
         any(is_throttled(db, key) for key in keys)
         or not user

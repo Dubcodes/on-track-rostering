@@ -29,7 +29,6 @@ The earlier documentation/timing checkpoint at `2cd94d1649c84dd3f090c04c0f4558be
 
 ## Outstanding product backlog
 
-- Contractor Manager invitation workflow and temporary-account expiry based on latest future assignment, with inactivity extension.
 - Configurable fortnight anchor in application settings and Team Hours visual distribution bars.
 - Editable simple roster Position presets; later optional historical suggestions without a complex prediction rules matrix.
 - Full abandoned/rescheduled Workday workflow and employee availability response after moved or abandoned days.
