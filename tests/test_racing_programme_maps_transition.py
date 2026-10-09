@@ -251,6 +251,12 @@ def test_scheduler_tick_skips_disabled_love_racing_details_but_refreshes_maps(db
         "programmes": {"checked": 0, "updated": 0, "failed": 0, "status": "DISABLED"},
         "maps": {"checked": 1, "failed": 0},
         "contractors": {"checked": 0, "changed": 0, "expired": 0},
+        "notifications": {
+            "status": "DISABLED",
+            "reminders": 0,
+            "digests": 0,
+            "processed": 0,
+        },
     }
 
 

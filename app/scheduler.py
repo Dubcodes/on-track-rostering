@@ -15,10 +15,33 @@ from app.external_calendar.detail_refresh import refresh_due_programmes
 from app.external_calendar.http import SourceHTTPClient
 from app.external_calendar.refresh import ensure_provider_states, refresh_provider
 from app.identity.contractor_access import refresh_all_contractor_access
+from app.notifications.service import generate_periodic_digests, generate_reminders, process_pending
 from app.track_maps.service import due_tracks, refresh_automatic_map
 
 logger = logging.getLogger(__name__)
 LOCK_ID = 664_201_903
+
+
+def _run_notifications(db: Session, *, now) -> dict[str, int | str]:  # type: ignore[no-untyped-def]
+    settings = get_settings()
+    result: dict[str, int | str] = {
+        "status": "DISABLED",
+        "reminders": 0,
+        "digests": 0,
+        "processed": 0,
+    }
+    if not (settings.vapid_public_key and settings.vapid_private_key):
+        return result
+    result["status"] = "OK"
+    try:
+        result["reminders"] = generate_reminders(db, now=now)
+        result["digests"] = generate_periodic_digests(db, now=now)
+        result["processed"] = process_pending(db, limit=50)
+    except Exception:
+        db.rollback()
+        result["status"] = "ERROR"
+        logger.exception("scheduler_notifications_failed")
+    return result
 
 
 @contextmanager
@@ -43,6 +66,7 @@ def scheduler_tick(db: Session, *, now=None) -> dict[str, object]:  # type: igno
     with scheduler_lock(db) as acquired:
         if not acquired:
             return {"status": "locked"}
+        notifications = _run_notifications(db, now=now)
         states = ensure_provider_states(db)
         db.commit()
         provider_results: dict[str, str] = {}
@@ -83,6 +107,7 @@ def scheduler_tick(db: Session, *, now=None) -> dict[str, object]:  # type: igno
             "programmes": programmes,
             "maps": maps,
             "contractors": contractors,
+            "notifications": notifications,
         }
 
 

@@ -26,13 +26,13 @@ Public racing sources are planning evidence only. On Track automatically refresh
 
 The Data Import workspace also has an isolated one-time Deputy capture mode. It reads only published schedule rows from a manually supplied text capture, creates People without accounts, skips unresolved operational locations, and never imports authentication, payroll, timesheet, or break data.
 
-WebAuthn defaults to `localhost` and `http://localhost:8000`; use that exact origin in local development or update both RP/origin settings consistently. Production requires HTTPS and deployment-specific RP/origin values. Web Push remains visibly unavailable until real VAPID public/private keys are supplied in environment configuration. Process its outbox independently of the web request:
+WebAuthn defaults to `localhost` and `http://localhost:8000`; use that exact origin in local development or update both RP/origin settings consistently. Production requires HTTPS and deployment-specific RP/origin values. Web Push remains visibly unavailable until real VAPID public/private keys are supplied in environment configuration. The application scheduler automatically generates and delivers notifications; this command remains available for diagnostics or a deliberate manual run:
 
 ```powershell
 .\.venv\Scripts\python.exe -m app.cli deliver-notifications --limit 50
 ```
 
-For development-only scheduler observation, run `python -m app.scheduler` in a separate terminal. The deployment Compose files run the same module as a singleton scheduler service. Do not run it against production from a development workstation.
+For development-only scheduler observation, run `python -m app.scheduler` in a separate terminal. The deployment Compose files run the same module as a singleton scheduler service at a five-minute cadence while retaining independent racing and map due checks. Do not run it against production from a development workstation.
 
 ## Deployment
 

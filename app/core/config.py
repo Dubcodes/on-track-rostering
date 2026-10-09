@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     racing_source_horizon_days: int = Field(default=366, ge=30, le=730)
     racing_sources_enabled_default: bool = True
     data_dir: Path = Path("data")
-    scheduler_interval_seconds: int = Field(default=1800, ge=60, le=86400)
+    scheduler_interval_seconds: int = Field(default=300, ge=60, le=86400)
 
     @classmethod
     def settings_customise_sources(
