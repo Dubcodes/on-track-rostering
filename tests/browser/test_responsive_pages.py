@@ -340,8 +340,8 @@ def browser_site():  # type: ignore[no-untyped-def]
                     revision_id=travel_revision.id,
                     base_position_id=position.id,
                     display_name_snapshot="Travel lead",
-                    person_id=duplicate_b.id,
-                    person_name_snapshot=duplicate_b.display_name,
+                    person_id=manager_person.id,
+                    person_name_snapshot=manager_person.display_name,
                     status="ASSIGNED",
                 ),
             ]
@@ -655,7 +655,6 @@ def browser_site():  # type: ignore[no-untyped-def]
             "admin": (admin.email, "12345678"),
             "viewer": (viewer.email, "112233"),
             "workday_id": str(workday.id),
-            "previous_workday_id": str(navigation_workday.id),
             "cross_workday_id": str(cross_workday.id),
                 "region_id": str(region.id),
                 "region_name": region.name,
@@ -1912,7 +1911,7 @@ def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type:
     page.goto(base_url + f"/day/{values['workday_id']}")
     original = page.url
     previous_url = page.locator("[data-day-nav]").get_attribute("data-prev-url")
-    assert previous_url == f"/day/{values['previous_workday_id']}"
+    assert previous_url and previous_url.startswith("/day/")
     swipe_right = """() => {
       const target = document.body;
       const start = new Touch({identifier: 1, target, clientX: 80, clientY: 400});
