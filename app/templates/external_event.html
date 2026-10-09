@@ -1,3 +1,57 @@
-{% extends "base.html" %}{% from "_source_evidence.html" import source_evidence %}
+{% extends "base.html" %}
+{% from "_source_evidence.html" import source_evidence %}
 {% block title %}{{ event.meeting_name or (track.name if track else event.external_track_name) }} · {{ branding.product_name }}{% endblock %}
-{% block content %}<a class="back-link" href="/month">← Back to Month</a><section class="panel external-detail" data-presentation="{{ presentation }}"><p class="eyebrow">External racing calendar</p><h1>{{ event.meeting_name or (track.name if track else event.external_track_name) }}</h1><p class="lede">{{ track.name if track else event.external_track_name }} · {{ event.event_date.strftime('%A %d %B %Y') }} · {{ event.event_kind|title }} · {{ event.discipline|replace('_',' ')|title }}</p>{% if programme_refresh %}<div class="notice {{ 'danger' if programme_refresh == 'failed' else '' }}"><strong>{% if programme_refresh == 'failed' %}Programme refresh failed{% else %}Programme refreshed{% endif %}</strong><p>{% if programme_refresh == 'failed' %}The source error and next retry are shown below.{% else %}The latest programme evidence has been reconciled without publishing a roster change.{% endif %}</p></div>{% endif %}<div class="review-summary">{% if event.event_kind == 'RACE' %}<span><small>First race</small><strong>{{ event.first_race_time|display_time or 'Unknown' }}</strong></span><span><small>Last race</small><strong>{{ event.last_race_time|display_time or 'Unknown' }}</strong></span><span><small>Races</small><strong>{{ event.race_count if event.race_count is not none else 'Unknown' }}</strong></span>{% else %}<span><small>First trial</small><strong>{{ event.first_trial_time|display_time or 'Unknown' }}</strong></span>{% endif %}</div>{% if event.event_kind == 'RACE' %}<section class="source-programme"><h2>Programme source</h2><dl class="source-metrics"><dt>Programme status</dt><dd>{{ event.programme_status|replace('_', ' ')|title }}</dd><dt>Last detail check</dt><dd>{{ event.detail_checked_at|display_datetime if event.detail_checked_at else 'Never' }}</dd>{% if event.detail_failure_count %}<dt>Failure count</dt><dd>{{ event.detail_failure_count }}</dd>{% endif %}{% if event.latest_detail_error %}<dt>Latest detail error</dt><dd>{{ event.latest_detail_error }}</dd>{% endif %}<dt>Next automatic retry</dt><dd>{{ event.next_detail_due_at|display_datetime if event.next_detail_due_at else 'Due on schedule' }}</dd></dl>{% if can_refresh_programme %}<form method="post" action="/external-events/{{ event.id }}/refresh-programme"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Refresh programme now</button></form>{% endif %}</section>{% endif %}{% if workday and workday.current_published_revision_id %}<a class="button" href="/day/{{ workday.id }}">View {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</a>{% if can_build %}<a class="button secondary" href="/manage/workdays/{{ workday.id }}">Edit {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</a>{% endif %}{% elif workday and can_build %}<a class="button" href="/manage/workdays/{{ workday.id }}">Build this {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</a>{% elif can_build %}<form method="post" action="/external-events/{{ event.id }}/build"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Build this {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</button></form>{% endif %}{{ source_evidence(evidence, 'Raw ' ~ ('Race' if event.event_kind == 'RACE' else 'Trial') ~ ' Day Data') }}</section>{% endblock %}
+{% block content %}
+<a class="back-link" href="/month">← Back to Month</a>
+<section class="panel external-detail" data-presentation="{{ presentation }}">
+  <p class="eyebrow">External racing calendar</p>
+  <h1>{{ event.meeting_name or (track.name if track else event.external_track_name) }}</h1>
+  <p class="lede">{{ track.name if track else event.external_track_name }} · {{ event.event_date.strftime('%A %d %B %Y') }} · {{ event.discipline|replace('_',' ')|title }}</p>
+
+  {% if programme_refresh %}
+  <div class="notice {{ 'danger' if programme_refresh == 'failed' else '' }}">
+    <strong>{% if programme_refresh == 'updated' %}Programme updated{% elif programme_refresh == 'unchanged' %}Programme checked — no changes{% elif programme_refresh == 'awaiting' %}Programme checked — schedule not available yet{% elif programme_refresh == 'partial' %}Programme checked — partial schedule available{% else %}Programme refresh failed{% endif %}</strong>
+  </div>
+  {% endif %}
+
+  <div class="review-summary">
+    {% if event.event_kind == 'RACE' %}
+    <span><small>First race</small><strong>{{ event.first_race_time|display_time or 'Unknown' }}</strong></span>
+    <span><small>Last race</small><strong>{{ event.last_race_time|display_time or 'Unknown' }}</strong></span>
+    <span><small>Races</small><strong>{{ event.race_count if event.race_count is not none else 'Unknown' }}</strong></span>
+    {% else %}
+    <span><small>First trial</small><strong>{{ event.first_trial_time|display_time or 'Unknown' }}</strong></span>
+    {% endif %}
+  </div>
+
+  <div class="action-row">
+    {% if workday and workday.current_published_revision_id %}
+    <a class="button" href="/day/{{ workday.id }}">View {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</a>
+    {% if can_build %}<a class="button secondary" href="/manage/workdays/{{ workday.id }}">Edit {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</a>{% endif %}
+    {% elif workday and can_build %}
+    <a class="button" href="/manage/workdays/{{ workday.id }}">Build this {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</a>
+    {% elif can_build %}
+    <form method="post" action="/external-events/{{ event.id }}/build"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Build this {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</button></form>
+    {% endif %}
+    {% if event.event_kind == 'RACE' and can_refresh_programme %}
+    <form method="post" action="/external-events/{{ event.id }}/refresh-programme"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Refresh programme now</button></form>
+    {% endif %}
+  </div>
+
+  {% if event.event_kind == 'RACE' %}
+  <p class="muted programme-source-status"><strong>Love Racing</strong> · Programme {{ event.programme_status|replace('_', ' ')|lower }} · Checked {{ event.detail_checked_at|display_datetime if event.detail_checked_at else 'never' }}</p>
+  <details class="source-programme-diagnostics">
+    <summary>Programme source diagnostics</summary>
+    <dl class="source-metrics">
+      <dt>Programme status</dt><dd>{{ event.programme_status|replace('_', ' ')|title }}</dd>
+      <dt>Last detail check</dt><dd>{{ event.detail_checked_at|display_datetime if event.detail_checked_at else 'Never' }}</dd>
+      {% if event.detail_failure_count %}<dt>Failure count</dt><dd>{{ event.detail_failure_count }}</dd>{% endif %}
+      {% if event.latest_detail_error %}<dt>Latest detail error</dt><dd>{{ event.latest_detail_error }}</dd>{% endif %}
+      <dt>Next automatic retry</dt><dd>{{ event.next_detail_due_at|display_datetime if event.next_detail_due_at else 'Due on schedule' }}</dd>
+    </dl>
+  </details>
+  {% endif %}
+
+  {{ source_evidence(evidence, 'Technical source history') }}
+</section>
+{% endblock %}

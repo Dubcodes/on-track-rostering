@@ -29,8 +29,9 @@ class _ProgrammeParser(HTMLParser):
         self.cell_tag = ""
         self.cell_text: list[str] = []
         self.row: list[tuple[str, str]] = []
-        self.tables: list[list[list[tuple[str, str]]]] = []
+        self.tables: list[tuple[frozenset[str], list[list[tuple[str, str]]]]] = []
         self.table: list[list[tuple[str, str]]] = []
+        self.table_classes: frozenset[str] = frozenset()
         self.title_parts: list[str] = []
         self.heading_parts: list[str] = []
         self.titles: list[str] = []
@@ -52,6 +53,7 @@ class _ProgrammeParser(HTMLParser):
         if tag == "table" and self.table_depth is None:
             self.table_depth = self.depth
             self.table = []
+            self.table_classes = frozenset(values.get("class", "").casefold().split())
         elif self.table_depth is not None and tag == "tr" and self.row_depth is None:
             self.row_depth = self.depth
             self.row = []
@@ -76,8 +78,9 @@ class _ProgrammeParser(HTMLParser):
             self.table.append(self.row)
             self.row_depth = None
         if self.table_depth == self.depth and tag == "table":
-            self.tables.append(self.table)
+            self.tables.append((self.table_classes, self.table))
             self.table_depth = None
+            self.table_classes = frozenset()
         if tag == "title":
             self.capture_title = False
         if tag in {"h1", "h2", "h3"} and self.capture_heading:
@@ -98,6 +101,13 @@ def _meeting_name(candidates: list[str]) -> str | None:
     }
     usable: list[str] = []
     for raw in candidates:
+        raw = re.sub(
+            r"\s*\bLast\s+updated\s+\d{1,2}/\d{1,2}/\d{4}\s+"
+            r"\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\s*$",
+            "",
+            raw,
+            flags=re.IGNORECASE,
+        )
         value = re.sub(
             r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?\s*"
             r"\d{1,2}\s+[A-Za-z]+\s+\d{4}\b",
@@ -160,19 +170,28 @@ def parse_love_racing_programme(html: str) -> ProgrammeResult:
     candidates: dict[int, list[time | None]] = {}
     saw_header = False
     diagnostics: list[str] = []
-    for table in parser.tables:
+    header_tables: list[list[list[tuple[str, str]]]] = []
+    overview_tables: list[list[list[tuple[str, str]]]] = []
+    for classes, table in parser.tables:
+        if "overview-info" in classes:
+            overview_tables.append(table)
         headers = {text.casefold() for row in table for tag, text in row if tag == "th"}
         if "race" not in headers or not ({"start", "scheduled start"} & headers):
             continue
         saw_header = True
+        header_tables.append(table)
+
+    race_tables = overview_tables if saw_header and overview_tables else header_tables
+    for table in race_tables:
         for row in table:
             if len(row) < 2 or not row[0][1].isdigit():
                 continue
             number = int(row[0][1])
             if number <= 0:
                 continue
+            clock_text = next((text for _tag, text in row[1:] if text.strip()), "")
             try:
-                scheduled_start = parse_programme_clock(row[1][1])
+                scheduled_start = parse_programme_clock(clock_text)
             except ValueError:
                 scheduled_start = None
                 diagnostics.append(f"Race {number} had an invalid scheduled start.")

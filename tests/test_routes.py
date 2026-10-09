@@ -6,6 +6,7 @@ import zipfile
 from calendar import monthrange
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pyotp
@@ -1813,10 +1814,11 @@ def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> 
     external = employee.get(f"/external-events/{event_id}")
     for response in (day, external):
         assert response.status_code == 200
-        assert "Raw Race Day Data" in response.text
         assert "Canonical facts" in response.text
         assert "Love Racing" in response.text
         assert "SECRET-SENTINEL" not in response.text
+    assert "Raw Race Day Data" in day.text
+    assert "Technical source history" in external.text
     manual_day = employee.get(f"/day/{manual_workday_id}")
     assert "Raw Race Day Data" not in manual_day.text
     assert "Saturday 24 October 2026" in manual_day.text
@@ -1896,7 +1898,9 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
     assert "Racing Taupo @ Taupo" in detail.text
     assert "First race" in detail.text and "12:34" in detail.text
     assert "First trial" not in detail.text
-    assert "Programme source" in detail.text
+    assert "Love Racing</strong> · Programme partial" in detail.text
+    assert "Technical source history" in detail.text
+    assert '<details class="source-programme-diagnostics">' in detail.text
     assert "Last detail check" in detail.text and "Next automatic retry" in detail.text
     assert "Source response exceeded the configured size limit." in detail.text
     assert "Refresh programme now" in detail.text
@@ -1913,7 +1917,8 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
     calls: list[uuid.UUID] = []
     monkeypatch.setattr(
         "app.external_calendar.routes.refresh_love_racing_programme",
-        lambda _db, refreshed_event: calls.append(refreshed_event.id) or "ENRICHED",
+        lambda _db, refreshed_event: calls.append(refreshed_event.id)
+        or SimpleNamespace(outcome="ENRICHED", programme_status="PARTIAL"),
     )
     refreshed = manager.post(
         f"/external-events/{event_id}/refresh-programme",
@@ -1921,8 +1926,36 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
         follow_redirects=False,
     )
     assert refreshed.status_code == 303
-    assert refreshed.headers["location"].endswith("?programme_refresh=refreshed")
+    assert refreshed.headers["location"].endswith("?programme_refresh=partial")
     assert calls == [event_id]
+    assert "Programme checked — partial schedule available" in manager.get(
+        refreshed.headers["location"]
+    ).text
+
+    for status, outcome, state, message in (
+        ("COMPLETE", "DUPLICATE", "unchanged", "Programme checked — no changes"),
+        ("COMPLETE", "ENRICHED", "updated", "Programme updated"),
+        ("AWAITING_SCHEDULE", "DUPLICATE", "awaiting", "Programme checked — schedule not available yet"),
+        ("AWAITING_SCHEDULE", "ERROR", "failed", "Programme refresh failed"),
+    ):
+        with factory() as db:
+            db.get(ExternalCalendarEvent, event_id).programme_status = status
+            db.commit()
+        monkeypatch.setattr(
+            "app.external_calendar.routes.refresh_love_racing_programme",
+            lambda _db, _event, result=outcome, parsed_status=status: SimpleNamespace(
+                outcome=result,
+                programme_status=None if result == "ERROR" else parsed_status,
+            ),
+        )
+        result = manager.post(
+            f"/external-events/{event_id}/refresh-programme",
+            data={"csrf_token": manager_csrf},
+            follow_redirects=False,
+        )
+        assert result.status_code == 303
+        assert result.headers["location"].endswith(f"?programme_refresh={state}")
+        assert message in manager.get(result.headers["location"]).text
 
     submanager = TestClient(app)
     submanager_csrf = _login(submanager, "submanager@example.test", "445566")

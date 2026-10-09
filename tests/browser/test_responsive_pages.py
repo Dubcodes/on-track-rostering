@@ -873,6 +873,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     page = context.new_page()
     _login(page, base_url, values["admin"])
     page.goto(base_url + "/settings#calendar")
+    browser_errors = _watch_browser_errors(page)
     minimal = page.locator('input[name="minimal_external_detail"]')
     if minimal.is_checked():
         minimal.uncheck()
@@ -883,10 +884,13 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     assert event_card.count() == 1
     _capture_page(page, f"external-event-normal-{width}.png")
     event_card.click()
-    assert page.get_by_text("Raw Race Day Data").count() == 1
+    assert page.get_by_text("Technical source history").count() == 1
     assert page.get_by_role("heading", name="Racing Browser Track @ Browser Track").count() == 1
     assert page.get_by_text("First trial", exact=True).count() == 0
-    assert page.get_by_text("Programme source", exact=True).count() == 1
+    assert page.get_by_text("Love Racing", exact=True).count() >= 1
+    diagnostics = page.locator("details.source-programme-diagnostics")
+    assert diagnostics.count() == 1
+    assert diagnostics.get_attribute("open") is None
     assert page.get_by_role("button", name="Refresh programme now").count() == 1
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"external-event-detail-{width}.png")
@@ -907,6 +911,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     suggested_record = page.locator(
         f'details.control-record:has(input[name="external_track_name"][value="{values["track_name"]}"])'
     ).first
+    assert browser_errors == []
     assert suggested_record.get_by_text(
         f"Suggested: {values['track_name']}", exact=False
     ).count() == 1

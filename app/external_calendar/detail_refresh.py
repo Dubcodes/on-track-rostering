@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
@@ -12,7 +14,13 @@ from app.external_calendar.programme import (
     parse_love_racing_programme,
     programme_refresh_due,
 )
-from app.external_calendar.service import ProviderObservation, reconcile_observation
+from app.external_calendar.service import ProviderObservation, normalized_key, reconcile_observation
+
+
+@dataclass(frozen=True)
+class ProgrammeRefreshResult:
+    outcome: str
+    programme_status: str | None
 
 
 def due_love_racing_events(db: Session, *, now=None) -> list[ExternalCalendarEvent]:  # type: ignore[no-untyped-def]
@@ -53,7 +61,7 @@ def refresh_love_racing_programme(
     event: ExternalCalendarEvent,
     *,
     client: SourceHTTPClient | None = None,
-) -> str:
+) -> ProgrammeRefreshResult:
     identity = db.scalar(
         select(ExternalEventObservation)
         .where(
@@ -109,6 +117,19 @@ def refresh_love_racing_programme(
                     "diagnostics": list(programme.diagnostics),
                     "content_hash": programme.content_hash,
                 },
+                dedupe_payload={
+                    "provider_event_id": identity.provider_event_id,
+                    "meeting_name": normalized_key(programme.meeting_name or ""),
+                    "programme_status": programme.status,
+                    "race_count": programme.race_count,
+                    "races": [
+                        {
+                            "number": number,
+                            "scheduled_start": value.strftime("%H:%M") if value else None,
+                        }
+                        for number, value in programme.races
+                    ],
+                },
                 retrieved_at=now,
             ),
         )
@@ -117,24 +138,24 @@ def refresh_love_racing_programme(
         event.next_detail_due_at = None
         event.latest_detail_error = None
         db.flush()
-        return outcome
+        return ProgrammeRefreshResult(outcome, programme.status)
     except Exception as exc:
         event.detail_checked_at = now
         event.detail_failure_count += 1
         event.next_detail_due_at = now + failure_backoff(event.detail_failure_count)
         event.latest_detail_error = f"{type(exc).__name__}: {str(exc)[:400]}"
         db.flush()
-        return "ERROR"
+        return ProgrammeRefreshResult("ERROR", None)
 
 
 def refresh_due_programmes(db: Session, *, now=None, limit: int = 20) -> dict[str, int]:  # type: ignore[no-untyped-def]
     counts = {"checked": 0, "updated": 0, "failed": 0}
     for event in due_love_racing_events(db, now=now)[:limit]:
-        outcome = refresh_love_racing_programme(db, event)
+        result = refresh_love_racing_programme(db, event)
         counts["checked"] += 1
-        if outcome == "ERROR":
+        if result.outcome == "ERROR":
             counts["failed"] += 1
-        elif outcome in {"ENRICHED", "MATCHED", "CREATED"}:
+        elif result.outcome in {"ENRICHED", "MATCHED", "CREATED"}:
             counts["updated"] += 1
     db.commit()
     return counts

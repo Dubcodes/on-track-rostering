@@ -36,6 +36,7 @@ class ProviderObservation:
     event_kind: str
     facts: dict[str, object]
     raw_payload: dict[str, object]
+    dedupe_payload: dict[str, object] | None = None
     retrieved_at: datetime | None = None
 
 
@@ -68,7 +69,8 @@ def suggested_track(db: Session, source_name: str, *, tracks: list[Track] | None
 
 
 def _payload_hash(observation: ProviderObservation) -> str:
-    body = json.dumps(observation.raw_payload, sort_keys=True, separators=(",", ":"), default=str)
+    source = observation.dedupe_payload if observation.dedupe_payload is not None else observation.raw_payload
+    body = json.dumps(source, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(body.encode()).hexdigest()
 
 

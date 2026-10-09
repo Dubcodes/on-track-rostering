@@ -45,19 +45,7 @@ def _foundation(db):  # type: ignore[no-untyped-def]
 
 
 def test_programme_parser_handles_love_racing_clocks_and_meeting_heading() -> None:
-    complete = parse_love_racing_programme(
-        """<html><head><title>RaceInfo | Meetings / Fields | LoveRacing</title></head><body>
-        <h2>Racing Taupo @ Taupo</h2><table><tr><th>Race</th><th>Start</th><th>Name</th><th>Conditions &amp; Distance</th></tr>
-        <tr><td>1</td><td>12:34 pm</td><td>ZEST BROKERS</td><td>...</td></tr>
-        <tr><td>2</td><td>1:08 pm</td><td>MASTER BUILDERS NZ</td><td>...</td></tr>
-        <tr><td>3</td><td>1:42 pm</td><td>Race three</td><td>...</td></tr>
-        <tr><td>4</td><td>2:17 pm</td><td>Race four</td><td>...</td></tr>
-        <tr><td>5</td><td>2:51 pm</td><td>Race five</td><td>...</td></tr>
-        <tr><td>6</td><td>3:25 pm</td><td>Race six</td><td>...</td></tr>
-        <tr><td>7</td><td>4:05 pm</td><td>Race seven</td><td>...</td></tr>
-        <tr><td>8</td><td>4:47 pm</td><td>Race eight</td><td>...</td></tr>
-        <tr><td>9</td><td>5:24 pm</td><td>MCLEOD HIABS</td><td>...</td></tr></table></body></html>"""
-    )
+    complete = parse_love_racing_programme(_taupo_programme_html())
     assert complete.status == "COMPLETE"
     assert complete.meeting_name == "Racing Taupo @ Taupo"
     assert (complete.race_count, complete.first_race_time, complete.last_race_time) == (
@@ -111,7 +99,7 @@ def test_programme_cadence_and_backoff_are_deterministic() -> None:
     assert failure_backoff(99) == timedelta(hours=6)
 
 
-def _taupo_programme_html() -> str:
+def _taupo_programme_html(*, last_race: str = "5:24 pm", updated: str = "09/10/2026 2:45 pm") -> str:
     rows = (
         (1, "12:34 pm"),
         (2, "1:08 pm"),
@@ -121,15 +109,21 @@ def _taupo_programme_html() -> str:
         (6, "3:25 pm"),
         (7, "4:05 pm"),
         (8, "4:47 pm"),
-        (9, "5:24 pm"),
+        (9, last_race),
     )
     return "".join(
         (
             "<html><head><title>RaceInfo | Meetings / Fields</title></head><body>",
-            "<h2>Racing Taupo @ Taupo</h2><table><tr><th>Race</th><th>Start</th>",
-            "<th>Name</th><th>Conditions &amp; Distance</th></tr>",
-            *(f"<tr><td>{number}</td><td>{clock}</td><td>Race {number}</td><td>...</td></tr>" for number, clock in rows),
-            "</table></body></html>",
+            f"<h2>Racing Taupo @ Taupo Last updated {updated}</h2>",
+            "<table class=\"programme-header\"><tr><th>Race</th><th>Start</th>",
+            "<th>Name</th><th>Conditions &amp; Distance</th></tr></table>",
+            "<table class=\"further-detail\"><tr><td>1</td><td>12:59 pm</td>",
+            "<td>False detail row</td></tr></table>",
+            "<table class=\"overview-info mobile\">",
+            *(f"<tr><td>{number}</td><td>{clock}</td></tr>" for number, clock in rows[:5]),
+            "</table><table class=\"overview-info\">",
+            *(f"<tr><td>{number}</td><td>{clock}</td></tr>" for number, clock in rows[5:]),
+            "</table><table><tr><td>1</td><td>12:58 pm</td></tr></table></body></html>",
         )
     )
 
@@ -162,22 +156,25 @@ def test_due_taupo_programme_refresh_reconciles_and_adopts_unpublished_draft(db)
             assert accept == "text/html"
             raise SourceHTTPError("Source returned HTTP 503.")
 
-    assert refresh_love_racing_programme(db, event, client=FailingClient()) == "ERROR"
+    failed = refresh_love_racing_programme(db, event, client=FailingClient())
+    assert (failed.outcome, failed.programme_status) == ("ERROR", None)
     assert event.detail_failure_count == 1
     assert event.latest_detail_error == "SourceHTTPError: Source returned HTTP 503."
     assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 1
 
     class ProgrammeClient:
-        def __init__(self) -> None:
+        def __init__(self, body: str) -> None:
             self.urls: list[str] = []
+            self.body = body
 
         def get(self, url: str, *, accept: str) -> HTTPResponse:
             self.urls.append(url)
             assert accept == "text/html"
-            return HTTPResponse(url=url, status=200, content_type="text/html", body=_taupo_programme_html().encode())
+            return HTTPResponse(url=url, status=200, content_type="text/html", body=self.body.encode())
 
-    client = ProgrammeClient()
-    assert refresh_love_racing_programme(db, event, client=client) == "ENRICHED"
+    client = ProgrammeClient(_taupo_programme_html())
+    refreshed = refresh_love_racing_programme(db, event, client=client)
+    assert (refreshed.outcome, refreshed.programme_status) == ("ENRICHED", "COMPLETE")
     assert client.urls == ["https://loveracing.nz/RaceInfo/55962/Meeting-Overview.aspx"]
     assert (event.meeting_name, event.programme_status, event.race_count) == (
         "Racing Taupo @ Taupo",
@@ -186,6 +183,14 @@ def test_due_taupo_programme_refresh_reconciles_and_adopts_unpublished_draft(db)
     )
     assert (event.first_race_time, event.last_race_time) == (time(12, 34), time(17, 24))
     assert event.detail_failure_count == 0 and event.latest_detail_error is None
+    assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 2
+
+    changed_markup = ProgrammeClient(
+        _taupo_programme_html(updated="09/10/2026 2:50 pm")
+        .replace("<body>", '<body data-render-id="volatile-second-render">')
+    )
+    duplicate_result = refresh_love_racing_programme(db, event, client=changed_markup)
+    assert (duplicate_result.outcome, duplicate_result.programme_status) == ("DUPLICATE", "COMPLETE")
     assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 2
 
     workday, created = adopt_external_event(
@@ -202,6 +207,13 @@ def test_due_taupo_programme_refresh_reconciles_and_adopts_unpublished_draft(db)
         time(12, 34),
         time(17, 24),
     )
+
+    changed_fact = ProgrammeClient(_taupo_programme_html(last_race="5:30 pm"))
+    changed_result = refresh_love_racing_programme(db, event, client=changed_fact)
+    assert (changed_result.outcome, changed_result.programme_status) == ("ENRICHED", "COMPLETE")
+    assert event.last_race_time == time(17, 30)
+    assert draft.last_race_time == time(17, 30)
+    assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 3
 
 
 def test_scheduler_tick_skips_disabled_love_racing_details_but_refreshes_maps(db, monkeypatch) -> None:  # type: ignore[no-untyped-def]

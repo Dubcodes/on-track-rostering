@@ -556,7 +556,7 @@ def refresh_event_programme(
     if not can_administer_region(request.state.actor, track.region_id):
         raise HTTPException(403, "Manager access for this Track's Region is required")
     try:
-        outcome = refresh_love_racing_programme(db, event)
+        result = refresh_love_racing_programme(db, event)
         record_audit(
             db,
             "external_programme.refreshed",
@@ -564,13 +564,28 @@ def refresh_event_programme(
             event.id,
             request.state.user.id,
             region_id=track.region_id,
-            detail={"provider": "LOVE_RACING", "outcome": outcome},
+            detail={
+                "provider": "LOVE_RACING",
+                "outcome": result.outcome,
+                "programme_status": result.programme_status,
+            },
         )
         db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
-    state = "failed" if outcome == "ERROR" else "refreshed"
+    if result.outcome == "ERROR":
+        state = "failed"
+    elif result.programme_status == "AWAITING_SCHEDULE":
+        state = "awaiting"
+    elif result.programme_status == "PARTIAL":
+        state = "partial"
+    elif result.programme_status == "COMPLETE" and result.outcome == "DUPLICATE":
+        state = "unchanged"
+    elif result.programme_status == "COMPLETE":
+        state = "updated"
+    else:
+        state = "failed"
     return RedirectResponse(f"/external-events/{event.id}?programme_refresh={state}", status_code=303)
 
 
