@@ -2368,9 +2368,10 @@ def test_contractor_management_and_personal_surface_is_responsive(
     page.goto(base_url + "/manage/accounts#contractor-access")
     section = page.locator("#contractor-access")
     assert section.get_by_role("heading", name="Contractor access").is_visible()
-    assert section.get_by_text("Browser Contractor", exact=True).is_visible()
-    assert section.get_by_text("Account linked", exact=False).is_visible()
-    assert section.get_by_role("button", name="Extend access").is_visible()
+    contractor_card = section.locator("article").filter(has_text="Browser Contractor")
+    assert contractor_card.count() == 1
+    assert contractor_card.get_by_text("Account linked", exact=False).is_visible()
+    assert contractor_card.get_by_role("button", name="Extend access").is_visible()
     section.get_by_text("Invite a Contractor Person", exact=True).click()
     invite_form = section.locator('form[action*="/contractors/"][action$="/invite"]').first
     assert invite_form.locator('input[name="email"]').is_visible()
