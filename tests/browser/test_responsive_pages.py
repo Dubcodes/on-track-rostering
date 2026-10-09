@@ -340,8 +340,8 @@ def browser_site():  # type: ignore[no-untyped-def]
                     revision_id=travel_revision.id,
                     base_position_id=position.id,
                     display_name_snapshot="Travel lead",
-                    person_id=manager_person.id,
-                    person_name_snapshot=manager_person.display_name,
+                    person_id=other_person.id,
+                    person_name_snapshot=other_person.display_name,
                     status="ASSIGNED",
                 ),
             ]
