@@ -2387,7 +2387,9 @@ def test_contractor_management_and_personal_surface_is_responsive(
     errors = _watch_browser_errors(page)
     _login(page, base_url, values["contractor"])
     _assert_page(page, base_url + "/month")
-    assert page.get_by_text("Contractor browser day", exact=True).count() >= 1
+    assert page.locator(
+        f'.calendar-grid .shift-card[href="/day/{values["contractor_workday_id"]}"]'
+    ).count() == 1
     _assert_page(page, base_url + f"/day/{values['contractor_workday_id']}")
     assert page.get_by_text("Contractor own browser detail", exact=True).is_visible()
     assert page.get_by_text("Hidden from contractor", exact=True).count() == 0
