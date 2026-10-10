@@ -112,6 +112,38 @@ class BasePosition(Base):
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
 
 
+class PositionPreset(Base):
+    __tablename__ = "position_presets"
+    __table_args__ = (
+        UniqueConstraint("region_id", "preset_key"),
+        CheckConstraint(
+            "preset_key IN ('THOROUGHBRED', 'HARNESS', 'TRIALS')",
+            name="position_preset_key",
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    region_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("regions.id", ondelete="CASCADE"), index=True
+    )
+    preset_key: Mapped[str] = mapped_column(String(24))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+
+
+class PositionPresetItem(Base):
+    __tablename__ = "position_preset_items"
+    preset_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("position_presets.id", ondelete="CASCADE"), primary_key=True
+    )
+    base_position_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("base_positions.id"), primary_key=True
+    )
+
+
 class Vehicle(Base):
     __tablename__ = "vehicles"
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

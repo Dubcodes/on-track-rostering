@@ -2242,6 +2242,89 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     context.close()
 
 
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_presets_fortnight_anchor_and_team_hours_are_responsive(
+    browser_site, width: int
+) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 1000})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["admin"])
+    csrf = next(
+        cookie["value"] for cookie in context.cookies() if cookie["name"] == "ontrack_csrf"
+    )
+
+    page.goto(base_url + "/manage/catalog#roster-presets")
+    assert page.get_by_role("heading", name="Roster presets", exact=True).is_visible()
+    primary = page.locator(f"#presets-{values['region_id']}")
+    primary.locator("summary").click()
+    assert primary.locator("fieldset").count() == 3
+    _assert_no_horizontal_overflow(page)
+
+    saved = page.request.post(
+        base_url
+        + f"/manage/catalog/regions/{values['region_id']}/presets/THOROUGHBRED",
+        form={"position_ids": values["head_on_position_id"], "csrf_token": csrf},
+    )
+    assert saved.ok
+    page.goto(base_url + "/manage/workdays/new")
+    page.locator('select[name="region_id"]').select_option(values["region_id"])
+    if page.locator("[data-assignment-row]").count():
+        page.once("dialog", lambda dialog: dialog.accept())
+    page.get_by_role("button", name="Apply defaults").click()
+    rows = page.locator("[data-assignment-row]")
+    assert rows.count() == 1
+    row = rows.first
+    assert row.locator("[data-position-value]").input_value() == values["head_on_position_id"]
+    assert row.locator("[data-person-value]").input_value() == ""
+    assert row.locator("[data-assignment-state]").input_value() == "TBC"
+    assert row.locator('input[name="note"]').input_value() == ""
+    assert row.locator("[data-transport-value]").input_value() == "UNASSIGNED"
+
+    page.locator('select[name="region_id"]').select_option(values["cross_region_id"])
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.get_by_role("button", name="Apply defaults").click()
+    assert rows.count() == 2
+    assert all(
+        value == "TBC"
+        for value in rows.locator("[data-assignment-state]").evaluate_all(
+            "elements => elements.map(element => element.value)"
+        )
+    )
+    assert all(
+        not value
+        for value in rows.locator("[data-person-value]").evaluate_all(
+            "elements => elements.map(element => element.value)"
+        )
+    )
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(base_url + "/manage/hours")
+    people = page.locator(".hours-person")
+    assert people.count() >= 1
+    assert people.first.locator(".hours-segment").count() == 14
+    assert people.first.locator(".hours-distribution").get_attribute("aria-label")
+    people.first.locator(":scope > summary").click()
+    assert people.first.locator(".hours-day").count() >= 1
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(base_url + "/admin#system-settings")
+    anchor = page.locator('input[name="fortnight_anchor"]')
+    assert anchor.is_visible()
+    assert anchor.input_value()
+    _assert_no_horizontal_overflow(page)
+
+    reset = page.request.post(
+        base_url
+        + f"/manage/catalog/regions/{values['region_id']}/presets/THOROUGHBRED/reset",
+        form={"csrf_token": csrf},
+    )
+    assert reset.ok
+    assert not errors
+    context.close()
+
+
 @pytest.mark.parametrize("width", [1280, 430])
 def test_specific_personal_day_renders_from_cache_while_physically_offline(
     browser_site, width: int

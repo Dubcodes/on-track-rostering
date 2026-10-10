@@ -25,7 +25,7 @@ from app.auth.factors import begin_totp
 from app.auth.policy import actor_for
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
-from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
+from app.catalog.models import BasePosition, CrewGroup, PositionPreset, Region, Track, Vehicle
 from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
@@ -36,7 +36,7 @@ from app.external_calendar.models import (
     ExternalTrackMapping,
 )
 from app.external_calendar.refresh import RefreshResult
-from app.hours.service import published_hours
+from app.hours.service import fortnight_bounds, published_hours
 from app.identity.models import (
     Invitation,
     LoginThrottle,
@@ -699,7 +699,12 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
     manager_csrf = _login(manager, "manager@example.test", "123456")
     assert manager.post(
         "/admin/system-settings",
-        data={"public_signup_enabled": "true", "csrf_token": manager_csrf},
+        data={
+            "public_signup_enabled": "true",
+            "contractor_inactivity_days": "30",
+            "fortnight_anchor": "2026-08-31",
+            "csrf_token": manager_csrf,
+        },
     ).status_code == 403
 
     admin = TestClient(app)
@@ -709,6 +714,7 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
         data={
             "public_signup_enabled": "true",
             "contractor_inactivity_days": "45",
+            "fortnight_anchor": "2026-08-31",
             "csrf_token": admin_csrf,
         },
         follow_redirects=False,
@@ -736,6 +742,7 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
         settings = db.get(SystemSettings, 1)
         assert settings and settings.public_signup_enabled is True
         assert settings.contractor_inactivity_days == 45
+        assert settings.fortnight_anchor == date(2026, 8, 31)
         signup_id = db.scalar(
             select(SignupRequest.id).where(SignupRequest.email == "candidate@example.com")
         )
@@ -753,6 +760,102 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
     assert approved.status_code == 200
     assert "location" not in approved.headers
     assert re.search(r'value="/invite#token=[A-Za-z0-9_-]+"', approved.text)
+
+
+def test_fortnight_anchor_is_admin_only_and_changes_hours_grouping(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    with factory() as db:
+        workday_count = len(list(db.scalars(select(Workday.id))))
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    denied = manager.post(
+        "/admin/system-settings",
+        data={
+            "contractor_inactivity_days": "30",
+            "fortnight_anchor": "2026-09-07",
+            "csrf_token": manager_csrf,
+        },
+    )
+    assert denied.status_code == 403
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    updated = admin.post(
+        "/admin/system-settings",
+        data={
+            "contractor_inactivity_days": "30",
+            "fortnight_anchor": "2026-09-07",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert updated.status_code == 303
+    hours = admin.get("/manage/hours")
+    expected_start, expected_end = fortnight_bounds(
+        today=local_today(), anchor=date(2026, 9, 7)
+    )
+    assert f"Fortnight {expected_start.strftime('%d %b')} – {expected_end.strftime('%d %b')}" in hours.text
+    previous_start, _ = fortnight_bounds(
+        -1, today=local_today(), anchor=date(2026, 9, 7)
+    )
+    assert previous_start.strftime("%d %b") in admin.get("/manage/hours?offset=-1").text
+    with factory() as db:
+        settings = db.get(SystemSettings, 1)
+        assert settings.fortnight_anchor == date(2026, 9, 7)
+        assert len(list(db.scalars(select(Workday.id)))) == workday_count
+        audit = db.scalar(
+            select(AuditEvent)
+            .where(AuditEvent.action == "system_settings.updated")
+            .order_by(AuditEvent.occurred_at.desc())
+        )
+        assert audit.detail["fortnight_anchor"] == "2026-09-07"
+        assert audit.detail["previous_fortnight_anchor"] == "2026-08-31"
+
+
+def test_roster_presets_are_region_scoped_and_builder_receives_ids(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, _person_id) = routed_db
+    with factory() as db:
+        other_region = db.scalar(select(Region).where(Region.id != region_id))
+        other_region_id = other_region.id
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    saved = manager.post(
+        f"/manage/catalog/regions/{region_id}/presets/THOROUGHBRED",
+        data={"position_ids": str(position_id), "csrf_token": manager_csrf},
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    assert manager.post(
+        f"/manage/catalog/regions/{other_region_id}/presets/HARNESS",
+        data={"position_ids": str(position_id), "csrf_token": manager_csrf},
+    ).status_code == 403
+    page = manager.get("/manage/workdays/new")
+    assert page.status_code == 200
+    assert "data-position-presets" in page.text
+    assert str(position_id) in page.text
+
+    submanager = TestClient(app)
+    submanager_csrf = _login(submanager, "submanager@example.test", "445566")
+    assert submanager.post(
+        f"/manage/catalog/regions/{region_id}/presets/TRIALS",
+        data={"position_ids": str(position_id), "csrf_token": submanager_csrf},
+    ).status_code == 403
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    assert admin.post(
+        f"/manage/catalog/regions/{other_region_id}/presets/HARNESS",
+        data={"position_ids": str(position_id), "csrf_token": admin_csrf},
+        follow_redirects=False,
+    ).status_code == 303
+    with factory() as db:
+        rows = list(db.scalars(select(PositionPreset)))
+        assert {(row.region_id, row.preset_key) for row in rows} == {
+            (region_id, "THOROUGHBRED"),
+            (other_region_id, "HARNESS"),
+        }
 
 
 def test_settings_fresh_auth_uses_distinct_account_and_address_throttles(routed_db) -> None:  # type: ignore[no-untyped-def]

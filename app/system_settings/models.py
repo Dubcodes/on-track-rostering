@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -17,6 +17,7 @@ class SystemSettings(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     public_signup_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     contractor_inactivity_days: Mapped[int] = mapped_column(Integer, default=30)
+    fortnight_anchor: Mapped[date] = mapped_column(Date, default=date(2026, 8, 31))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

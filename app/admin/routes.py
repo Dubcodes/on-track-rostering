@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import date
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -129,17 +130,19 @@ def update_system_settings(
     request: Request,
     public_signup_enabled: bool = Form(False),
     contractor_inactivity_days: int = Form(30),
+    fortnight_anchor: date = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    previous = request.state.system_settings.public_signup_enabled
+    previous = request.state.system_settings
     try:
         row = update_operational_settings(
             db,
             public_signup_enabled=public_signup_enabled,
             contractor_inactivity_days=contractor_inactivity_days,
+            fortnight_anchor=fortnight_anchor,
             actor_user_id=request.state.user.id,
         )
     except ValueError as exc:
@@ -152,8 +155,11 @@ def update_system_settings(
         request.state.user.id,
         detail={
             "public_signup_enabled": row.public_signup_enabled,
-            "previous_public_signup_enabled": previous,
+            "previous_public_signup_enabled": previous.public_signup_enabled,
             "contractor_inactivity_days": row.contractor_inactivity_days,
+            "previous_contractor_inactivity_days": previous.contractor_inactivity_days,
+            "fortnight_anchor": row.fortnight_anchor.isoformat(),
+            "previous_fortnight_anchor": previous.fortnight_anchor.isoformat(),
         },
     )
     db.commit()

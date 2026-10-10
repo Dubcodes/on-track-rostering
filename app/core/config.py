@@ -43,7 +43,6 @@ class Settings(BaseSettings):
     vapid_subject: str = "mailto:operations@example.invalid"
     notification_max_attempts: int = Field(default=5, ge=1, le=20)
     timezone_name: str = "Pacific/Auckland"
-    fortnight_anchor: str = "2026-08-31"
     lunch_allowance_hours: float = Field(default=12.0, ge=0)
     app_version: str = "0.3.0"
     build_id: str = Field(default_factory=_image_build_id)

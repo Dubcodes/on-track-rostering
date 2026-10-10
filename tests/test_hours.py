@@ -60,9 +60,16 @@ def _published_day(
 
 
 def test_fortnight_boundary_previous_and_next() -> None:
-    assert fortnight_bounds(0, date(2026, 9, 8)) == (date(2026, 8, 31), date(2026, 9, 13))
-    assert fortnight_bounds(-1, date(2026, 9, 8)) == (date(2026, 8, 17), date(2026, 8, 30))
-    assert fortnight_bounds(1, date(2026, 9, 8)) == (date(2026, 9, 14), date(2026, 9, 27))
+    anchor = date(2026, 8, 31)
+    assert fortnight_bounds(0, date(2026, 9, 8), anchor=anchor) == (
+        date(2026, 8, 31), date(2026, 9, 13)
+    )
+    assert fortnight_bounds(-1, date(2026, 9, 8), anchor=anchor) == (
+        date(2026, 8, 17), date(2026, 8, 30)
+    )
+    assert fortnight_bounds(1, date(2026, 9, 8), anchor=anchor) == (
+        date(2026, 9, 14), date(2026, 9, 27)
+    )
 
 
 def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) -> None:  # type: ignore[no-untyped-def]
@@ -137,7 +144,13 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
         management=False,
     )
     assert [row["minutes"] for row in rows] == [840, 180]
-    assert group_people(rows)[0]["duration"] == "17h"
+    grouped = group_people(rows, start=date(2026, 10, 19), end=date(2026, 11, 1))[0]
+    assert grouped["duration"] == "17h"
+    assert len(grouped["buckets"]) == 14
+    assert grouped["buckets"][7]["minutes"] == 840
+    assert grouped["buckets"][7]["intensity"] == "very-strong"
+    assert grouped["buckets"][8]["minutes"] == 180
+    assert grouped["buckets"][0]["intensity"] == "empty"
     assert rows[0]["holiday"] == "Labour Day"
     assert {item["kind"] for item in rows[0]["allowances"]} == {"LUNCH", "RESCHEDULED"}
     assert "no automatic break deduction" in rows[0]["raw"]

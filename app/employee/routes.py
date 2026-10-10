@@ -164,14 +164,20 @@ def month_view(
     )
     fortnight_markers: dict[date, dict[str, str]] = {}
     if request.state.actor.person_id:
-        current_start, _ = fortnight_bounds(today=today)
+        current_start, _ = fortnight_bounds(
+            today=today, anchor=request.state.system_settings.fortnight_anchor
+        )
         first_grid_day = grid[0][0]["date"]
         last_grid_day = grid[-1][-1]["date"]
         first_offset = ((first_grid_day - current_start).days - 13) // 14
         for marker_offset in range(first_offset, first_offset + 5):
             marker_date = current_start + timedelta(days=marker_offset * 14 + 13)
             if first_grid_day <= marker_date <= last_grid_day:
-                fortnight_start, fortnight_end = fortnight_bounds(marker_offset, today=today)
+                fortnight_start, fortnight_end = fortnight_bounds(
+                    marker_offset,
+                    today=today,
+                    anchor=request.state.system_settings.fortnight_anchor,
+                )
                 hours_rows = published_hours(
                     db,
                     actor=request.state.actor,

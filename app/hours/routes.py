@@ -31,7 +31,9 @@ def _offset(value: int) -> int:
 @router.get("/hours", response_class=HTMLResponse)
 def employee_hours(request: Request, offset: int = Query(0), db: Session = Depends(get_db)):
     offset = _offset(offset)
-    start, end = fortnight_bounds(offset)
+    start, end = fortnight_bounds(
+        offset, anchor=request.state.system_settings.fortnight_anchor
+    )
     rows = published_hours(db, actor=request.state.actor, start=start, end=end, management=False)
     rows_by_date = {row["date"]: row for row in rows}
     holiday_region = (
@@ -81,7 +83,9 @@ def management_hours(request: Request, offset: int = Query(0), db: Session = Dep
     ):
         raise HTTPException(403, "Regional hours visibility required.")
     offset = _offset(offset)
-    start, end = fortnight_bounds(offset)
+    start, end = fortnight_bounds(
+        offset, anchor=request.state.system_settings.fortnight_anchor
+    )
     rows = published_hours(db, actor=request.state.actor, start=start, end=end, management=True)
     return templates.TemplateResponse(
         "hours.html",
@@ -89,7 +93,7 @@ def management_hours(request: Request, offset: int = Query(0), db: Session = Dep
             request,
             management=True,
             rows=[],
-            people=group_people(rows),
+            people=group_people(rows, start=start, end=end),
             total="",
             start=start,
             end=end,

@@ -11,7 +11,21 @@ from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.policy import can_administer_region, require_admin
 from app.auth.security import verify_csrf
-from app.catalog.models import BasePosition, CrewGroup, Region, Track, TrackMap, Vehicle
+from app.catalog.models import (
+    BasePosition,
+    CrewGroup,
+    PositionPreset,
+    Region,
+    Track,
+    TrackMap,
+    Vehicle,
+)
+from app.catalog.presets import (
+    PRESET_KEYS,
+    effective_position_presets,
+    reset_position_preset,
+    save_position_preset,
+)
 from app.catalog.service import (
     allocate_palette_slot,
     business_reference_tables,
@@ -63,6 +77,14 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
     if not request.state.actor.is_admin:
         vehicle_statement = vehicle_statement.where(Vehicle.home_region_id.in_(region_ids))
     vehicles = list(db.scalars(vehicle_statement))
+    positions = sorted(db.scalars(select(BasePosition)), key=catalog_position_order)
+    effective_presets = effective_position_presets(db, region_ids)
+    overridden_presets = {
+        (str(row.region_id), row.preset_key)
+        for row in db.scalars(
+            select(PositionPreset).where(PositionPreset.region_id.in_(region_ids))
+        )
+    }
     return templates.TemplateResponse(
         "catalog.html",
         context(
@@ -81,11 +103,90 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
             ],
             map_by_track=map_by_track,
             groups=list(db.scalars(select(CrewGroup).order_by(CrewGroup.name))),
-            positions=sorted(db.scalars(select(BasePosition)), key=catalog_position_order),
+            positions=positions,
+            active_positions=[row for row in positions if row.lifecycle == Lifecycle.ACTIVE.value],
             vehicles=vehicles,
+            preset_keys=PRESET_KEYS,
+            preset_labels={
+                "THOROUGHBRED": "Thoroughbred standard",
+                "HARNESS": "Harness standard",
+                "TRIALS": "Trials",
+            },
+            effective_presets=effective_presets,
+            overridden_presets=overridden_presets,
             decline_policies=[item.value for item in DeclinePolicy],
         ),
     )
+
+
+def _preset_region(db: Session, request: Request, region_id: uuid.UUID) -> Region:
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active region.")
+    if not can_administer_region(request.state.actor, region.id):
+        raise HTTPException(403, "Regional administration authority required.")
+    return region
+
+
+@router.post("/regions/{region_id}/presets/{preset_key}")
+def update_position_preset(
+    region_id: uuid.UUID,
+    preset_key: str,
+    request: Request,
+    position_ids: list[uuid.UUID] = Form(default=[]),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    region = _preset_region(db, request, region_id)
+    try:
+        row = save_position_preset(
+            db,
+            region_id=region.id,
+            preset_key=preset_key,
+            position_ids=position_ids,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    record_audit(
+        db,
+        "position_preset.updated",
+        "position_preset",
+        row.id,
+        request.state.user.id,
+        region_id=region.id,
+        detail={"preset_key": preset_key, "position_ids": [str(item) for item in position_ids]},
+    )
+    db.commit()
+    return RedirectResponse(f"/manage/catalog#presets-{region.id}", status_code=303)
+
+
+@router.post("/regions/{region_id}/presets/{preset_key}/reset")
+def reset_region_position_preset(
+    region_id: uuid.UUID,
+    preset_key: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    region = _preset_region(db, request, region_id)
+    try:
+        row = reset_position_preset(db, region_id=region.id, preset_key=preset_key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    record_audit(
+        db,
+        "position_preset.reset",
+        "position_preset",
+        row.id if row else region.id,
+        request.state.user.id,
+        region_id=region.id,
+        detail={"preset_key": preset_key},
+    )
+    db.commit()
+    return RedirectResponse(f"/manage/catalog#presets-{region.id}", status_code=303)
 
 
 @router.post("/regions")

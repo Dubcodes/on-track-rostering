@@ -433,29 +433,24 @@
     wireRow(row);
     row.querySelector('[data-picker-kind="position"] [data-picker-input]').focus();
   });
-  const presets = {
-    THOROUGHBRED: ["Side 1", "Side 2", "Start", "Head On", "Back", "Turn", "RTS", "Director", "Sound", "VT", "CCU1", "CCU2", "FM", "ENG"],
-    HARNESS: ["Side 1", "Side 2", "Head On", "Back", "Director", "Sound/VT", "CCU1", "CCU2", "FM", "ENG"],
-    TRIALS: ["Side 1", "Side 2", "Head On", "Back", "Director", "Sound/VT", "ENG"],
-    BLANK: [],
-  };
-  const positionKey = (value) => normalize(value).replace(/[^a-z0-9]/g, "");
+  const presets = JSON.parse(form.dataset.positionPresets || "{}");
   const applyPreset = (allowReplace) => {
     if (list.children.length && !allowReplace) return;
     if (list.children.length && !window.confirm("Replace the current assignment rows with these defaults?")) return;
     list.replaceChildren();
-    const unresolved = [];
-    (presets[form.querySelector("[data-position-preset]").value] || []).forEach((label) => {
+    const regionId = form.querySelector('[name="region_id"]')?.value || "";
+    const presetKey = form.querySelector("[data-position-preset]").value;
+    (presetKey === "BLANK" ? [] : (presets[regionId]?.[presetKey] || [])).forEach((positionId) => {
       const fragment = template.content.cloneNode(true);
       list.append(fragment);
       const row = list.lastElementChild;
       wireRow(row);
       const option = [...row.querySelectorAll('[data-picker-kind="position"] [data-picker-option]')]
-        .find((item) => positionKey(item.dataset.label) === positionKey(label));
+        .find((item) => item.dataset.value === positionId);
       if (option) choose(row.querySelector('[data-picker-kind="position"]'), option);
-      else { unresolved.push(label); row.remove(); }
+      else row.remove();
     });
-    form.querySelector("[data-preset-warning]").textContent = unresolved.length ? `Missing from Master Data: ${unresolved.join(", ")}` : "";
+    form.querySelector("[data-preset-warning]").textContent = "";
   };
   form.querySelector("[data-apply-preset]")?.addEventListener("click", () => applyPreset(true));
   const dayType = form.querySelector("[data-day-type]");

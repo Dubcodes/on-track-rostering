@@ -24,8 +24,9 @@ from app.rostering.models import (
 from app.rostering.participation import active_published_assignments, person_day_participation
 
 
-def fortnight_bounds(offset: int = 0, today: date | None = None) -> tuple[date, date]:
-    anchor = date.fromisoformat(get_settings().fortnight_anchor)
+def fortnight_bounds(
+    offset: int = 0, today: date | None = None, *, anchor: date
+) -> tuple[date, date]:
     current = today or local_today()
     start = anchor + timedelta(days=((current - anchor).days // 14 + offset) * 14)
     return start, start + timedelta(days=13)
@@ -184,7 +185,9 @@ def published_hours(
     return result
 
 
-def group_people(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def group_people(
+    rows: list[dict[str, object]], *, start: date, end: date
+) -> list[dict[str, object]]:
     grouped: dict[uuid.UUID, dict[str, object]] = {}
     for row in rows:
         person_id = row["person_id"]
@@ -199,4 +202,40 @@ def group_people(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         days.append(row)
     for group in grouped.values():
         group["duration"] = format_minutes(int(group["minutes"]))
+        days = group["days"]
+        assert isinstance(days, list)
+        by_date: dict[date, list[dict[str, object]]] = defaultdict(list)
+        for day in days:
+            by_date[day["date"]].append(day)
+        buckets = []
+        for index in range((end - start).days + 1):
+            bucket_date = start + timedelta(days=index)
+            bucket_rows = by_date.get(bucket_date, [])
+            minutes = sum(int(item["minutes"]) for item in bucket_rows)
+            locations = list(
+                dict.fromkeys(
+                    f'{item["track"]} · {item["region"]}' for item in bucket_rows
+                )
+            )
+            intensity = (
+                "empty" if minutes == 0 else
+                "light" if minutes <= 240 else
+                "medium" if minutes <= 480 else
+                "strong" if minutes <= 720 else
+                "very-strong"
+            )
+            location_summary = ", ".join(locations) if locations else "Not worked"
+            duration = format_minutes(minutes)
+            buckets.append(
+                {
+                    "date": bucket_date,
+                    "minutes": minutes,
+                    "duration": duration,
+                    "worked": bool(minutes),
+                    "location": location_summary,
+                    "intensity": intensity,
+                    "label": f"{bucket_date.strftime('%a %d %b')}: {duration}; {location_summary}",
+                }
+            )
+        group["buckets"] = buckets
     return list(grouped.values())

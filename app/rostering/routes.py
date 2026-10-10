@@ -14,6 +14,7 @@ from app.audit.service import record_audit
 from app.auth.policy import can_manage_region, require_manage_region
 from app.auth.security import verify_csrf
 from app.catalog.models import BasePosition, Region, Track, Vehicle
+from app.catalog.presets import effective_position_presets
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, RacingDiscipline, WorkdayCategory, WorkdayStatus
 from app.core.time import parse_time
@@ -305,6 +306,9 @@ def new_workday_page(
             regions=regions,
             tracks=tracks,
             positions=positions,
+            effective_position_presets=effective_position_presets(
+                db, [region.id for region in regions]
+            ),
             assignments=[],
             people_groups_by_assignment={},
             assignment_leave_by_id={},
@@ -544,6 +548,9 @@ def _builder_context(
             db.scalars(
                 select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name)
             ), key=catalog_position_order
+        ),
+        effective_position_presets=effective_position_presets(
+            db, [item.id for item in editable_regions]
         ),
         assignments=assignments,
         people_groups_by_assignment=people_groups_by_assignment,
