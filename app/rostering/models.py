@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -38,6 +39,9 @@ class Workday(Base):
     region_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regions.id"), index=True)
     operation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("operations.id"), nullable=True)
     generated_from_workday_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workdays.id"), nullable=True, unique=True
+    )
+    rescheduled_from_workday_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("workdays.id"), nullable=True, unique=True
     )
     external_event_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -132,7 +136,13 @@ class Assignment(Base):
 
 class PersonalWorkdayEntry(Base):
     __tablename__ = "personal_workday_entries"
-    __table_args__ = (UniqueConstraint("workday_id", "person_id"),)
+    __table_args__ = (
+        UniqueConstraint("workday_id", "person_id"),
+        CheckConstraint(
+            "replacement_response IS NULL OR replacement_response IN ('ACCEPTED', 'DECLINED')",
+            name="replacement_response",
+        ),
+    )
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     workday_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("workdays.id", ondelete="CASCADE"), index=True
@@ -144,6 +154,10 @@ class PersonalWorkdayEntry(Base):
     last_race_time_changed: Mapped[bool] = mapped_column(Boolean, default=False)
     finished_back_at_office: Mapped[bool] = mapped_column(Boolean, default=False)
     standard_travel_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
+    replacement_response: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    replacement_responded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 

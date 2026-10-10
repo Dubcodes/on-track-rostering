@@ -40,6 +40,7 @@ from app.rostering.service import (
     ensure_draft,
     publish,
     remove_assignment,
+    reschedule_published_workday,
     update_assignment,
     update_draft_details,
 )
@@ -765,3 +766,62 @@ def test_concurrent_reminder_generation_uses_conflict_safe_insert(pg_factory) ->
                 NotificationEvent.event_key.like(f"reminder:%:{revision_id}:{person_id}")
             )
         ) == 3
+
+
+def test_concurrent_reschedule_creates_only_one_direct_replacement(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    with pg_factory() as db:
+        source = Workday(region_id=region_id, created_by_user_id=user_id)
+        db.add(source)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=source.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 12, 1),
+            title="Concurrent move",
+            created_by_user_id=user_id,
+            published_by_user_id=user_id,
+            published_at=utcnow(),
+        )
+        db.add(revision)
+        db.flush()
+        source.current_published_revision_id = revision.id
+        db.commit()
+        source_id = source.id
+
+    barrier = threading.Barrier(2)
+    replacements: list[uuid.UUID] = []
+    errors: list[Exception] = []
+
+    def move(target_date: date) -> None:
+        try:
+            with pg_factory() as db:
+                barrier.wait()
+                replacement = reschedule_published_workday(
+                    db,
+                    workday_id=source_id,
+                    new_date=target_date,
+                    actor_user_id=user_id,
+                )
+                replacements.append(replacement.id)
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=move, args=(date(2026, 12, 2),)),
+        threading.Thread(target=move, args=(date(2026, 12, 3),)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert len(replacements) == 1
+    assert len(errors) == 1 and isinstance(errors[0], ValueError)
+    with pg_factory() as db:
+        direct = list(
+            db.scalars(
+                select(Workday).where(Workday.rescheduled_from_workday_id == source_id)
+            )
+        )
+        assert len(direct) == 1 and direct[0].id == replacements[0]

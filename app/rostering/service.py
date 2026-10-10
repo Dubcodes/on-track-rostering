@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, time
 
@@ -23,6 +24,7 @@ from app.core.enums import (
 from app.core.time import utcnow
 from app.identity.contractor_access import refresh_contractor_access
 from app.identity.models import Person, User, UserPersonLink
+from app.notifications.models import NotificationEvent
 from app.notifications.service import record_event
 from app.positions.service import set_signal
 from app.rostering.conflicts import publication_conflicts
@@ -32,6 +34,7 @@ from app.rostering.models import (
     Assignment,
     OpenPositionApplication,
     Operation,
+    PersonalWorkdayEntry,
     ProgrammeItem,
     TravelLeg,
     Workday,
@@ -955,15 +958,17 @@ def preview_diff(db: Session, workday: Workday, draft: WorkdayRevision) -> list[
     return publication_diff(db, previous, draft)
 
 
-def publish(
+def _publish(
     db: Session,
     workday_id: uuid.UUID,
     draft_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_version: int,
     confirm_conflicts: bool = False,
+    *,
+    use_existing_transaction: bool,
 ) -> WorkdayRevision:
-    with db.begin():
+    with nullcontext() if use_existing_transaction else db.begin():
         workday = db.scalar(
             select(Workday)
             .where(Workday.id == workday_id)
@@ -1245,6 +1250,293 @@ def publish(
                     reason="roster publication",
                 )
     return draft
+
+
+def publish(
+    db: Session,
+    workday_id: uuid.UUID,
+    draft_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    expected_version: int,
+    confirm_conflicts: bool = False,
+) -> WorkdayRevision:
+    return _publish(
+        db,
+        workday_id,
+        draft_id,
+        actor_user_id,
+        expected_version,
+        confirm_conflicts,
+        use_existing_transaction=False,
+    )
+
+
+def reschedule_published_workday(
+    db: Session,
+    *,
+    workday_id: uuid.UUID,
+    new_date: date,
+    actor_user_id: uuid.UUID,
+) -> Workday:
+    """Move an immutable published roster by publishing a fresh linked Workday."""
+    with db.begin():
+        source = db.scalar(
+            select(Workday)
+            .where(Workday.id == workday_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if source is None:
+            raise ValueError("Workday not found.")
+        if source.generated_from_workday_id is not None:
+            raise ValueError("Move the parent Workday rather than its generated Travel Day.")
+        published = db.get(WorkdayRevision, source.current_published_revision_id)
+        if published is None:
+            raise ValueError("Only a published Workday can be moved.")
+        if new_date == published.work_date:
+            raise ValueError("Choose a different date for the replacement Workday.")
+        if db.scalar(
+            select(Workday.id).where(Workday.rescheduled_from_workday_id == source.id)
+        ):
+            raise ValueError("This Workday already has a replacement.")
+
+        source_draft_id = source.current_draft_revision_id
+        source.current_draft_revision_id = None
+        source.status = WorkdayStatus.ABANDONED.value
+        source.lock_version += 1
+        old_travel = db.scalar(
+            select(Workday)
+            .where(Workday.generated_from_workday_id == source.id)
+            .with_for_update()
+        )
+        if old_travel:
+            old_travel.status = WorkdayStatus.ABANDONED.value
+            old_travel.current_draft_revision_id = None
+            old_travel.lock_version += 1
+
+        replacement = Workday(
+            region_id=source.region_id,
+            category=source.category,
+            racing_discipline=source.racing_discipline,
+            status=WorkdayStatus.SCHEDULED.value,
+            rescheduled_from_workday_id=source.id,
+            created_by_user_id=actor_user_id,
+        )
+        db.add(replacement)
+        db.flush()
+        draft = WorkdayRevision(
+            workday_id=replacement.id,
+            revision_number=1,
+            state=RevisionState.DRAFT.value,
+            based_on_revision_id=None,
+            work_date=new_date,
+            track_id=published.track_id,
+            track_name_snapshot=published.track_name_snapshot,
+            title=published.title,
+            start_time=published.start_time,
+            start_time_is_override=published.start_time_is_override,
+            end_time=published.end_time,
+            end_time_is_override=published.end_time_is_override,
+            on_track_time=published.on_track_time,
+            on_track_time_is_override=published.on_track_time_is_override,
+            track_travel_minutes=published.track_travel_minutes,
+            track_travel_minutes_is_override=published.track_travel_minutes_is_override,
+            first_trial_time=published.first_trial_time,
+            last_trial_time=published.last_trial_time,
+            first_race_time=published.first_race_time,
+            last_race_time=published.last_race_time,
+            race_count=published.race_count,
+            start_origin=published.start_origin,
+            finish_destination=published.finish_destination,
+            standard_travel_enabled=published.standard_travel_enabled,
+            travel_departure_time=published.travel_departure_time,
+            travel_to_hotel_minutes=published.travel_to_hotel_minutes,
+            default_hotel=published.default_hotel,
+            hotel_to_track_minutes=published.hotel_to_track_minutes,
+            return_travel_minutes=published.return_travel_minutes,
+            pack_up_minutes=published.pack_up_minutes,
+            day_note=published.day_note,
+            change_reason="",
+            created_by_user_id=actor_user_id,
+        )
+        db.add(draft)
+        db.flush()
+        for old in db.scalars(select(Assignment).where(Assignment.revision_id == published.id)):
+            db.add(
+                Assignment(
+                    revision_id=draft.id,
+                    slot_key=old.slot_key,
+                    base_position_id=old.base_position_id,
+                    slot_index=old.slot_index,
+                    display_name_snapshot=old.display_name_snapshot,
+                    person_id=old.person_id,
+                    person_name_snapshot=old.person_name_snapshot,
+                    status=old.status,
+                    start_time=old.start_time,
+                    end_time=old.end_time,
+                    note=old.note,
+                    note_private=old.note_private,
+                    vehicle_id=old.vehicle_id,
+                    vehicle_name_snapshot=old.vehicle_name_snapshot,
+                    transport_mode=old.transport_mode,
+                    custom_transport_text=old.custom_transport_text,
+                    accommodation_name=old.accommodation_name,
+                    uses_standard_travel=old.uses_standard_travel,
+                    hotel_to_track_minutes_override=old.hotel_to_track_minutes_override,
+                    finish_destination_override=old.finish_destination_override,
+                    return_travel_minutes_override=old.return_travel_minutes_override,
+                )
+            )
+        replacement.current_draft_revision_id = draft.id
+        _sync_standard_travel(db, replacement, draft)
+        db.flush()
+        _publish(
+            db,
+            replacement.id,
+            draft.id,
+            actor_user_id,
+            replacement.lock_version,
+            True,
+            use_existing_transaction=True,
+        )
+
+        summary = (
+            f"{published.track_name_snapshot or published.title} moved from "
+            f"{published.work_date:%d %b %Y} to {new_date:%d %b %Y}."
+        )
+        event = db.scalar(
+            select(NotificationEvent).where(
+                NotificationEvent.event_key == f"roster-published:{replacement.id}:{draft.id}"
+            )
+        )
+        if event:
+            event.payload = {**event.payload, "summary": summary, "url": f"/day/{replacement.id}"}
+        replacement_travel = db.scalar(
+            select(Workday).where(Workday.generated_from_workday_id == replacement.id)
+        )
+        if replacement_travel and replacement_travel.current_published_revision_id:
+            travel_event = db.get(
+                NotificationEvent,
+                (
+                    f"roster-published:{replacement_travel.id}:"
+                    f"{replacement_travel.current_published_revision_id}"
+                ),
+            )
+            if travel_event:
+                db.delete(travel_event)
+        db.add_all(
+            [
+                HumanChange(
+                    workday_id=source.id,
+                    revision_id=published.id,
+                    actor_user_id=actor_user_id,
+                    summary=summary,
+                ),
+                HumanChange(
+                    workday_id=replacement.id,
+                    revision_id=draft.id,
+                    actor_user_id=actor_user_id,
+                    summary=summary,
+                ),
+            ]
+        )
+        record_audit(
+            db,
+            "workday.rescheduled",
+            "workday",
+            source.id,
+            actor_user_id,
+            region_id=source.region_id,
+            detail={
+                "replacement_workday_id": str(replacement.id),
+                "from": published.work_date.isoformat(),
+                "to": new_date.isoformat(),
+                "detached_draft_revision_id": str(source_draft_id) if source_draft_id else None,
+            },
+        )
+    return replacement
+
+
+def respond_to_reschedule(
+    db: Session,
+    *,
+    workday_id: uuid.UUID,
+    person_id: uuid.UUID,
+    response: str,
+    actor_user_id: uuid.UUID,
+) -> PersonalWorkdayEntry:
+    if response not in {"ACCEPTED", "DECLINED"}:
+        raise ValueError("Choose available or not available.")
+    with db.begin():
+        workday = db.scalar(select(Workday).where(Workday.id == workday_id).with_for_update())
+        revision = (
+            db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
+        )
+        assigned = bool(
+            revision
+            and db.scalar(
+                select(Assignment.id).where(
+                    Assignment.revision_id == revision.id,
+                    Assignment.person_id == person_id,
+                    Assignment.status == AssignmentStatus.ASSIGNED.value,
+                )
+            )
+        )
+        if (
+            not workday
+            or workday.status != WorkdayStatus.SCHEDULED.value
+            or not workday.rescheduled_from_workday_id
+            or not revision
+            or not assigned
+        ):
+            raise ValueError("Replacement assignment not found.")
+        entry = db.scalar(
+            select(PersonalWorkdayEntry)
+            .where(
+                PersonalWorkdayEntry.workday_id == workday.id,
+                PersonalWorkdayEntry.person_id == person_id,
+            )
+            .with_for_update()
+        )
+        if entry is None:
+            entry = PersonalWorkdayEntry(workday_id=workday.id, person_id=person_id)
+            db.add(entry)
+        entry.replacement_response = response
+        entry.replacement_responded_at = utcnow()
+        entry.updated_at = entry.replacement_responded_at
+        person = db.get(Person, person_id)
+        person_name = person.display_name if person else "Assigned crew member"
+        record_audit(
+            db,
+            "workday.replacement_response_changed",
+            "workday",
+            workday.id,
+            actor_user_id,
+            region_id=workday.region_id,
+            detail={"person_id": str(person_id), "response": response},
+        )
+        if response == "DECLINED":
+            record_event(
+                db,
+                event_key=(
+                    f"replacement-declined:{workday.id}:{person_id}:"
+                    f"{entry.replacement_responded_at.isoformat()}"
+                ),
+                event_type="MANAGER_ACTION_REQUIRED",
+                region_id=workday.region_id,
+                workday_id=workday.id,
+                payload={
+                    "kind": "REPLACEMENT_DECLINED",
+                    "person": person_name,
+                    "date": revision.work_date.isoformat(),
+                    "message": (
+                        f"{person_name} is not available for the replacement roster on "
+                        f"{revision.work_date:%d %b %Y}."
+                    ),
+                    "url": f"/day/{workday.id}",
+                },
+            )
+    return entry
 
 
 def decline_published_assignment(

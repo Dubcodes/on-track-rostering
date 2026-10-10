@@ -32,6 +32,7 @@ from app.notifications.models import NotificationPreference
 from app.rostering.models import (
     Assignment,
     OpenPositionApplication,
+    PersonalWorkdayEntry,
     PositionCapability,
     Workday,
     WorkdayRevision,
@@ -291,6 +292,40 @@ def browser_site():  # type: ignore[no-untyped-def]
             )
         )
         workday.current_published_revision_id = revision.id
+        reschedule_original = Workday(
+            region_id=region.id,
+            status="ABANDONED",
+            created_by_user_id=manager.id,
+        )
+        db.add(reschedule_original)
+        db.flush()
+        reschedule_original_revision = WorkdayRevision(
+            workday_id=reschedule_original.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=local_today() - timedelta(days=2),
+            track_id=track.id,
+            track_name_snapshot=track.name,
+            title="Browser original moved day",
+            start_time=clock_time(7, 30),
+            end_time=clock_time(19, 30),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add(reschedule_original_revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=reschedule_original_revision.id,
+                base_position_id=position.id,
+                display_name_snapshot=position.name,
+                person_id=person.id,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        reschedule_original.current_published_revision_id = reschedule_original_revision.id
+        workday.rescheduled_from_workday_id = reschedule_original.id
         cross_workday = Workday(region_id=cross_region.id, created_by_user_id=manager.id)
         db.add(cross_workday)
         db.flush()
@@ -717,6 +752,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             "contractor": (contractor.email, "246810"),
             "contractor_workday_id": str(contractor_workday.id),
             "workday_id": str(workday.id),
+            "reschedule_original_id": str(reschedule_original.id),
             "cross_workday_id": str(cross_workday.id),
                 "region_id": str(region.id),
                 "region_name": region.name,
@@ -2352,6 +2388,57 @@ def test_race_day_builder_live_timing_and_override_resets(browser_site, width: i
     _assert_no_horizontal_overflow(page)
     assert not errors
     context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_rescheduled_workday_response_is_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    with SessionLocal() as db:
+        entry = db.scalar(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id == uuid.UUID(values["workday_id"]),
+                PersonalWorkdayEntry.person_id == uuid.UUID(values["browser_person_id"]),
+            )
+        )
+        if entry:
+            db.delete(entry)
+            db.commit()
+
+    employee_context = browser.new_context(
+        viewport={"width": width, "height": 1000}, has_touch=width <= 760
+    )
+    page = employee_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["employee"])
+    _assert_page(page, base_url + f"/day/{values['workday_id']}")
+    assert page.get_by_text("Moved from", exact=False).is_visible()
+    original_link = page.get_by_role("link", name="View original")
+    assert original_link.is_visible()
+    assert original_link.get_attribute("href") == f'/day/{values["reschedule_original_id"]}'
+    response_panel = page.locator("#replacement-response")
+    assert response_panel.get_by_text("Please confirm", exact=False).is_visible()
+    assert response_panel.get_by_role("button", name="Yes, I’m available").is_visible()
+    assert response_panel.get_by_role("button", name="No, I’m not available").is_visible()
+    response_panel.get_by_role("button", name="Yes, I’m available").click()
+    assert response_panel.get_by_text("Available", exact=True).is_visible()
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    employee_context.close()
+
+    manager_context = browser.new_context(
+        viewport={"width": width, "height": 1000}, has_touch=width <= 760
+    )
+    page = manager_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    _assert_page(page, base_url + f"/day/{values['workday_id']}")
+    assert page.get_by_text("Move / reschedule this published Workday", exact=True).is_visible()
+    crew = page.locator(".published-crew-panel")
+    assert crew.get_by_text("Replacement: Accepted", exact=True).count() == 1
+    assert crew.get_by_text("Replacement: Pending", exact=True).count() >= 1
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    manager_context.close()
 
 
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])

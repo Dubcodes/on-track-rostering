@@ -59,7 +59,7 @@ from app.rostering.models import (
     WorkdayRevision,
 )
 from app.rostering.participation import active_published_assignments, person_day_participation
-from app.rostering.service import decline_published_assignment
+from app.rostering.service import decline_published_assignment, respond_to_reschedule
 from app.track_maps.service import effective_map
 from app.web import context, month_grid, templates
 
@@ -264,6 +264,17 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         can_self_decline=self_decline,
         workday=workday,
     )
+    response_by_person = {
+        str(entry.person_id): entry.replacement_response or "PENDING"
+        for entry in db.scalars(
+            select(PersonalWorkdayEntry).where(PersonalWorkdayEntry.workday_id == workday.id)
+        )
+    }
+    if workday.rescheduled_from_workday_id and management:
+        for row in assignments:
+            row["replacement_response"] = response_by_person.get(
+                str(row["person_id"]), "PENDING"
+            ) if row["person_id"] and row["status"] == "ASSIGNED" else None
     if personal_entry:
         for row in assignments:
             if row["is_own"]:
@@ -323,6 +334,20 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     previous_workday_id, next_workday_id = adjacent_published_workdays(
         db, request.state.actor, revision.work_date
     )
+    predecessor = (
+        db.get(Workday, workday.rescheduled_from_workday_id)
+        if workday.rescheduled_from_workday_id
+        else None
+    )
+    replacement = db.scalar(
+        select(Workday).where(Workday.rescheduled_from_workday_id == workday.id)
+    )
+    predecessor_revision = (
+        db.get(WorkdayRevision, predecessor.current_published_revision_id) if predecessor else None
+    )
+    replacement_revision = (
+        db.get(WorkdayRevision, replacement.current_published_revision_id) if replacement else None
+    )
     return templates.TemplateResponse(
         "day.html",
         context(
@@ -372,8 +397,46 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             personal_entry=personal_entry,
             can_personalize=bool(own_rows and request.state.actor.person_id),
             can_opt_out_standard_travel=can_opt_out_standard_travel,
+            predecessor=predecessor,
+            predecessor_revision=predecessor_revision,
+            replacement=replacement,
+            replacement_revision=replacement_revision,
+            replacement_response=(
+                personal_entry.replacement_response
+                if personal_entry and workday.rescheduled_from_workday_id
+                else None
+            ),
+            can_respond_to_replacement=bool(
+                workday.status == "SCHEDULED"
+                and workday.rescheduled_from_workday_id
+                and any(row.status == "ASSIGNED" for row in own_rows)
+            ),
         ),
     )
+
+
+@router.post("/day/{workday_id}/replacement-response")
+def replacement_response(
+    workday_id: uuid.UUID,
+    request: Request,
+    response: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    if request.state.actor.person_id is None:
+        raise HTTPException(404, "Replacement assignment not found")
+    try:
+        respond_to_reschedule(
+            db,
+            workday_id=workday_id,
+            person_id=request.state.actor.person_id,
+            response=response,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return RedirectResponse(f"/day/{workday_id}?replacement=response-saved", status_code=303)
 
 
 @router.post("/day/{workday_id}/personal")

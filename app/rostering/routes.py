@@ -39,6 +39,7 @@ from app.rostering.service import (
     preview_diff,
     publish,
     remove_assignment,
+    reschedule_published_workday,
     save_draft,
     update_assignment,
     update_draft_details,
@@ -798,6 +799,10 @@ def update_workday_status(
     require_manage_region(request.state.actor, workday.region_id)
     if status not in {item.value for item in WorkdayStatus}:
         raise HTTPException(400, "Invalid Workday status")
+    if status == WorkdayStatus.SCHEDULED.value and db.scalar(
+        select(Workday.id).where(Workday.rescheduled_from_workday_id == workday.id)
+    ):
+        raise HTTPException(409, "A Workday with a replacement cannot be reinstated.")
     before = workday.status
     workday.status = status
     published = db.get(WorkdayRevision, workday.current_published_revision_id)
@@ -858,6 +863,39 @@ def update_workday_status(
     workday.lock_version += 1
     db.commit()
     return RedirectResponse(f"/day/{workday.id}", status_code=303)
+
+
+@router.post("/workdays/{workday_id}/reschedule")
+def reschedule_workday(
+    workday_id: uuid.UUID,
+    request: Request,
+    new_date: date = Form(...),
+    confirm_move: bool = Form(False),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    workday = db.get(Workday, workday_id)
+    if not workday:
+        raise HTTPException(404)
+    require_manage_region(request.state.actor, workday.region_id)
+    if workday.generated_from_workday_id:
+        return RedirectResponse(
+            f"/day/{workday.generated_from_workday_id}?move=parent-required", status_code=303
+        )
+    if not confirm_move:
+        raise HTTPException(400, "Confirm that the current published roster will be moved.")
+    db.commit()
+    try:
+        replacement = reschedule_published_workday(
+            db,
+            workday_id=workday.id,
+            new_date=new_date,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(f"/day/{replacement.id}?moved=1", status_code=303)
 
 
 @router.post("/workdays/{workday_id}/draft")

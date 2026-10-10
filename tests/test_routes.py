@@ -22,6 +22,7 @@ with warnings.catch_warnings():
 from app.audit.models import AuditEvent, HumanChange
 from app.audit.service import record_audit
 from app.auth.factors import begin_totp
+from app.auth.policy import actor_for
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
@@ -35,6 +36,7 @@ from app.external_calendar.models import (
     ExternalTrackMapping,
 )
 from app.external_calendar.refresh import RefreshResult
+from app.hours.service import published_hours
 from app.identity.models import (
     Invitation,
     LoginThrottle,
@@ -48,9 +50,11 @@ from app.main import app
 from app.notifications.models import NotificationEvent
 from app.rostering.models import (
     Assignment,
+    OpenPositionApplication,
     Operation,
     PersonalWorkdayEntry,
     PositionCapability,
+    TravelLeg,
     Workday,
     WorkdayRevision,
 )
@@ -1264,6 +1268,370 @@ def _publish_rows(
         workday.current_published_revision_id = revision.id
         db.commit()
         return workday.id
+
+
+def test_published_workday_reschedule_and_person_response_workflow(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    original_date = date(2026, 10, 20)
+    replacement_date = date(2026, 10, 22)
+    with factory() as db:
+        contractor_person = Person(
+            display_name="Route Contractor",
+            email="route-contractor@example.test",
+            home_region_id=region_id,
+        )
+        contractor = User(
+            email="route-contractor@example.test",
+            display_name="Route Contractor",
+            credential_hash=hash_credential("246810"),
+            credential_kind="pin",
+        )
+        db.add_all([contractor_person, contractor])
+        db.flush()
+        db.add_all(
+            [
+                UserPersonLink(user_id=contractor.id, person_id=contractor_person.id),
+                RoleGrant(
+                    user_id=contractor.id,
+                    role=Role.CONTRACTOR.value,
+                    region_id=region_id,
+                ),
+            ]
+        )
+        db.commit()
+        contractor_person_id = contractor_person.id
+    workday_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=original_date,
+        rows=[
+            (person_id, "Amy Crew", "First role", False),
+            (person_id, "Amy Crew", "Second role", False),
+            (contractor_person_id, "Route Contractor", "Contract role", False),
+        ],
+    )
+    with factory() as db:
+        source = db.get(Workday, workday_id)
+        source_revision_id = source.current_published_revision_id
+        private_draft = WorkdayRevision(
+            workday_id=source.id,
+            revision_number=2,
+            state="DRAFT",
+            based_on_revision_id=source_revision_id,
+            work_date=original_date,
+            created_by_user_id=source.created_by_user_id,
+        )
+        db.add(private_draft)
+        db.flush()
+        source.current_draft_revision_id = private_draft.id
+        db.commit()
+        private_draft_id = private_draft.id
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    manager_page = manager.get(f"/day/{workday_id}")
+    assert "Move / reschedule this published Workday" in manager_page.text
+    missing_confirmation = manager.post(
+        f"/manage/workdays/{workday_id}/reschedule",
+        data={"new_date": replacement_date.isoformat(), "csrf_token": manager_csrf},
+    )
+    assert missing_confirmation.status_code == 400
+    moved = manager.post(
+        f"/manage/workdays/{workday_id}/reschedule",
+        data={
+            "new_date": replacement_date.isoformat(),
+            "confirm_move": "true",
+            "csrf_token": manager_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert moved.status_code == 303
+    replacement_id = uuid.UUID(moved.headers["location"].split("/")[2].split("?")[0])
+
+    with factory() as db:
+        source = db.get(Workday, workday_id)
+        source_revision = db.get(WorkdayRevision, source.current_published_revision_id)
+        replacement = db.get(Workday, replacement_id)
+        replacement_revision = db.get(
+            WorkdayRevision, replacement.current_published_revision_id
+        )
+        copied = list(
+            db.scalars(
+                select(Assignment).where(Assignment.revision_id == replacement_revision.id)
+            )
+        )
+        source_slots = set(
+            db.scalars(
+                select(Assignment.slot_key).where(Assignment.revision_id == source_revision.id)
+            )
+        )
+        event = db.get(
+            NotificationEvent,
+            f"roster-published:{replacement.id}:{replacement_revision.id}",
+        )
+        assert source.status == "ABANDONED"
+        assert source.current_draft_revision_id is None
+        assert db.get(WorkdayRevision, private_draft_id) is not None
+        assert source_revision.work_date == original_date
+        assert replacement.rescheduled_from_workday_id == source.id
+        assert replacement.status == "SCHEDULED"
+        assert replacement_revision.state == "PUBLISHED"
+        assert replacement_revision.work_date == replacement_date
+        assert replacement_revision.based_on_revision_id is None
+        assert len(copied) == 3 and {row.slot_key for row in copied} == source_slots
+        assert event is not None
+        assert event.payload["url"] == f"/day/{replacement.id}"
+        assert "moved from 20 Oct 2026 to 22 Oct 2026" in event.payload["summary"]
+
+    employee = TestClient(app)
+    employee_csrf = _login(employee, "amy@example.test", "654321")
+    replacement_page = employee.get(f"/day/{replacement_id}")
+    assert "Moved from" in replacement_page.text
+    assert "Can you work the replacement date?" in replacement_page.text
+    assert replacement_page.text.count("Please confirm whether you are available") == 1
+    accepted = employee.post(
+        f"/day/{replacement_id}/replacement-response",
+        data={"response": "ACCEPTED", "csrf_token": employee_csrf},
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 303
+    assert "currently marked <strong>Available</strong>" in employee.get(
+        f"/day/{replacement_id}"
+    ).text
+    declined = employee.post(
+        f"/day/{replacement_id}/replacement-response",
+        data={"response": "DECLINED", "csrf_token": employee_csrf},
+        follow_redirects=False,
+    )
+    assert declined.status_code == 303
+    unrelated = TestClient(app)
+    unrelated_csrf = _login(unrelated, "private-south@example.test", "778899")
+    denied = unrelated.post(
+        f"/day/{replacement_id}/replacement-response",
+        data={"response": "ACCEPTED", "csrf_token": unrelated_csrf},
+    )
+    assert denied.status_code == 404
+    with factory() as db:
+        entry = db.scalar(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id == replacement_id,
+                PersonalWorkdayEntry.person_id == person_id,
+            )
+        )
+        replacement = db.get(Workday, replacement_id)
+        rows = list(
+            db.scalars(
+                select(Assignment).where(
+                    Assignment.revision_id == replacement.current_published_revision_id
+                )
+            )
+        )
+        manager_notice = db.scalar(
+            select(NotificationEvent).where(
+                NotificationEvent.event_type == "MANAGER_ACTION_REQUIRED",
+                NotificationEvent.workday_id == replacement_id,
+            )
+        )
+        assert entry.replacement_response == "DECLINED"
+        assert entry.replacement_responded_at is not None
+        assert len(rows) == 3
+        assert sum(row.person_id == person_id for row in rows) == 2
+        assert sum(row.person_id == contractor_person_id for row in rows) == 1
+        assert manager_notice.payload["person"] == "Amy Crew"
+        assert "private" not in str(manager_notice.payload).lower()
+    manager_replacement = manager.get(f"/day/{replacement_id}")
+    assert manager_replacement.text.count("Replacement: Declined") == 2
+    assert manager_replacement.text.count("Replacement: Pending") == 1
+
+    contractor_client = TestClient(app)
+    contractor_csrf = _login(contractor_client, "route-contractor@example.test", "246810")
+    contractor_page = contractor_client.get(f"/day/{replacement_id}")
+    assert "Can you work the replacement date?" in contractor_page.text
+    contractor_response = contractor_client.post(
+        f"/day/{replacement_id}/replacement-response",
+        data={"response": "ACCEPTED", "csrf_token": contractor_csrf},
+        follow_redirects=False,
+    )
+    assert contractor_response.status_code == 303
+
+    duplicate = manager.post(
+        f"/manage/workdays/{workday_id}/reschedule",
+        data={
+            "new_date": date(2026, 10, 23).isoformat(),
+            "confirm_move": "true",
+            "csrf_token": manager_csrf,
+        },
+    )
+    assert duplicate.status_code == 409
+    reinstate = manager.post(
+        f"/manage/workdays/{workday_id}/status",
+        data={"status": "SCHEDULED", "csrf_token": manager_csrf},
+    )
+    assert reinstate.status_code == 409
+    chained = manager.post(
+        f"/manage/workdays/{replacement_id}/reschedule",
+        data={
+            "new_date": date(2026, 10, 24).isoformat(),
+            "confirm_move": "true",
+            "csrf_token": manager_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert chained.status_code == 303
+    chained_id = uuid.UUID(chained.headers["location"].split("/")[2].split("?")[0])
+    with factory() as db:
+        assert db.get(Workday, replacement_id).status == "ABANDONED"
+        assert db.get(Workday, chained_id).rescheduled_from_workday_id == replacement_id
+        assert db.scalar(
+            select(PersonalWorkdayEntry).where(
+                PersonalWorkdayEntry.workday_id == chained_id
+            )
+        ) is None
+    stale_response = employee.post(
+        f"/day/{replacement_id}/replacement-response",
+        data={"response": "ACCEPTED", "csrf_token": employee_csrf},
+    )
+    assert stale_response.status_code == 404
+
+
+def test_reschedule_rebuilds_travel_skips_applications_and_does_not_double_hours(
+    routed_db,
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    workday_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 11, 12),
+        rows=[(person_id, "Amy Crew", "", False), (None, "", "", False)],
+    )
+    with factory() as db:
+        source = db.get(Workday, workday_id)
+        published = db.get(WorkdayRevision, source.current_published_revision_id)
+        published.standard_travel_enabled = True
+        published.on_track_time = time(9)
+        published.last_race_time = time(16)
+        published.travel_departure_time = time(12)
+        published.travel_to_hotel_minutes = 120
+        published.hotel_to_track_minutes = 30
+        published.return_travel_minutes = 120
+        published.start_origin = "Auckland"
+        published.default_hotel = "Track Hotel"
+        published.finish_destination = "Auckland"
+        old_operation = Operation(
+            name="Old operation",
+            region_id=region_id,
+            starts_on=date(2026, 11, 11),
+            ends_on=date(2026, 11, 12),
+        )
+        db.add(old_operation)
+        db.flush()
+        source.operation_id = old_operation.id
+        db.add(
+            TravelLeg(
+                operation_id=old_operation.id,
+                travel_date=date(2026, 11, 11),
+                origin="Auckland",
+                destination="Track Hotel",
+            )
+        )
+        old_travel = Workday(
+            region_id=region_id,
+            operation_id=old_operation.id,
+            generated_from_workday_id=source.id,
+            category="TRAVEL_DAY",
+            created_by_user_id=source.created_by_user_id,
+        )
+        db.add(old_travel)
+        db.flush()
+        old_travel_revision = WorkdayRevision(
+            workday_id=old_travel.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 11, 11),
+            created_by_user_id=source.created_by_user_id,
+        )
+        db.add(old_travel_revision)
+        db.flush()
+        old_travel.current_published_revision_id = old_travel_revision.id
+        open_row = db.scalar(
+            select(Assignment).where(
+                Assignment.revision_id == published.id,
+                Assignment.status == "OPEN",
+            )
+        )
+        db.add(
+            OpenPositionApplication(
+                revision_id=published.id,
+                slot_key=open_row.slot_key,
+                person_id=person_id,
+            )
+        )
+        db.commit()
+        old_operation_id = old_operation.id
+        old_travel_id = old_travel.id
+
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    moved = manager.post(
+        f"/manage/workdays/{workday_id}/reschedule",
+        data={
+            "new_date": "2026-11-14",
+            "confirm_move": "true",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert moved.status_code == 303, moved.text
+    replacement_id = uuid.UUID(moved.headers["location"].split("/")[2].split("?")[0])
+    with factory() as db:
+        replacement = db.get(Workday, replacement_id)
+        new_travel = db.scalar(
+            select(Workday).where(Workday.generated_from_workday_id == replacement.id)
+        )
+        assert db.get(Workday, old_travel_id).status == "ABANDONED"
+        assert db.get(Operation, old_operation_id) is not None
+        assert list(
+            db.scalars(select(TravelLeg).where(TravelLeg.operation_id == old_operation_id))
+        )
+        assert replacement.operation_id != old_operation_id
+        assert new_travel is not None and new_travel.status == "SCHEDULED"
+        assert new_travel.current_published_revision_id is not None
+        move_events = list(
+            db.scalars(
+                select(NotificationEvent).where(
+                    NotificationEvent.event_type == "ROSTER_PUBLISHED",
+                    NotificationEvent.workday_id.in_([replacement.id, new_travel.id]),
+                )
+            )
+        )
+        assert len(move_events) == 1 and move_events[0].workday_id == replacement.id
+        assert list(
+            db.scalars(
+                select(TravelLeg).where(TravelLeg.operation_id == replacement.operation_id)
+            )
+        )
+        assert not list(
+            db.scalars(
+                select(OpenPositionApplication).join(
+                    WorkdayRevision,
+                    WorkdayRevision.id == OpenPositionApplication.revision_id,
+                ).where(WorkdayRevision.workday_id == replacement.id)
+            )
+        )
+        employee = db.scalar(select(User).where(User.email == "amy@example.test"))
+        actor = actor_for(db, employee)
+        rows = published_hours(
+            db,
+            actor=actor,
+            start=date(2026, 11, 1),
+            end=date(2026, 11, 30),
+            management=False,
+        )
+        race_rows = [row for row in rows if row["category"] == "Race Day"]
+        assert len(race_rows) == 1 and race_rows[0]["date"] == date(2026, 11, 14)
+        assert all(row["date"] != date(2026, 11, 12) for row in rows)
 
 
 def test_manager_publish_employee_visibility_and_route_authorization(routed_db) -> None:  # type: ignore[no-untyped-def]
