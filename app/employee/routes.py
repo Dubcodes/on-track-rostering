@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
 from app.audit.service import record_audit
+from app.auth.factors import remaining_recovery_codes
 from app.auth.network import resolve_request
 from app.auth.policy import (
     can_crew_view,
@@ -869,6 +870,7 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
                 )
             ),
             totp_factor=db.get(TotpFactor, request.state.user.id),
+            recovery_code_count=remaining_recovery_codes(db, request.state.user.id),
             notification_preference=db.get(NotificationPreference, request.state.user.id),
             calendar_preference=calendar_preference(db, request.state.user.id),
             push_subscriptions=list(

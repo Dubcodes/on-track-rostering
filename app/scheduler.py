@@ -16,6 +16,7 @@ from app.external_calendar.http import SourceHTTPClient
 from app.external_calendar.refresh import ensure_provider_states, refresh_provider
 from app.identity.contractor_access import refresh_all_contractor_access
 from app.notifications.service import generate_periodic_digests, generate_reminders, process_pending
+from app.operations.heartbeat import run_scheduler_iteration
 from app.track_maps.service import due_tracks, refresh_automatic_map
 
 logger = logging.getLogger(__name__)
@@ -116,8 +117,12 @@ def main() -> None:
     interval = get_settings().scheduler_interval_seconds
     while True:
         try:
-            with SessionLocal() as db:
-                logger.info("scheduler_tick result=%s", scheduler_tick(db))
+            logger.info(
+                "scheduler_tick result=%s",
+                run_scheduler_iteration(
+                    scheduler_tick, session_factory=SessionLocal, logger=logger
+                ),
+            )
         except Exception:
             logger.exception("scheduler_tick_failed")
         time.sleep(interval)

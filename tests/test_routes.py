@@ -21,7 +21,7 @@ with warnings.catch_warnings():
 
 from app.audit.models import AuditEvent, HumanChange
 from app.audit.service import record_audit
-from app.auth.factors import begin_totp
+from app.auth.factors import begin_totp, generate_recovery_codes
 from app.auth.policy import actor_for
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
@@ -41,8 +41,10 @@ from app.identity.models import (
     Invitation,
     LoginThrottle,
     Person,
+    RecoveryCode,
     RoleGrant,
     SignupRequest,
+    TotpFactor,
     User,
     UserPersonLink,
 )
@@ -1000,6 +1002,66 @@ def _login(client: TestClient, email: str, pin: str) -> str:
     csrf = client.cookies.get("ontrack_csrf")
     assert csrf
     return csrf
+
+
+def test_recovery_code_completes_mfa_login_once_without_audit_disclosure(
+    routed_db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    from app.auth import factors as factor_module
+
+    settings = factor_module.get_settings().model_copy(update={"mfa_required_admin": True})
+    monkeypatch.setattr(factor_module, "get_settings", lambda: settings)
+    with factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.test"))
+        db.add(
+            TotpFactor(
+                user_id=admin.id,
+                encrypted_secret=b"recovery-login-does-not-read-this",
+                confirmed_at=utcnow(),
+            )
+        )
+        code = generate_recovery_codes(db, admin.id)[0]
+        db.commit()
+
+    client = TestClient(app)
+    primary = client.post(
+        "/login",
+        data={"email": "admin@example.test", "credential": "99887766", "next": "/admin"},
+        follow_redirects=False,
+    )
+    assert primary.status_code == 303
+    challenge_id = parse_qs(urlsplit(primary.headers["location"]).query)["challenge_id"][0]
+    recovered = client.post(
+        "/login/totp",
+        data={"challenge_id": challenge_id, "recovery_code": code, "next": "/admin"},
+        follow_redirects=False,
+    )
+    assert recovered.status_code == 303
+    assert recovered.headers["location"] == "/admin"
+    with factory() as db:
+        row = db.scalar(select(RecoveryCode).where(RecoveryCode.user_id == admin.id))
+        event = db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "mfa.recovery_code_used")
+        )
+        assert row.used_at is not None
+        assert event is not None and code not in str(event.detail)
+
+    second_primary = client.post(
+        "/login",
+        data={"email": "admin@example.test", "credential": "99887766", "next": "/admin"},
+        follow_redirects=False,
+    )
+    second_challenge = parse_qs(urlsplit(second_primary.headers["location"]).query)[
+        "challenge_id"
+    ][0]
+    reused = client.post(
+        "/login/totp",
+        data={"challenge_id": second_challenge, "recovery_code": code, "next": "/admin"},
+    )
+    assert reused.status_code == 400
+    assert "Authentication code was not accepted." in reused.text
+    assert code not in reused.text
 
 
 def test_leave_management_picker_preview_privacy_and_authorization(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -3250,6 +3312,77 @@ def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore
     )
     assert completed.status_code == 303
     assert manager_client.cookies.get("ontrack_session")
+
+
+def test_totp_confirmation_shows_recovery_codes_once_and_lifecycle_is_fresh_auth(
+    routed_db,
+) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    client = TestClient(app)
+    csrf = _login(client, "admin@example.test", "99887766")
+    begun = client.post("/settings/totp/begin", data={"csrf_token": csrf})
+    assert begun.status_code == 200
+    secret_match = re.search(r"Manual key: <code>([A-Z2-7]+)</code>", begun.text)
+    assert secret_match
+    confirmed = client.post(
+        "/settings/totp/confirm",
+        data={"csrf_token": csrf, "code": pyotp.TOTP(secret_match.group(1)).now()},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.headers["cache-control"] == "no-store"
+    codes = re.findall(r"<code>([0-9A-F-]{19})</code>", confirmed.text)
+    assert len(codes) == 10
+    with factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.test"))
+        original_hashes = set(
+            db.scalars(select(RecoveryCode.code_hash).where(RecoveryCode.user_id == admin.id))
+        )
+        assert len(original_hashes) == 10
+        assert not any(code in original_hashes for code in codes)
+
+    settings_page = client.get("/settings")
+    assert all(code not in settings_page.text for code in codes)
+    assert "10 remaining" in settings_page.text
+    regenerated = client.post(
+        "/settings/totp/recovery-codes", data={"csrf_token": csrf}
+    )
+    assert regenerated.status_code == 200
+    replacement_codes = re.findall(r"<code>([0-9A-F-]{19})</code>", regenerated.text)
+    assert len(replacement_codes) == 10
+    with factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.test"))
+        replacement_hashes = set(
+            db.scalars(select(RecoveryCode.code_hash).where(RecoveryCode.user_id == admin.id))
+        )
+        assert len(replacement_hashes) == 10
+        assert replacement_hashes.isdisjoint(original_hashes)
+
+    removed = client.post(
+        "/settings/totp/recovery-codes/remove",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert removed.status_code == 303
+    with factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.test"))
+        assert not list(
+            db.scalars(select(RecoveryCode).where(RecoveryCode.user_id == admin.id))
+        )
+    regenerated = client.post(
+        "/settings/totp/recovery-codes", data={"csrf_token": csrf}
+    )
+    assert regenerated.status_code == 200
+    disabled = client.post(
+        "/settings/totp/disable",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert disabled.status_code == 303
+    with factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.test"))
+        assert not list(
+            db.scalars(select(RecoveryCode).where(RecoveryCode.user_id == admin.id))
+        )
 
 
 def test_global_product_branding_is_persistent_admin_only_and_escaped(routed_db) -> None:  # type: ignore[no-untyped-def]

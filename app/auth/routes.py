@@ -9,9 +9,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.service import record_audit
 from app.auth.factors import (
     active_totp,
     consume_challenge,
+    consume_recovery_code,
     create_challenge,
     mfa_required,
     verify_totp_factor,
@@ -129,7 +131,8 @@ def totp_login_page(request: Request, challenge_id: str, next: str = "/month"):
 def totp_login(
     request: Request,
     challenge_id: uuid.UUID = Form(...),
-    code: str = Form(...),
+    code: str = Form(""),
+    recovery_code: str = Form(""),
     next: str = Form("/month"),
     db: Session = Depends(get_db),
 ):
@@ -160,14 +163,22 @@ def totp_login(
             status_code=400,
             headers={"Cache-Control": "no-store"},
         )
-    if not verify_totp_factor(factor, code):
+    used_recovery = bool(recovery_code.strip())
+    accepted = (
+        consume_recovery_code(db, user.id, recovery_code)
+        if used_recovery
+        else verify_totp_factor(factor, code)
+    )
+    if not accepted:
         db.commit()
         return templates.TemplateResponse(
             "totp_login.html",
-            context(request, challenge_id=challenge_id, next=next, error="Authenticator code was not accepted."),
+            context(request, challenge_id=challenge_id, next=next, error="Authentication code was not accepted."),
             status_code=400,
             headers={"Cache-Control": "no-store"},
         )
+    if used_recovery:
+        record_audit(db, "mfa.recovery_code_used", "user", user.id, user.id)
     db.commit()
     raw_session, raw_csrf, device = create_device(
         db, user, request.headers.get("user-agent", "Browser")[:120]

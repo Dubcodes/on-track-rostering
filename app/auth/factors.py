@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -11,15 +12,75 @@ import pyotp
 import qrcode
 from cryptography.fernet import Fernet, InvalidToken
 from qrcode.image.svg import SvgPathImage
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 from webauthn import base64url_to_bytes
 
+from app.auth.security import token_hash
 from app.branding.service import branding_for
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import utcnow
-from app.identity.models import RoleGrant, TotpFactor, User, WebAuthnChallenge
+from app.identity.models import RecoveryCode, RoleGrant, TotpFactor, User, WebAuthnChallenge
+
+RECOVERY_CODE_COUNT = 10
+
+
+def normalize_recovery_code(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]", "", value).upper()
+    return normalized if re.fullmatch(r"[0-9A-F]{16}", normalized) else ""
+
+
+def generate_recovery_codes(db: Session, user_id: uuid.UUID) -> list[str]:
+    db.execute(
+        delete(RecoveryCode).where(
+            RecoveryCode.user_id == user_id, RecoveryCode.used_at.is_(None)
+        )
+    )
+    raw_codes: list[str] = []
+    normalized_codes: set[str] = set()
+    while len(raw_codes) < RECOVERY_CODE_COUNT:
+        normalized = secrets.token_hex(8).upper()
+        if normalized in normalized_codes:
+            continue
+        normalized_codes.add(normalized)
+        raw_codes.append("-".join(normalized[index:index + 4] for index in range(0, 16, 4)))
+        db.add(RecoveryCode(user_id=user_id, code_hash=token_hash(normalized)))
+    db.flush()
+    return raw_codes
+
+
+def remaining_recovery_codes(db: Session, user_id: uuid.UUID) -> int:
+    return int(
+        db.scalar(
+            select(func.count(RecoveryCode.id)).where(
+                RecoveryCode.user_id == user_id, RecoveryCode.used_at.is_(None)
+            )
+        )
+        or 0
+    )
+
+
+def consume_recovery_code(
+    db: Session, user_id: uuid.UUID, candidate: str, *, now: datetime | None = None
+) -> bool:
+    normalized = normalize_recovery_code(candidate)
+    if not normalized:
+        return False
+    row = db.scalar(
+        select(RecoveryCode)
+        .where(
+            RecoveryCode.user_id == user_id,
+            RecoveryCode.code_hash == token_hash(normalized),
+            RecoveryCode.used_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if row is None:
+        return False
+    row.used_at = now or utcnow()
+    db.flush()
+    return True
 
 
 def _fernet() -> Fernet:

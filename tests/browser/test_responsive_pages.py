@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 from playwright.sync_api import Page, sync_playwright
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
@@ -26,7 +26,15 @@ from app.external_calendar.models import (
     ExternalEventObservation,
     ExternalProviderState,
 )
-from app.identity.models import Person, RoleGrant, TrustedDevice, User, UserPersonLink
+from app.identity.models import (
+    Person,
+    RecoveryCode,
+    RoleGrant,
+    TotpFactor,
+    TrustedDevice,
+    User,
+    UserPersonLink,
+)
 from app.notices.models import OperationalNotice
 from app.notifications.models import NotificationPreference
 from app.rostering.models import (
@@ -927,6 +935,54 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
         assert page.get_by_role("heading", name=heading, exact=True).count() == 1
         _assert_no_horizontal_overflow(page)
         _capture_page(page, f"help-{context_key}-{width}.png")
+    context.close()
+
+
+@pytest.mark.parametrize("width", [430, 375, 320])
+def test_recovery_codes_and_readiness_are_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["admin"])
+
+    page.goto(base_url + "/admin")
+    assert page.get_by_role("heading", name="Background scheduler").is_visible()
+    assert page.get_by_role("heading", name="Deployment readiness").is_visible()
+    _assert_no_horizontal_overflow(page)
+
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.email == values["admin"][0]))
+        db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == admin.id))
+        db.execute(delete(TotpFactor).where(TotpFactor.user_id == admin.id))
+        db.add(
+            TotpFactor(
+                user_id=admin.id,
+                encrypted_secret=b"browser-recovery-regeneration-does-not-decrypt",
+                confirmed_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    page.goto(base_url + "/settings#totp")
+    page.locator("#totp details > summary").click()
+    page.get_by_role("button", name="Regenerate recovery codes").click()
+    page.wait_for_url("**/settings/totp/recovery-codes")
+    assert page.get_by_role("heading", name="Save your recovery codes").is_visible()
+    assert page.locator(".recovery-codes li code").count() == 10
+    _assert_no_horizontal_overflow(page)
+    page.get_by_role("link", name="I have saved these codes").click()
+    page.wait_for_url("**/settings#totp")
+    page.locator("#totp details > summary").click()
+    assert page.get_by_text("Recovery codes:", exact=False).is_visible()
+    assert page.get_by_text("10 remaining", exact=False).is_visible()
+    assert page.locator(".recovery-codes li code").count() == 0
+    _assert_no_horizontal_overflow(page)
+
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.email == values["admin"][0]))
+        db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == admin.id))
+        db.execute(delete(TotpFactor).where(TotpFactor.user_id == admin.id))
+        db.commit()
     context.close()
 
     employee_context = browser.new_context(viewport={"width": width, "height": 900})

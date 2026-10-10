@@ -16,6 +16,8 @@ Production passkeys require `ONTRACK_WEBAUTHN_RP_ID` and the exact HTTPS `ONTRAC
 
 Web Push is disabled until `ONTRACK_VAPID_PUBLIC_KEY` and `ONTRACK_VAPID_PRIVATE_KEY` contain real deployment values and `ONTRACK_VAPID_SUBJECT` identifies the deployment operator. Keep the private key in Portainer secrets/environment, never Git. The existing scheduler service automatically generates due two-day, night-before, and one-hour reminders plus periodic digests, then processes the notification outbox every five minutes. Missing VAPID keys produce a quiet disabled result. Generation and delivery are deterministic and events are claimed transactionally with expiring leases. `python -m app.cli deliver-notifications --limit 50` remains available for operator diagnostics or a deliberate manual run; no external notification cron is required.
 
+Each scheduler iteration writes started/completed/failed state in independent database transactions. `/health/scheduler` returns success only for a recent completed iteration; Admin shows the same heartbeat and notification status. Use `python -m app.cli production-check` before promotion. It reports safe PASS/WARN/FAIL messages for deployment configuration, database reachability, build identity, and scheduler health without printing secret values.
+
 The database has no host port. `db` readiness gates app startup; app startup runs Alembic before Gunicorn. Both services restart unless stopped. `TZ=Pacific/Auckland` controls operational display while stored timestamps are timezone-aware UTC.
 
 Before an upgrade, take and verify a logical backup and review every new Alembic revision. Redeploy only a green `main`. The application runs forward migrations at startup; rolling application code back does not automatically downgrade the database. If application rollback is required, prefer code compatible with the migrated schema. Run an Alembic downgrade only as a deliberate maintenance action after validating its data impact and restore path.
@@ -25,20 +27,12 @@ After first startup:
 ```sh
 docker compose exec app python -m app.cli create-admin
 docker compose exec app python -m app.cli regions
+docker compose exec app python -m app.cli production-check
 ```
 
-## PostgreSQL backup
+## Backup and restore
 
-Use a deployment-owned backup location outside the public app and database volume. A supported logical backup is:
-
-```sh
-pg_dump --format=custom --dbname="$DATABASE_URL" --file="ontrack-YYYYMMDD-HHMM.dump"
-pg_restore --list "ontrack-YYYYMMDD-HHMM.dump"
-```
-
-Record size, SHA-256, PostgreSQL version, creation time, and application revision. Periodically restore into a disposable PostgreSQL database, run migrations, query seed/master/history counts, and open a known published day. A backup is not considered verified merely because `pg_dump` exited zero.
-
-Restore is an offline operator action: stop app writes, create a fresh target database, run `pg_restore --clean --if-exists` only against that explicitly verified disposable/new target, migrate, validate, then switch connection configuration. Never test restore against production.
+Back up both PostgreSQL and `/app/data`; the Admin data export is not a disaster-recovery backup. Follow [BACKUP_RESTORE.md](BACKUP_RESTORE.md) for exact production backup commands, an isolated staging restore rehearsal, and the emergency production procedure.
 
 ## Private staging
 

@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}Recovery codes · {{ branding.product_name }}{% endblock %}
+{% block content %}<section class="auth-card recovery-codes"><p class="eyebrow">Authenticator MFA</p><h1>Save your recovery codes</h1><div class="alert">These codes are shown once only. Save them somewhere safe before leaving this page. Each code works once and cannot be displayed again.</div><ol>{% for code in recovery_codes %}<li><code>{{ code }}</code></li>{% endfor %}</ol><a class="button" href="/settings#totp">I have saved these codes</a></section>{% endblock %}

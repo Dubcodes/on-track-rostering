@@ -6,7 +6,7 @@ from html import escape
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from webauthn import (
     base64url_to_bytes,
@@ -31,6 +31,7 @@ from app.auth.factors import (
     client_challenge,
     consume_challenge,
     create_challenge,
+    generate_recovery_codes,
     verify_totp_factor,
 )
 from app.auth.security import (
@@ -43,7 +44,8 @@ from app.auth.service import activate_pending_grants
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.time import utcnow
-from app.identity.models import PasskeyCredential, TotpFactor, TrustedDevice, User
+from app.identity.models import PasskeyCredential, RecoveryCode, TotpFactor, TrustedDevice, User
+from app.web import context, templates
 
 router = APIRouter()
 
@@ -276,7 +278,7 @@ def begin_totp_setup(
     )
 
 
-@router.post("/settings/totp/confirm")
+@router.post("/settings/totp/confirm", response_class=HTMLResponse)
 def confirm_totp(
     request: Request,
     code: str = Form(...),
@@ -289,10 +291,57 @@ def confirm_totp(
     if not factor or factor.confirmed_at is not None or not verify_totp_factor(factor, code):
         raise HTTPException(400, "Authenticator code could not be verified.")
     factor.confirmed_at = utcnow()
+    codes = generate_recovery_codes(db, request.state.user.id)
     record_audit(db, "totp.enabled", "user", request.state.user.id, request.state.user.id)
     _record_security_change(db, request)
     db.commit()
-    return RedirectResponse("/settings?totp=enabled#totp", status_code=303)
+    return templates.TemplateResponse(
+        "recovery_codes.html",
+        context(request, recovery_codes=codes),
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+@router.post("/settings/totp/recovery-codes", response_class=HTMLResponse)
+def regenerate_recovery_codes(
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    if not active_totp(db, request.state.user.id):
+        raise HTTPException(409, "Authenticator MFA is not enabled.")
+    codes = generate_recovery_codes(db, request.state.user.id)
+    record_audit(
+        db, "mfa.recovery_codes_regenerated", "user", request.state.user.id,
+        request.state.user.id,
+    )
+    _record_security_change(db, request)
+    db.commit()
+    return templates.TemplateResponse(
+        "recovery_codes.html",
+        context(request, recovery_codes=codes),
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+@router.post("/settings/totp/recovery-codes/remove")
+def remove_recovery_codes(
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == request.state.user.id))
+    record_audit(
+        db, "mfa.recovery_codes_removed", "user", request.state.user.id,
+        request.state.user.id,
+    )
+    _record_security_change(db, request)
+    db.commit()
+    return RedirectResponse("/settings?recovery_codes=removed#totp", status_code=303)
 
 
 @router.post("/settings/totp/disable")
@@ -307,6 +356,7 @@ def disable_totp(
     if not factor:
         raise HTTPException(409, "Authenticator MFA is not enabled.")
     factor.disabled_at = utcnow()
+    db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == request.state.user.id))
     record_audit(db, "totp.disabled", "user", request.state.user.id, request.state.user.id)
     _record_security_change(db, request)
     db.commit()

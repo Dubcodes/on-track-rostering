@@ -27,6 +27,7 @@ from app.hours.routes import router as hours_router
 from app.notices.routes import router as notices_router
 from app.notifications.routes import router as notifications_router
 from app.open_positions.routes import router as open_positions_router
+from app.operations.heartbeat import scheduler_health
 from app.rostering.routes import router as rostering_router
 from app.track_maps.routes import router as track_maps_router
 from app.unavailability.routes import router as unavailability_router
@@ -93,6 +94,18 @@ def ready() -> dict[str, str]:
     with SessionLocal() as db:
         db.execute(text("SELECT 1"))
     return {"status": "ready"}
+
+
+@app.get("/health/scheduler", include_in_schema=False)
+def scheduler_health_endpoint() -> JSONResponse:
+    with SessionLocal() as db:
+        health = scheduler_health(
+            db, interval_seconds=get_settings().scheduler_interval_seconds
+        )
+    payload: dict[str, object] = {"status": health.status}
+    if health.last_completed_at:
+        payload["last_completed_at"] = health.last_completed_at.isoformat()
+    return JSONResponse(payload, status_code=200 if health.status == "ok" else 503)
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)

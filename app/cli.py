@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.housekeeping.service import terminal_housekeeping
 from app.notifications.service import generate_periodic_digests, generate_reminders, process_pending
+from app.operations.readiness import evaluate_readiness
 
 
 def create_admin_command(args: argparse.Namespace) -> int:
@@ -58,6 +59,14 @@ def housekeeping_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def production_check_command(_: argparse.Namespace) -> int:
+    with SessionLocal() as db:
+        result = evaluate_readiness(db)
+    for check in result.checks:
+        print(f"{check.status}: {check.name} — {check.message}")
+    return 0 if result.ready else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(required=True)
@@ -80,6 +89,10 @@ def main() -> int:
         "--dry-run", action="store_true", help="report eligible records without deleting them"
     )
     housekeeping.set_defaults(func=housekeeping_command)
+    production_check = sub.add_parser(
+        "production-check", help="evaluate production configuration and runtime readiness"
+    )
+    production_check.set_defaults(func=production_check_command)
     args = parser.parse_args()
     return args.func(args)
 

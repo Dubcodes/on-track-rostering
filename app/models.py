@@ -8,6 +8,7 @@ from app.external_calendar import models as external_calendar_models  # noqa: F4
 from app.identity import models as identity_models  # noqa: F401
 from app.notices import models as notice_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401
+from app.operations import models as operations_models  # noqa: F401
 from app.rostering import models as rostering_models  # noqa: F401
 from app.system_settings import models as system_settings_models  # noqa: F401
 from app.unavailability import models as unavailability_models  # noqa: F401

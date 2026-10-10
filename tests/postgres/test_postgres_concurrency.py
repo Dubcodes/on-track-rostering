@@ -15,6 +15,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
     from fastapi.testclient import TestClient
 
+from app.auth.factors import consume_recovery_code, generate_recovery_codes
 from app.auth.policy import Actor
 from app.auth.security import hash_credential
 from app.auth.service import activate_pending_grants
@@ -25,7 +26,7 @@ from app.core.time import local_today, utcnow
 from app.external_calendar.detail_refresh import due_love_racing_events
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
 from app.external_calendar.service import adopt_external_event
-from app.identity.models import Person, RoleGrant, User, UserPersonLink
+from app.identity.models import Person, RecoveryCode, RoleGrant, User, UserPersonLink
 from app.main import app
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
 from app.notifications.service import encrypt_subscription, generate_reminders, process_pending
@@ -825,3 +826,47 @@ def test_concurrent_reschedule_creates_only_one_direct_replacement(pg_factory) -
             )
         )
         assert len(direct) == 1 and direct[0].id == replacements[0]
+
+
+def test_recovery_code_is_consumed_once_under_concurrency(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    with pg_factory() as db:
+        user = User(
+            email=f"recovery-{suffix}@example.com",
+            display_name="Recovery User",
+            credential_hash=hash_credential("123456"),
+            credential_kind="pin",
+        )
+        db.add(user)
+        db.flush()
+        code = generate_recovery_codes(db, user.id)[0]
+        user_id = user.id
+        db.commit()
+
+    barrier = threading.Barrier(2)
+    results: list[bool] = []
+    errors: list[Exception] = []
+
+    def consume() -> None:
+        try:
+            with pg_factory() as db:
+                barrier.wait()
+                results.append(consume_recovery_code(db, user_id, code))
+                db.commit()
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=consume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert errors == []
+    assert sorted(results) == [False, True]
+    with pg_factory() as db:
+        assert db.scalar(
+            select(func.count()).select_from(RecoveryCode).where(
+                RecoveryCode.user_id == user_id,
+                RecoveryCode.used_at.is_not(None),
+            )
+        ) == 1

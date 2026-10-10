@@ -5,18 +5,22 @@ from datetime import timedelta
 
 import pyotp
 import pytest
+from sqlalchemy import select
 
 from app.auth.factors import (
     active_totp,
     begin_totp,
     consume_challenge,
+    consume_recovery_code,
     create_challenge,
     decrypt_totp_secret,
+    generate_recovery_codes,
+    remaining_recovery_codes,
     verify_totp_factor,
 )
 from app.auth.security import hash_credential
 from app.core.time import utcnow
-from app.identity.models import User
+from app.identity.models import RecoveryCode, User
 
 
 def _user(db) -> User:  # type: ignore[no-untyped-def]
@@ -102,3 +106,34 @@ def test_webauthn_challenge_is_bound_expiring_and_one_time(db) -> None:  # type:
             purpose="PASSKEY_AUTH",
             raw_challenge=expired_raw,
         )
+
+
+def test_recovery_codes_are_hashed_scoped_single_use_and_replace_unused(db) -> None:  # type: ignore[no-untyped-def]
+    user = _user(db)
+    other = User(
+        email="other-factor@example.test",
+        display_name="Other Factor User",
+        credential_hash=hash_credential("123456"),
+        credential_kind="pin",
+    )
+    db.add(other)
+    db.commit()
+
+    codes = generate_recovery_codes(db, user.id)
+    db.commit()
+    rows = list(db.scalars(select(RecoveryCode).where(RecoveryCode.user_id == user.id)))
+    assert len(codes) == len(rows) == 10
+    assert remaining_recovery_codes(db, user.id) == 10
+    assert all(code not in {row.code_hash for row in rows} for code in codes)
+    assert all(len(row.code_hash) == 64 for row in rows)
+    assert not consume_recovery_code(db, other.id, codes[0])
+    assert consume_recovery_code(db, user.id, codes[0].lower().replace("-", " "))
+    assert not consume_recovery_code(db, user.id, codes[0])
+    assert remaining_recovery_codes(db, user.id) == 9
+    db.commit()
+
+    replacement = generate_recovery_codes(db, user.id)
+    db.commit()
+    assert len(replacement) == 10
+    assert remaining_recovery_codes(db, user.id) == 10
+    assert not consume_recovery_code(db, user.id, codes[1])

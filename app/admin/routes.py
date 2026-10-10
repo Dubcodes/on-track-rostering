@@ -36,6 +36,8 @@ from app.identity.models import (
     User,
     UserPersonLink,
 )
+from app.operations.heartbeat import scheduler_health
+from app.operations.readiness import evaluate_readiness
 from app.system_settings.service import update_operational_settings
 from app.web import context, templates
 
@@ -71,12 +73,18 @@ def _active_reference(db: Session, model, raw_id: str, label: str):  # type: ign
 @router.get("", response_class=HTMLResponse)
 def admin_page(request: Request, db: Session = Depends(get_db)):
     _admin(request)
+    settings = get_settings()
+    scheduler = scheduler_health(db, interval_seconds=settings.scheduler_interval_seconds)
+    readiness = evaluate_readiness(db, settings=settings)
     return templates.TemplateResponse(
         "admin.html",
         context(
             request,
-            retention_days=get_settings().retention_days,
+            retention_days=settings.retention_days,
             retention_from_environment="ONTRACK_RETENTION_DAYS" in os.environ,
+            scheduler_health=scheduler,
+            readiness_checks=readiness.checks,
+            readiness_ready=readiness.ready,
         ),
     )
 

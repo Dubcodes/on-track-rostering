@@ -36,6 +36,8 @@ No other row is pre-qualified.
 |---|---|---|
 | `GET /health/live` returns healthy | PENDING | Record status and response. |
 | `GET /health/ready` reaches PostgreSQL | PENDING | Record status and response. |
+| `GET /health/scheduler` reports a recent completed tick | PENDING | Confirm 200 and a fresh completion timestamp after the scheduler starts. |
+| Admin deployment-readiness panel and `production-check` agree | PENDING | Record statuses only; never record configured values. |
 | App container reports healthy | PENDING | Record Portainer health only; do not expose secrets. |
 | PostgreSQL container reports healthy | PENDING | Record health only. |
 | Startup migration reaches Alembic head | PENDING | Review startup log after redeploy. |
@@ -90,7 +92,10 @@ Configured staging origin must be exactly `https://ontrackrostering.dubcodesmedi
 | Invalid TOTP code is rejected | PENDING | Do not trigger uncontrolled lockout. |
 | Accepted code cannot be replayed | PENDING | Reuse the same timestep code where practical. |
 | Disable factor | PENDING | Confirm fresh-auth requirement and subsequent login. |
-| Recovery codes | NOT IN CURRENT SCOPE | Recovery codes are not implemented. |
+| Ten recovery codes appear once after confirmation | PENDING | Store them safely; do not capture them in evidence. |
+| Recovery-code login and single-use rejection | PENDING | Use a demo code, then confirm reuse fails generically. |
+| Regeneration invalidates unused predecessors | PENDING | Demo account only; do not record either set. |
+| Disabling TOTP removes recovery codes | PENDING | Confirm subsequent recovery login is unavailable. |
 
 ## Branding and global settings
 
@@ -151,6 +156,7 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Tracks create/update/archive and colours | PENDING | Include duplicate within region and invalid colour. |
 | Crew groups create/update/archive | PENDING | Include duplicate name. |
 | Base positions create/update/archive | PENDING | Include duplicate within group. |
+| Position presets persist and remain region-scoped | PENDING | Create, edit, apply, and reload a demo preset. |
 | People create/update/archive | PENDING | Include invalid region and linked lifecycle behavior. |
 | Invalid UUID/reference inputs are controlled | PENDING | Crafted Person/Region/Track/Position values must not yield 500. |
 | Cross-region administration is denied | PENDING | Manager outside scope. |
@@ -187,6 +193,7 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Edit published day clones current publication | PENDING | Confirm stable slot keys and private draft. |
 | Republish/history/human diff | PENDING | Include a change reason. |
 | Date change behavior | PENDING | Old publication remains immutable in history. |
+| Reschedule published Workday | PENDING | Confirm a new linked Workday/publication and preserved source history. |
 
 ## Concurrency and stale writes
 
@@ -246,6 +253,7 @@ Use two independent browser profiles or sessions on the same Workday.
 | Multiple assignments combine | PENDING | Earliest start, latest finish, no duplicated time. |
 | Overnight work | PENDING | Correct cross-midnight duration. |
 | Fortnight totals/boundaries | PENDING | Correct anchor and grouping. |
+| Persisted fortnight anchor | PENDING | Change the Admin setting and confirm Hours uses it after reload. |
 | Public/regional holiday marker | PENDING | Person geography drives empty-cell marker. |
 | Break deduction | PENDING | No automatic deduction. |
 | Allowances | PENDING | Informational and do not increase hours. |
@@ -272,7 +280,7 @@ Use two independent browser profiles or sessions on the same Workday.
 | Enable on this device UX | PENDING | Record configured/unconfigured message. |
 | Real Web Push provider delivery | PENDING | Keep pending if staging VAPID is absent; never fake a pass. |
 | Event generation is distinct from delivery | PENDING | Review redacted worker/database evidence. |
-| Durable scheduler invokes worker | PENDING | Required command: `python -m app.cli deliver-notifications`; production scheduler is separate. |
+| Durable scheduler invokes worker | PENDING | Observe scheduler heartbeat and notification status; the manual CLI remains diagnostic only. |
 
 ## Responsive and real devices
 
@@ -308,6 +316,7 @@ Test desktop plus 430px, 375px, and 320px. On each applicable width inspect Logi
 | Full stack restart | PENDING | Perform only when operationally appropriate. |
 | PostgreSQL volume persists | PENDING | Never delete/recreate the volume for this test. |
 | Logical backup/restore rehearsal | PENDING | May remain pending until production-promotion phase. |
+| Both database and app-data are restored | PENDING | Follow `BACKUP_RESTORE.md` against isolated staging only. |
 
 ## Production-promotion work
 
@@ -319,8 +328,7 @@ These items do not block active staging development unless they reveal a structu
 | Production secrets and credential rotation | NOT IN CURRENT SCOPE | Deployment operator work. |
 | Production hostname and WebAuthn RP identity | NOT IN CURRENT SCOPE | Freeze before enrolment. |
 | Production VAPID and real Push qualification | NOT IN CURRENT SCOPE | Requires provider/device setup. |
-| Durable production reminder scheduler | NOT IN CURRENT SCOPE | External scheduler required. |
 | Production monitoring/alerting | NOT IN CURRENT SCOPE | Operations design. |
 | Branch protection/release controls | NOT IN CURRENT SCOPE | Production release governance. |
 | Immutable release tag/image | NOT IN CURRENT SCOPE | Required at Foundation freeze/promotion, not each active staging change. |
-| Abandoned/rescheduled workflow, logo upload, major recovery redesign | NOT IN CURRENT SCOPE | Future product phase. |
+| Logo upload and major recovery redesign | NOT IN CURRENT SCOPE | Future product phase. |
