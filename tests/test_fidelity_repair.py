@@ -859,6 +859,15 @@ def test_portainer_uses_shared_registry_images_with_production_pinning() -> None
     assert production.count(production_image) == 2
     assert "STAGING_ONTRACK_BUILD_ID" not in staging and "ONTRACK_BUILD_ID" not in production
     assert "STAGING_ONTRACK_IMAGE=ghcr.io/dubcodes/on-track-rostering:staging" in staging_example
+    staging_app, staging_scheduler = staging.split("  staging_scheduler:", 1)
+    for name in ("PUBLIC_KEY", "PRIVATE_KEY", "SUBJECT"):
+        staging_mapping = f"ONTRACK_VAPID_{name}: ${{STAGING_ONTRACK_VAPID_{name}:-"
+        assert staging_app.count(staging_mapping) == 1
+        assert staging_scheduler.count(staging_mapping) == 1
+        assert f"STAGING_ONTRACK_VAPID_{name}" not in production
+    assert "STAGING_ONTRACK_VAPID_PUBLIC_KEY=\n" in staging_example
+    assert "STAGING_ONTRACK_VAPID_PRIVATE_KEY=\n" in staging_example
+    assert "STAGING_ONTRACK_VAPID_SUBJECT=mailto:operations@example.com" in staging_example
     assert ".ontrack-build-id" in dockerfile and "sha256sum" in dockerfile
 
 
