@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import uuid
 import zipfile
 from datetime import date, time, timedelta
@@ -869,6 +870,45 @@ def test_portainer_uses_shared_registry_images_with_production_pinning() -> None
     assert "STAGING_ONTRACK_VAPID_PRIVATE_KEY=\n" in staging_example
     assert "STAGING_ONTRACK_VAPID_SUBJECT=mailto:operations@example.com" in staging_example
     assert ".ontrack-build-id" in dockerfile and "sha256sum" in dockerfile
+
+
+def test_compose_healthchecks_use_allowed_host_without_weakening_readiness(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    production = open("compose.yaml", encoding="utf-8").read()
+    staging = open("compose.staging.yaml", encoding="utf-8").read()
+    main_source = open("app/main.py", encoding="utf-8").read()
+    observed: list[tuple[str, str | None, int]] = []
+
+    def capture(request, *, timeout):  # type: ignore[no-untyped-def]
+        observed.append((request.full_url, request.get_header("Host"), timeout))
+        return object()
+
+    monkeypatch.setattr("urllib.request.urlopen", capture)
+    monkeypatch.setenv(
+        "ONTRACK_ALLOWED_HOSTS", "  roster.example.test, alternate.example.test  "
+    )
+    for content in (production, staging):
+        line = next(
+            row.strip()
+            for row in content.splitlines()
+            if row.strip().startswith('test: ["CMD", "python", "-c"')
+        )
+        command = json.loads(line.removeprefix("test: "))
+        assert command[:3] == ["CMD", "python", "-c"]
+        exec(command[3], {})  # noqa: S102 - the repository-owned Compose command is the contract
+        assert observed[-1] == (
+            "http://127.0.0.1:8000/health/ready",
+            "roster.example.test",
+            3,
+        )
+
+    assert "TrustedHostMiddleware" in main_source
+    ready_source = main_source.split('@app.get("/health/ready"', 1)[1].split(
+        '@app.get("/health/scheduler"', 1
+    )[0]
+    assert 'db.execute(text("SELECT 1"))' in ready_source
+    assert "scheduler_health" not in ready_source
+    assert "condition: service_healthy" in production.split("  scheduler:", 1)[1]
+    assert "condition: service_healthy" in staging.split("  staging_scheduler:", 1)[1]
 
 
 def test_runtime_build_id_cannot_override_embedded_image_identity(monkeypatch) -> None:  # type: ignore[no-untyped-def]
