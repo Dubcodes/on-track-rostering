@@ -35,6 +35,7 @@ from app.auth.security import (
 from app.auth.service import (
     activate_invitation,
     activate_pending_grants,
+    consume_credential_reset,
     normalise_email,
     validated_email,
 )
@@ -232,6 +233,47 @@ def invitation_activate(
             headers={"Cache-Control": "no-store"},
         )
     return RedirectResponse("/login?activated=1", status_code=303)
+
+
+@router.get("/credential-reset", response_class=HTMLResponse)
+def credential_reset_page(request: Request):
+    return templates.TemplateResponse(
+        "credential_reset.html",
+        context(request, token="", available=True, error=""),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/credential-reset/complete", response_class=HTMLResponse)
+def credential_reset_complete(
+    request: Request,
+    token: str = Form(""),
+    credential: str = Form(...),
+    confirmation: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if credential != confirmation:
+        return templates.TemplateResponse(
+            "credential_reset.html",
+            context(
+                request,
+                token=token,
+                available=True,
+                error="New credentials did not match.",
+            ),
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        consume_credential_reset(db, token, credential)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "credential_reset.html",
+            context(request, token=token, available=True, error=str(exc)),
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    return RedirectResponse("/login?credential=reset", status_code=303)
 
 
 @router.get("/signup", response_class=HTMLResponse)

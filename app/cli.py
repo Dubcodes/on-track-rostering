@@ -5,11 +5,12 @@ import getpass
 
 from sqlalchemy import select
 
-from app.auth.service import create_admin
+from app.auth.service import create_admin, normalise_email, reset_credential_from_cli
 from app.catalog.models import Region
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.housekeeping.service import terminal_housekeeping
+from app.identity.models import User
 from app.notifications.service import generate_periodic_digests, generate_reminders, process_pending
 from app.operations.readiness import evaluate_readiness
 
@@ -31,6 +32,24 @@ def show_regions(_: argparse.Namespace) -> int:
     with SessionLocal() as db:
         for region in db.scalars(select(Region).order_by(Region.name)):
             print(f"{region.id}  {region.name}  {region.lifecycle}")
+    return 0
+
+
+def reset_credential_command(args: argparse.Namespace) -> int:
+    secret = getpass.getpass("New password or PIN: ")
+    confirmation = getpass.getpass("Confirm credential: ")
+    if secret != confirmation:
+        raise SystemExit("Credentials did not match.")
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == normalise_email(args.email)))
+        if not user:
+            raise SystemExit("No account uses that email address.")
+        try:
+            reset_credential_from_cli(db, user, secret)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        display_name = user.display_name
+    print(f"Reset the primary credential for {display_name}.")
     return 0
 
 
@@ -76,6 +95,9 @@ def main() -> int:
     create.set_defaults(func=create_admin_command)
     regions = sub.add_parser("regions", help="list configured regions")
     regions.set_defaults(func=show_regions)
+    reset = sub.add_parser("reset-credential", help="reset an existing account credential")
+    reset.add_argument("--email", required=True)
+    reset.set_defaults(func=reset_credential_command)
     deliver = sub.add_parser("deliver-notifications", help="process pending Web Push outbox events")
     deliver.add_argument("--limit", type=int, default=50)
     deliver.set_defaults(func=deliver_notifications_command)

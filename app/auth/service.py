@@ -6,28 +6,166 @@ import uuid
 from datetime import UTC, timedelta
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
 from app.auth.policy import Actor, can_administer_person, can_administer_user, can_grant_role
-from app.auth.security import credential_error, hash_credential, token_hash
+from app.auth.security import credential_error, hash_credential, throttle_keys, token_hash
 from app.catalog.models import Region
 from app.core.enums import Role
 from app.core.time import utcnow
 from app.identity.models import (
+    CredentialReset,
     Invitation,
+    LoginThrottle,
     Person,
     RoleGrant,
     SignupRequest,
     TrustedDevice,
     User,
     UserPersonLink,
+    WebAuthnChallenge,
 )
+
+CREDENTIAL_RESET_MINUTES = 60
+CREDENTIAL_RESET_UNAVAILABLE = "This credential reset is invalid, expired, or already used."
 
 
 def normalise_email(email: str) -> str:
     return email.strip().casefold()
+
+
+def _credential_policy_role(db: Session, user_id: uuid.UUID) -> str:
+    has_admin_grant = bool(
+        db.scalar(
+            select(RoleGrant.id).where(
+                RoleGrant.user_id == user_id,
+                RoleGrant.role == Role.ADMIN.value,
+                RoleGrant.status.in_(["ACTIVE", "PENDING"]),
+            )
+        )
+    )
+    return Role.ADMIN.value if has_admin_grant else Role.EMPLOYEE.value
+
+
+def _apply_credential_reset(
+    db: Session,
+    user: User,
+    secret: str,
+    *,
+    action: str,
+) -> None:
+    if error := credential_error(secret, _credential_policy_role(db, user.id)):
+        raise ValueError(error)
+    now = utcnow()
+    user.credential_hash = hash_credential(secret)
+    user.credential_kind = "pin" if secret.isdigit() else "password"
+    user.credential_admin_eligible = not bool(credential_error(secret, Role.ADMIN.value))
+    user.auth_epoch += 1
+    db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    db.execute(
+        update(WebAuthnChallenge)
+        .where(
+            WebAuthnChallenge.user_id == user.id,
+            WebAuthnChallenge.consumed_at.is_(None),
+        )
+        .values(consumed_at=now)
+    )
+    account_throttle_key, _ = throttle_keys(user.email, "")
+    db.execute(delete(LoginThrottle).where(LoginThrottle.key_hash == account_throttle_key))
+    record_audit(db, action, "user", user.id, None)
+
+
+def create_credential_reset(
+    db: Session,
+    *,
+    user: User,
+    actor_user_id: uuid.UUID,
+) -> tuple[CredentialReset, str]:
+    if user.status != "ACTIVE":
+        raise ValueError("Credential resets are available only for active accounts.")
+    now = utcnow()
+    db.scalar(select(User.id).where(User.id == user.id).with_for_update())
+    db.execute(
+        update(CredentialReset)
+        .where(
+            CredentialReset.user_id == user.id,
+            CredentialReset.consumed_at.is_(None),
+            CredentialReset.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    raw = secrets.token_urlsafe(40)
+    reset = CredentialReset(
+        user_id=user.id,
+        token_hash=token_hash(raw),
+        created_by_user_id=actor_user_id,
+        created_at=now,
+        expires_at=now + timedelta(minutes=CREDENTIAL_RESET_MINUTES),
+    )
+    db.add(reset)
+    db.flush()
+    record_audit(db, "user.credential_reset.created", "user", user.id, actor_user_id)
+    db.commit()
+    return reset, raw
+
+
+def consume_credential_reset(db: Session, raw_token: str, secret: str) -> User:
+    reset = db.scalar(
+        select(CredentialReset)
+        .where(CredentialReset.token_hash == token_hash(raw_token))
+        .with_for_update()
+    )
+    now = utcnow()
+    expires_at = reset.expires_at if reset else None
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    user = db.get(User, reset.user_id) if reset else None
+    if (
+        not reset
+        or reset.consumed_at
+        or reset.revoked_at
+        or expires_at <= now
+        or not user
+        or user.status != "ACTIVE"
+    ):
+        raise ValueError(CREDENTIAL_RESET_UNAVAILABLE)
+    _apply_credential_reset(db, user, secret, action="user.credential_reset.completed")
+    reset.consumed_at = now
+    db.execute(
+        update(CredentialReset)
+        .where(
+            CredentialReset.user_id == user.id,
+            CredentialReset.id != reset.id,
+            CredentialReset.consumed_at.is_(None),
+            CredentialReset.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    db.commit()
+    return user
+
+
+def reset_credential_from_cli(db: Session, user: User, secret: str) -> None:
+    if user.status != "ACTIVE":
+        raise ValueError("Credential resets are available only for active accounts.")
+    _apply_credential_reset(db, user, secret, action="user.credential_reset.cli")
+    now = utcnow()
+    db.execute(
+        update(CredentialReset)
+        .where(
+            CredentialReset.user_id == user.id,
+            CredentialReset.consumed_at.is_(None),
+            CredentialReset.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    db.commit()
 
 
 def validated_email(email: str) -> str:

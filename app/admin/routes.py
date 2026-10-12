@@ -19,7 +19,7 @@ from app.auth.security import (
     require_fresh_auth,
     verify_csrf,
 )
-from app.auth.service import create_invitation, validated_email
+from app.auth.service import create_credential_reset, create_invitation, validated_email
 from app.branding.service import update_branding
 from app.catalog.models import BasePosition, CrewGroup, Region
 from app.core.config import get_settings
@@ -426,6 +426,40 @@ def update_user_status(
     )
     db.commit()
     return RedirectResponse("/manage/accounts#accounts", status_code=303)
+
+
+@router.post("/users/{user_id}/credential-reset")
+def issue_credential_reset(
+    user_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _admin(request)
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    if user_id == request.state.user.id:
+        raise HTTPException(400, "Use Settings to change your own credential.")
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404)
+    try:
+        _reset, raw = create_credential_reset(
+            db,
+            user=user,
+            actor_user_id=request.state.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return templates.TemplateResponse(
+        "credential_reset_created.html",
+        context(
+            request,
+            credential_reset_url=f"/credential-reset#token={raw}",
+            target_name=user.display_name,
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/users/{user_id}/devices/revoke")

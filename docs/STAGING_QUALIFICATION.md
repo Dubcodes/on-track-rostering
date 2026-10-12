@@ -62,6 +62,10 @@ No other row is pre-qualified.
 | Fresh reauthentication gates sensitive actions | PENDING | Allow the fresh window to expire, then test a sensitive action. |
 | Trusted-device lifetime/label behavior | PENDING | Check Settings and subsequent use. |
 | Credential change succeeds | PENDING | Demo account only. |
+| Admin-issued credential reset link | PENDING | Issue for another active demo account; privately copy the one-time fragment link and never record it as evidence. |
+| Credential reset is single-use and expires | PENDING | Complete one reset, confirm reuse fails generically, and allow a separate demo reset to pass 60 minutes. |
+| Credential reset invalidates old login state | PENDING | Confirm the old primary credential and existing trusted devices fail while the new credential works and configured MFA is still required. |
+| Local reset CLI | PENDING | Use a disposable demo account; enter the secret only through the two getpass prompts and confirm terminal/audit output contains no secret. |
 | Credential change invalidates other sessions | PENDING | Use two demo browser profiles. |
 | Role elevation rejects/reclassifies stale sessions | PENDING | Use a demo Employee promoted by Admin. |
 | Disabling an account invalidates its sessions | PENDING | Use a non-final-Admin demo account. |

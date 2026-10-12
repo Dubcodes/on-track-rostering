@@ -18,7 +18,12 @@ with warnings.catch_warnings():
 from app.auth.factors import consume_recovery_code, generate_recovery_codes
 from app.auth.policy import Actor
 from app.auth.security import hash_credential
-from app.auth.service import activate_pending_grants
+from app.auth.service import (
+    CREDENTIAL_RESET_UNAVAILABLE,
+    activate_pending_grants,
+    consume_credential_reset,
+    create_credential_reset,
+)
 from app.catalog.models import BasePosition, Region, Track
 from app.catalog.service import allocate_palette_slot
 from app.core.enums import Role
@@ -26,7 +31,7 @@ from app.core.time import local_today, utcnow
 from app.external_calendar.detail_refresh import due_love_racing_events
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
 from app.external_calendar.service import adopt_external_event
-from app.identity.models import Person, RecoveryCode, RoleGrant, User, UserPersonLink
+from app.identity.models import CredentialReset, Person, RecoveryCode, RoleGrant, User, UserPersonLink
 from app.main import app
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
 from app.notifications.service import encrypt_subscription, generate_reminders, process_pending
@@ -74,6 +79,55 @@ def _authority(factory) -> tuple[uuid.UUID, uuid.UUID]:  # type: ignore[no-untyp
         db.add(RoleGrant(user_id=user.id, role="MANAGER", region_id=region.id))
         db.commit()
         return user.id, region.id
+
+
+def test_postgres_credential_reset_token_has_exactly_one_consumer(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    with pg_factory() as db:
+        issuer = User(
+            email=f"reset-issuer-{suffix}@example.com",
+            display_name="Reset Issuer",
+            credential_hash=hash_credential("12345678"),
+            credential_kind="pin",
+        )
+        target = User(
+            email=f"reset-target-{suffix}@example.com",
+            display_name="Reset Target",
+            credential_hash=hash_credential("123456"),
+            credential_kind="pin",
+        )
+        db.add_all([issuer, target])
+        db.commit()
+        reset, raw = create_credential_reset(db, user=target, actor_user_id=issuer.id)
+        reset_id = reset.id
+
+    barrier = threading.Barrier(2)
+    successes: list[str] = []
+    failures: list[str] = []
+
+    def attempt(secret: str) -> None:
+        with pg_factory() as db:
+            barrier.wait(timeout=10)
+            try:
+                consume_credential_reset(db, raw, secret)
+                successes.append(secret)
+            except ValueError as exc:
+                db.rollback()
+                failures.append(str(exc))
+
+    threads = [
+        threading.Thread(target=attempt, args=(secret,))
+        for secret in ("654321", "765432")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert len(successes) == 1
+    assert failures == [CREDENTIAL_RESET_UNAVAILABLE]
+    with pg_factory() as db:
+        assert db.get(CredentialReset, reset_id).consumed_at is not None
 
 
 def test_postgres_programme_queries_deduplicate_json_events(pg_factory) -> None:  # type: ignore[no-untyped-def]

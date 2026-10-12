@@ -22,6 +22,8 @@ PUBLIC_PATHS = {
     "/signup",
     "/invite",
     "/invite/activate",
+    "/credential-reset",
+    "/credential-reset/complete",
     "/health/live",
     "/health/ready",
     "/manifest.webmanifest",

@@ -816,6 +816,38 @@ def browser_site():  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_credential_reset_surfaces_are_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    admin_context = browser.new_context(viewport={"width": width, "height": 900})
+    page = admin_context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["admin"])
+    page.goto(base_url + "/manage/accounts#accounts")
+    account = page.locator("#accounts article", has_text="Browser Viewer")
+    account.get_by_role("button", name="Reset credential").click()
+    page.wait_for_url("**/admin/users/*/credential-reset")
+    assert page.get_by_role("heading", name="Credential reset created").is_visible()
+    reset_path = page.locator("[data-credential-reset-link]").input_value()
+    assert reset_path.startswith("/credential-reset#token=")
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    admin_context.close()
+
+    public_context = browser.new_context(viewport={"width": width, "height": 900})
+    page = public_context.new_page()
+    errors = _watch_browser_errors(page)
+    page.goto(base_url + reset_path)
+    page.wait_for_url(base_url + "/credential-reset")
+    assert page.get_by_role("heading", name="Choose a new PIN or password").is_visible()
+    assert page.locator('input[name="credential"]').is_visible()
+    assert page.locator('input[name="confirmation"]').is_visible()
+    assert page.get_by_role("button", name="Reset credential").is_enabled()
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    public_context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
 def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
     context = browser.new_context(viewport={"width": width, "height": 900})

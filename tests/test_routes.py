@@ -38,6 +38,7 @@ from app.external_calendar.models import (
 from app.external_calendar.refresh import RefreshResult
 from app.hours.service import fortnight_bounds, published_hours
 from app.identity.models import (
+    CredentialReset,
     Invitation,
     LoginThrottle,
     Person,
@@ -45,6 +46,7 @@ from app.identity.models import (
     RoleGrant,
     SignupRequest,
     TotpFactor,
+    TrustedDevice,
     User,
     UserPersonLink,
 )
@@ -1002,6 +1004,124 @@ def _login(client: TestClient, email: str, pin: str) -> str:
     csrf = client.cookies.get("ontrack_csrf")
     assert csrf
     return csrf
+
+
+def test_admin_credential_reset_route_and_public_completion_are_bounded(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    anonymous = TestClient(app)
+    page = anonymous.get("/credential-reset")
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-store"
+    assert 'name="email"' not in page.text
+    assert 'name="token" value=""' in page.text
+    assert "history.replaceState" in Path("app/static/credential-reset.js").read_text()
+
+    with factory() as db:
+        viewer_id = db.scalar(select(User.id).where(User.email == "viewer@example.test"))
+        admin_id = db.scalar(select(User.id).where(User.email == "admin@example.test"))
+
+    for email, credential in (
+        ("manager@example.test", "123456"),
+        ("submanager@example.test", "445566"),
+        ("viewer@example.test", "112233"),
+        ("amy@example.test", "654321"),
+    ):
+        unauthorized = TestClient(app)
+        csrf = _login(unauthorized, email, credential)
+        denied = unauthorized.post(
+            f"/admin/users/{viewer_id}/credential-reset",
+            data={"csrf_token": csrf},
+        )
+        assert denied.status_code == 403
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    assert admin.post(
+        f"/admin/users/{viewer_id}/credential-reset",
+        data={"csrf_token": "invalid"},
+    ).status_code == 403
+    assert admin.post(
+        f"/admin/users/{admin_id}/credential-reset",
+        data={"csrf_token": admin_csrf},
+    ).status_code == 400
+
+    issued = admin.post(
+        f"/admin/users/{viewer_id}/credential-reset",
+        data={"csrf_token": admin_csrf},
+    )
+    assert issued.status_code == 200
+    assert issued.headers["cache-control"] == "no-store"
+    match = re.search(r'value="(/credential-reset#token=([^"&]+))"', issued.text)
+    assert match
+    raw = match.group(2)
+    assert issued.text.count(raw) == 1
+    assert "expires in 60 minutes" in issued.text
+    assert "Deliver this link privately" in issued.text
+    with factory() as db:
+        reset = db.scalar(select(CredentialReset).where(CredentialReset.user_id == viewer_id))
+        event = db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "user.credential_reset.created")
+        )
+        assert reset.token_hash == token_hash(raw) and raw not in reset.token_hash
+        assert event.actor_user_id == admin_id and raw not in str(event.detail)
+
+    mismatch = anonymous.post(
+        "/credential-reset/complete",
+        data={"token": raw, "credential": "667788", "confirmation": "667799"},
+    )
+    assert mismatch.status_code == 400 and "did not match" in mismatch.text
+    completed = anonymous.post(
+        "/credential-reset/complete",
+        data={"token": raw, "credential": "667788", "confirmation": "667788"},
+        follow_redirects=False,
+    )
+    assert completed.status_code == 303
+    assert completed.headers["location"] == "/login?credential=reset"
+    reused = anonymous.post(
+        "/credential-reset/complete",
+        data={"token": raw, "credential": "778899", "confirmation": "778899"},
+    )
+    assert reused.status_code == 400
+    assert "invalid, expired, or already used" in reused.text
+    assert anonymous.post(
+        "/login",
+        data={"email": "viewer@example.test", "credential": "112233", "next": "/month"},
+    ).status_code == 400
+    assert anonymous.post(
+        "/login",
+        data={"email": "viewer@example.test", "credential": "667788", "next": "/month"},
+        follow_redirects=False,
+    ).status_code == 303
+
+
+def test_admin_credential_reset_requires_fresh_auth_and_active_target(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    raw_session = admin.cookies.get("ontrack_session")
+    with factory() as db:
+        target = db.scalar(select(User).where(User.email == "viewer@example.test"))
+        target.status = "DISABLED"
+        device = db.scalar(
+            select(TrustedDevice).where(TrustedDevice.token_hash == token_hash(raw_session))
+        )
+        device.primary_authenticated_at = utcnow() - timedelta(hours=1)
+        db.commit()
+        target_id = target.id
+    stale = admin.post(
+        f"/admin/users/{target_id}/credential-reset",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert stale.status_code == 403 and "Recent authentication is required" in stale.text
+
+    fresh_admin = TestClient(app)
+    csrf = _login(fresh_admin, "admin@example.test", "99887766")
+    disabled = fresh_admin.post(
+        f"/admin/users/{target_id}/credential-reset",
+        data={"csrf_token": csrf},
+    )
+    assert disabled.status_code == 409
 
 
 def test_recovery_code_completes_mfa_login_once_without_audit_disclosure(

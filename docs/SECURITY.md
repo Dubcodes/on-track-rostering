@@ -8,6 +8,8 @@ The first Admin can only be created from `python -m app.cli create-admin`; no pu
 
 Invitations use 40-byte URL-safe random tokens; only SHA-256 hashes are stored. They expire, are single-use, and a new invitation revokes unused invitations for that email. Activation locks the row and links an available person without manufacturing a second identity.
 
+Primary credential recovery is Admin-issued for an existing active account or performed locally with `python -m app.cli reset-credential --email ...`. Browser reset links carry a random token only in the URL fragment; only its SHA-256 hash is stored, it expires after 60 minutes, and issuing a replacement revokes earlier unused resets. Completion row-locks the reset, applies the existing role-aware credential floor (including pending Admin grants), advances the auth epoch, revokes trusted devices and user-bound login challenges, and preserves identity, roles, Contractor state, passkeys, TOTP, and recovery codes. The reset never activates pending grants. Raw links and credentials are shown or accepted only at their bounded one-time surfaces and are excluded from audit detail.
+
 Contractor invitations require an explicit Person link and fixed Contractor role/scope. The resulting account has no Crew View or management surface, and direct-route policy checks enforce the same boundary as navigation. Temporary access expiry is checked at login and trusted-device resolution; bounded refresh also marks the account expired, advances its auth epoch, revokes devices, and emits redacted audit events without deleting identity or roster history.
 
 ## Sessions and elevation
@@ -34,7 +36,7 @@ Jinja autoescaping remains enabled. User text is rendered as text, never as a te
 
 Forwarded client/origin authority is accepted only when the immediate peer is in the configured trusted-proxy CIDRs and each forwarding value is singular and valid. Direct clients and malformed forwarding fall back to the socket peer and internal request origin. Login/signup throttling and same-origin checks consume this shared resolution.
 
-Audit detail is recursively redacted for credential/token/cookie/secret keys. The application must never log raw invitation URLs beyond their one-time Admin display.
+Audit detail is recursively redacted for credential/token/cookie/secret keys. The application must never log raw invitation or credential-reset URLs beyond their one-time Admin display.
 
 ## Push and residual risks
 
