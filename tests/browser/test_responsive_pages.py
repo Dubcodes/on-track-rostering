@@ -1286,7 +1286,7 @@ def test_transition_preview_and_regionless_onboarding_are_readable(browser_site,
     queue = page.locator("#needs-setup")
     assert queue.get_by_text("Browser Needs Setup Crew", exact=True).is_visible()
     assert queue.get_by_text("No primary region", exact=True).count() >= 1
-    assert queue.get_by_text("Needs setup", exact=True).count() >= 1
+    assert queue.locator("small", has_text="Needs setup").count() >= 1
     assert queue.locator(f'form[action="/manage/crew/{values["regionless_person_id"]}/profile"]').count() == 1
     _assert_no_horizontal_overflow(page)
     assert errors == []
