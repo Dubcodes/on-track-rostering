@@ -50,11 +50,23 @@ Manager-created Sub-Manager grants remain `PENDING` until the account owner comp
 
 ## WebAuthn and optional TOTP
 
-Passkeys use the maintained `webauthn` library, discoverable credentials, required user verification, one-use server challenges, and deployment-bound RP ID/origin verification. Public-key credentials remain server-readable by design; TOTP secrets and push endpoint payloads are encrypted at rest with a key derived from the application secret and a domain separator. TOTP is optional unless the deployment enables the Admin or Manager requirement flags. Accepted TOTP counters are stored so a valid code cannot be replayed inside its time window. Recovery codes are not implemented and are not presented as available.
+Passkeys use the maintained `webauthn` library, discoverable credentials, required user verification, one-use server challenges, and deployment-bound RP ID/origin verification. Public-key credentials remain server-readable by design; TOTP secrets and push endpoint payloads are encrypted at rest with a key derived from the application secret and a domain separator. TOTP is optional unless the deployment enables the Admin or Manager requirement flags. Accepted TOTP counters are stored so a valid code cannot be replayed inside its time window. TOTP confirmation issues ten recovery codes exactly once in plaintext. Only SHA-256 hashes are stored; consumption is user-scoped, row-locked, atomic, and single-use. Regeneration invalidates every older unused code, and disabling TOTP removes its recovery codes. These codes recover the optional TOTP factor only; they are not primary-credential reset tokens.
+
+## Primary credential recovery is administrator-assisted and bounded
+
+On Track deliberately has no public emailed “forgot password” flow. After fresh authentication, an Admin may create a dedicated reset for another active user. The random token is stored only as a hash, expires after 60 minutes, invalidates an earlier unused reset, is handed off in the URL fragment, and is consumed once under a row lock. The replacement credential must satisfy the target account's current policy, including the stricter Admin rule whether that role is pending or active.
+
+Successful reset increments `auth_epoch`, revokes trusted devices, and invalidates user-bound authentication challenges. It does not remove passkeys, TOTP, TOTP recovery codes, roles, Person linkage, or pending grants, and it does not activate a pending grant. The local `python -m app.cli reset-credential --email user@example.com` path uses `getpass` and follows the same boundary.
 
 ## Open applications and direct decline publication
 
 Applications bind to a published revision plus stable slot key so stale decisions are detectable. Selecting an applicant changes only a Manager draft; Publish remains the authority transition. Decline is deliberately different: after explicit confirmation, it locks the workday and creates a complete new immutable publication atomically according to the region policy. Any older Manager draft is detached rather than silently rebased.
+
+## Workday rescheduling creates a replacement instead of mutating history
+
+A published Workday's date is historical identity and is never changed in place. Rescheduling marks the source ABANDONED and creates a new Workday linked by `rescheduled_from_workday_id`, cloning the source's current PUBLISHED roster into a fresh immutable publication. This preserves an auditable A → B → C chain and prevents a past roster snapshot from silently acquiring a new date. A predecessor that already has a replacement cannot be reinstated.
+
+Generated Travel is abandoned with the source and freshly generated for the replacement. The replacement does not reuse or inherit external-event identity, Open Position applications, personal responses, Operation identity, generated-Travel identity, or programme/source provenance. Assigned Employees and Contractors may record ACCEPTED or DECLINED against the replacement Workday and Person; absence is Pending. Decline is a Manager-action signal and never automatically removes the assignment.
 
 ## Notification event outbox
 
