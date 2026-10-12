@@ -14,11 +14,11 @@ PRESET_KEYS = ("THOROUGHBRED", "HARNESS", "TRIALS")
 FALLBACK_POSITION_NAMES = {
     "THOROUGHBRED": (
         "Side 1", "Side 2", "Start", "Head On", "Back", "Turn", "RTS",
-        "Director", "Sound", "VT", "CCU1", "CCU2", "FM", "ENG",
+        "Director", "Sound", "VT", "CCU", "FM", "ENG",
     ),
     "HARNESS": (
         "Side 1", "Side 2", "Head On", "Back", "Director", "Sound/VT",
-        "CCU1", "CCU2", "FM", "ENG",
+        "CCU", "FM", "ENG",
     ),
     "TRIALS": (
         "Side 1", "Side 2", "Head On", "Back", "Director", "Sound/VT", "ENG",

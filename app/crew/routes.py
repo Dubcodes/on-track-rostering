@@ -27,9 +27,19 @@ def _regions(db: Session, request: Request) -> list[Region]:
     return [row for row in rows if can_administer_region(request.state.actor, row.id)]
 
 
-def _person_in_scope(db: Session, request: Request, person_id: uuid.UUID) -> Person:
+def _person_in_scope(
+    db: Session,
+    request: Request,
+    person_id: uuid.UUID,
+    *,
+    allow_unassigned_admin: bool = False,
+) -> Person:
     person = db.get(Person, person_id)
-    if not person or not person.home_region_id:
+    if not person:
+        raise HTTPException(404)
+    if person.home_region_id is None:
+        if allow_unassigned_admin and request.state.actor.is_admin:
+            return person
         raise HTTPException(404)
     if not can_administer_region(request.state.actor, person.home_region_id):
         raise HTTPException(403, "Regional administration authority required.")
@@ -55,9 +65,25 @@ def crew_management(
         term = f"%{q.strip()}%"
         statement = statement.where(or_(Person.display_name.ilike(term), Person.email.ilike(term)))
     people = list(db.scalars(statement.order_by(Person.display_name)))
-    person_ids = [person.id for person in people]
-    memberships: dict[uuid.UUID, set[uuid.UUID]] = {person.id: set() for person in people}
-    capabilities: dict[uuid.UUID, dict[uuid.UUID, set[str]]] = {person.id: {} for person in people}
+    needs_setup_statement = select(Person).where(
+        Person.lifecycle == Lifecycle.ACTIVE.value,
+        Person.home_region_id.is_(None),
+    )
+    if q.strip():
+        needs_setup_statement = needs_setup_statement.where(
+            or_(Person.display_name.ilike(term), Person.email.ilike(term))
+        )
+    needs_setup_people = (
+        list(db.scalars(needs_setup_statement.order_by(Person.display_name)))
+        if request.state.actor.is_admin
+        else []
+    )
+    visible_people = [*people, *needs_setup_people]
+    person_ids = [person.id for person in visible_people]
+    memberships: dict[uuid.UUID, set[uuid.UUID]] = {person.id: set() for person in visible_people}
+    capabilities: dict[uuid.UUID, dict[uuid.UUID, set[str]]] = {
+        person.id: {} for person in visible_people
+    }
     linked: set[uuid.UUID] = set()
     contractor_accounts: dict[uuid.UUID, User] = {}
     if person_ids:
@@ -94,6 +120,7 @@ def crew_management(
             regions=regions,
             selected_region=selected,
             people=people,
+            needs_setup_people=needs_setup_people,
             groups=list(
                 db.scalars(
                     select(CrewGroup).where(CrewGroup.lifecycle == "ACTIVE").order_by(CrewGroup.name)
@@ -166,7 +193,7 @@ def update_crew_profile(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    person = _person_in_scope(db, request, person_id)
+    person = _person_in_scope(db, request, person_id, allow_unassigned_admin=True)
     destination = db.get(Region, home_region_id)
     if not destination or destination.lifecycle != Lifecycle.ACTIVE.value:
         raise HTTPException(400, "Select an active Primary region.")
@@ -182,7 +209,7 @@ def update_crew_profile(
     previous = {
         "display_name": person.display_name,
         "email": person.email,
-        "home_region_id": str(person.home_region_id),
+        "home_region_id": str(person.home_region_id) if person.home_region_id else None,
     }
     person.display_name = clean_name
     person.email = clean_email

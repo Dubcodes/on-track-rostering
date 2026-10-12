@@ -23,6 +23,12 @@ from app.external_calendar.service import (
     reconcile_observation,
 )
 from app.identity.models import Person
+from app.positions.canonical import (
+    AmbiguousPositionError,
+    canonical_position_identity,
+    resolve_active_position,
+    resolve_or_create_position,
+)
 from app.rostering.models import PositionCapability
 
 FORBIDDEN_KEY_PARTS = {
@@ -102,7 +108,7 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
     bundle_regions = {normalized_key(str(row.get("name", ""))) for row in bundle.get("regions", [])}
     bundle_groups = {normalized_key(str(row.get("name", ""))) for row in bundle.get("crew_groups", [])}
     bundle_positions = {
-        (normalized_key(str(row.get("crew_group", ""))), normalized_key(str(row.get("name", ""))))
+        canonical_position_identity(str(row.get("name", ""))).key
         for row in bundle.get("positions", [])
     }
     for row in bundle.get("regions", []):
@@ -133,21 +139,33 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             "match" if _named(groups, str(row.get("name", ""))) else "create",
             str(row.get("name", "")),
         )
+    planned_position_keys: set[str] = set()
     for row in bundle.get("positions", []):
         group = _named(groups, str(row.get("crew_group", "")))
-        matches = [
-            item
-            for item in positions
-            if group
-            and item.crew_group_id == group[0].id
-            and normalized_key(item.name) == normalized_key(str(row.get("name", "")))
-        ]
+        identity = canonical_position_identity(str(row.get("name", "")))
+        try:
+            match = resolve_active_position(db, str(row.get("name", "")), positions=positions)
+        except AmbiguousPositionError as exc:
+            match = None
+            ambiguous = True
+            plan.warnings.append(str(exc))
+        else:
+            ambiguous = False
         group_known = len(group) == 1 or normalized_key(str(row.get("crew_group", ""))) in bundle_groups
+        result = (
+            "conflict"
+            if ambiguous or not group_known
+            else "match"
+            if match is not None or identity.key in planned_position_keys
+            else "create"
+        )
         plan.bump(
             "positions",
-            "match" if matches else "conflict" if not group_known else "create",
+            result,
             f"{row.get('crew_group', '')} / {row.get('name', '')}",
         )
+        if result == "create":
+            planned_position_keys.add(identity.key)
     for row in bundle.get("people", []):
         referenced_regions = [str(row["home_region"])] if row.get("home_region") else []
         referenced_groups = [str(value) for value in row.get("crew_groups", [])]
@@ -164,19 +182,14 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
         )
         missing_position = False
         for capability in row.get("capabilities", []):
-            group_name = str(capability["crew_group"])
             position_name = str(capability["position"])
-            matched_groups = _named(groups, group_name)
-            existing_position = any(
-                matched_groups
-                and item.crew_group_id == matched_groups[0].id
-                and normalized_key(item.name) == normalized_key(position_name)
-                for item in positions
-            )
-            bundled_position = (
-                normalized_key(group_name),
-                normalized_key(position_name),
-            ) in bundle_positions
+            try:
+                existing_position = resolve_active_position(
+                    db, position_name, positions=positions
+                ) is not None
+            except AmbiguousPositionError:
+                existing_position = False
+            bundled_position = canonical_position_identity(position_name).key in bundle_positions
             missing_position = missing_position or not (existing_position or bundled_position)
         if missing_region or missing_group or missing_position:
             plan.bump("people", "conflict", str(row.get("display_name", "")))
@@ -348,14 +361,12 @@ def apply_bundle(db: Session, bundle: dict[str, object], actor_user_id) -> Impor
             select(CrewGroup).where(func.lower(CrewGroup.name) == str(row["crew_group"]).strip().casefold())
         )
         name = str(row["name"]).strip()
-        if not db.scalar(
-            select(BasePosition).where(
-                BasePosition.crew_group_id == group.id, func.lower(BasePosition.name) == name.casefold()
-            )
-        ):
-            db.add(
-                BasePosition(name=name, crew_group_id=group.id, lifecycle=str(row.get("lifecycle", "ACTIVE")))
-            )
+        resolve_or_create_position(
+            db,
+            name,
+            crew_group_id=group.id,
+            lifecycle=str(row.get("lifecycle", "ACTIVE")),
+        )
     db.flush()
     for row in bundle.get("people", []):
         email = str(row.get("email", "")).strip().casefold() or None
@@ -389,16 +400,7 @@ def apply_bundle(db: Session, bundle: dict[str, object], actor_user_id) -> Impor
                     func.lower(CrewGroup.name) == str(capability["crew_group"]).casefold()
                 )
             )
-            position = (
-                db.scalar(
-                    select(BasePosition).where(
-                        BasePosition.crew_group_id == group.id,
-                        func.lower(BasePosition.name) == str(capability["position"]).casefold(),
-                    )
-                )
-                if group
-                else None
-            )
+            position = resolve_active_position(db, str(capability["position"])) if group else None
             signal = str(capability.get("signal", CapabilitySignal.MANAGER_ALLOW.value))
             if (
                 position

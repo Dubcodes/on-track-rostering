@@ -415,7 +415,7 @@ def test_transition_import_is_safe_atomic_published_and_idempotent(db) -> None: 
     assert "password" not in json.dumps(payload).casefold()
     preview = preview_capture(db, payload)
     assert preview.valid
-    assert preview.counts["published_rows"] == 2
+    assert preview.counts["source_published_rows"] == 2
     assert preview.counts["unpublished_ignored"] == 1
 
     counts = apply_capture(db, payload, user.id)
@@ -440,6 +440,10 @@ def test_transition_import_is_safe_atomic_published_and_idempotent(db) -> None: 
     assert all(not row.note for row in assignments)
     assert db.scalar(select(func.count()).select_from(BasePosition)) == 2
 
+    existing_preview = preview_capture(db, payload)
+    assert existing_preview.counts["existing_publications"] == 1
+    assert existing_preview.counts["importable_assignments"] == 0
+
     again = apply_capture(db, payload, user.id)
     db.flush()
     assert again["workdays"] == 0 and again["existing"] == 1
@@ -452,7 +456,164 @@ def test_transition_preview_skips_unresolved_location_without_invalidating_impor
     payload = parse_capture(_capture().replace("T- Te Rapa", "Unknown Office"))
     preview = preview_capture(db, payload)
     assert preview.valid and preview.counts["safe_workdays"] == 0
+    assert preview.counts["skipped_workdays"] == 1
+    assert preview.counts["skipped_assignments"] == 2
     assert any("unresolved operational location; skip" in row for row in preview.details["tracks"])
     counts = apply_capture(db, payload, user.id)
     assert counts["workdays"] == 0 and counts["people"] == 0
     assert db.scalar(select(func.count()).select_from(Person)) == 0
+
+
+def test_transition_track_resolution_prefers_exact_before_alias(db) -> None:  # type: ignore[no-untyped-def]
+    _user, region, _track_row = _foundation(db)
+    cambridge = Track(name="Cambridge", region_id=region.id, palette_slot=2)
+    synthetic = Track(name="Cambridge Synthetic", region_id=region.id, palette_slot=3)
+    db.add_all([cambridge, synthetic])
+    db.flush()
+
+    exact = preview_capture(db, parse_capture(_capture().replace("T- Te Rapa", "T- Cambridge")))
+    assert exact.valid
+    assert exact.counts["safe_workdays"] == 1
+    assert exact.counts["importable_assignments"] == 2
+    assert exact.counts["skipped_workdays"] == 0
+    assert any("T- Cambridge: Cambridge" == row for row in exact.details["tracks"])
+
+    rotorua = Track(name="Rotorua", region_id=region.id, palette_slot=4)
+    arawa = Track(name="Arawa Park", region_id=region.id, palette_slot=5)
+    db.add_all([rotorua, arawa])
+    db.flush()
+    ambiguous = preview_capture(
+        db,
+        parse_capture(_capture().replace("T- Te Rapa", "T- Rotorua Racecourse")),
+    )
+    assert ambiguous.valid
+    assert ambiguous.counts["safe_workdays"] == 0
+    assert ambiguous.counts["skipped_workdays"] == 1
+    assert ambiguous.counts["skipped_assignments"] == 2
+
+
+def test_transition_cambridge_real_shape_keeps_all_40_workdays_and_416_rows(db) -> None:  # type: ignore[no-untyped-def]
+    _user, region, _track_row = _foundation(db)
+    db.add_all(
+        [
+            Track(name="Cambridge", region_id=region.id, palette_slot=2),
+            Track(name="Cambridge Synthetic", region_id=region.id, palette_slot=3),
+        ]
+    )
+    db.flush()
+    local_zone = ZoneInfo("Pacific/Auckland")
+    shifts: list[dict[str, object]] = []
+    for workday_index in range(40):
+        cambridge = workday_index < 10
+        row_count = (
+            9 if cambridge and workday_index < 8 else
+            8 if cambridge else
+            11 if workday_index < 38 else
+            10
+        )
+        day = date(2026, 1, 1) + timedelta(days=workday_index)
+        for row_index in range(row_count):
+            start = datetime.combine(day, time(8, 45), tzinfo=local_zone)
+            shifts.append(
+                {
+                    "id": f"real-{workday_index}-{row_index}",
+                    "employee_id": f"person-{row_index % 41 + 1}",
+                    "employee_name": f"Person {row_index % 41 + 1}",
+                    "location": "T- Cambridge" if cambridge else "T- Te Rapa",
+                    "area_id": "side-1",
+                    "area_name": "Side 1",
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=12)).isoformat(),
+                    "note": "",
+                    "published": True,
+                    "open": False,
+                }
+            )
+    assert len(shifts) == 416
+    preview = preview_capture(
+        db,
+        {"version": 1, "source": "DEPUTY_CAPTURE", "areas": [], "shifts": shifts},
+    )
+    assert preview.valid
+    assert preview.counts["source_published_rows"] == 416
+    assert preview.counts["safe_workdays"] == 40
+    assert preview.counts["importable_assignments"] == 416
+    assert preview.counts["skipped_workdays"] == 0
+    assert preview.counts["skipped_assignments"] == 0
+
+
+def test_transition_import_uses_modal_span_and_preserves_person_exceptions(db) -> None:  # type: ignore[no-untyped-def]
+    user, _region, _track_row = _foundation(db)
+    zone = ZoneInfo("Pacific/Auckland")
+    shifts: list[dict[str, object]] = []
+    for index in range(11):
+        start_time = time(8, 30) if index < 2 else time(8, 45)
+        start = datetime.combine(date(2026, 10, 14), start_time, tzinfo=zone)
+        finish = datetime.combine(date(2026, 10, 14), time(20, 30), tzinfo=zone)
+        shifts.append(
+            {
+                "id": f"modal-{index}",
+                "employee_id": f"modal-person-{index}",
+                "employee_name": f"Modal Person {index}",
+                "location": "T- Te Rapa",
+                "area_id": f"position-{index}",
+                "area_name": f"Position {index}",
+                "start": start.isoformat(),
+                "end": finish.isoformat(),
+                "note": "",
+                "published": True,
+                "open": False,
+            }
+        )
+    for index, (start_time, finish_time) in enumerate(
+        ((time(8, 30), time(20, 15)), (time(8, 45), time(20, 30)))
+    ):
+        start = datetime.combine(date(2026, 10, 15), start_time, tzinfo=zone)
+        finish = datetime.combine(date(2026, 10, 15), finish_time, tzinfo=zone)
+        for copy in range(2):
+            shifts.append(
+                {
+                    "id": f"tie-{index}-{copy}",
+                    "employee_id": f"tie-person-{index}-{copy}",
+                    "employee_name": f"Tie Person {index} {copy}",
+                    "location": "T- Te Rapa",
+                    "area_id": f"tie-position-{index}",
+                    "area_name": f"Tie Position {index}",
+                    "start": start.isoformat(),
+                    "end": finish.isoformat(),
+                    "note": "",
+                    "published": True,
+                    "open": False,
+                }
+            )
+    payload = {"version": 1, "source": "DEPUTY_CAPTURE", "areas": [], "shifts": shifts}
+    counts = apply_capture(db, payload, user.id)
+    assert counts["workdays"] == 2 and counts["assignments"] == 15
+    revisions = list(db.scalars(select(WorkdayRevision).order_by(WorkdayRevision.work_date)))
+    assert (revisions[0].start_time, revisions[0].end_time) == (time(8, 45), time(20, 30))
+    first_assignments = list(
+        db.scalars(select(Assignment).where(Assignment.revision_id == revisions[0].id))
+    )
+    assert sum(row.start_time == time(8, 30) for row in first_assignments) == 2
+    assert (revisions[1].start_time, revisions[1].end_time) == (time(8, 30), time(20, 30))
+
+
+def test_transition_import_maps_numbered_ccu_to_one_base_position_and_slot(db) -> None:  # type: ignore[no-untyped-def]
+    user, _region, _track_row = _foundation(db)
+    ccu = BasePosition(name="CCU")
+    db.add(ccu)
+    db.flush()
+    payload = parse_capture(_capture())
+    published = [row for row in payload["shifts"] if row["published"]]
+    published[0]["area_name"] = "CCU1"
+    published[1]["area_name"] = "CCU 2"
+    counts = apply_capture(db, payload, user.id)
+    assert counts["assignments"] == 2
+    assignments = list(db.scalars(select(Assignment).order_by(Assignment.slot_index)))
+    assert [(row.base_position_id, row.slot_index, row.display_name_snapshot) for row in assignments] == [
+        (ccu.id, 1, "CCU 1"),
+        (ccu.id, 2, "CCU 2"),
+    ]
+    assert db.scalar(
+        select(func.count()).select_from(BasePosition).where(BasePosition.lifecycle == "ACTIVE")
+    ) == 1

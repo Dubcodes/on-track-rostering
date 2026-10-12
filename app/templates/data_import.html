@@ -10,10 +10,25 @@
 </section>
 {% if request.query_params.get('imported') %}<div class="alert success">Import completed atomically.</div>{% endif %}
 {% if request.query_params.get('transition_imported') %}<div class="alert success">Deputy transition import completed atomically.</div>{% endif %}
+{% if request.query_params.get('positions_converged') %}<div class="alert success">Canonical Position convergence completed. Published Assignment snapshots were not rewritten.</div>{% endif %}
 <div class="action-row">
   <a class="button secondary" href="/admin/structural-master-data.json">Export structural master data</a>
   <a class="button secondary" href="/admin/online-sources/source-inventory.json">Download source mapping template</a>
 </div>
+
+<section class="panel stack" id="position-convergence">
+  <div><p class="eyebrow">Explicit master-data remediation</p><h2>Canonical Position convergence</h2><p>Preview duplicate active operational Positions before transferring capability and preset references. Published Assignment rows and display snapshots remain untouched; duplicate catalogue records are archived.</p></div>
+  {% if position_convergence.rows %}
+  <div class="summary-grid">
+    <div><strong>{{ position_convergence.duplicate_count }}</strong><span>Duplicates to archive</span></div>
+    <div><strong>{{ position_convergence.capability_references }}</strong><span>Capability references</span></div>
+    <div><strong>{{ position_convergence.preset_references }}</strong><span>Preset references</span></div>
+    <div><strong>{{ position_convergence.published_assignment_references }}</strong><span>Published assignments unchanged</span></div>
+  </div>
+  <div class="record-list">{% for row in position_convergence.rows %}<details class="control-record"><summary><strong>{{ row.identity.canonical_name }}</strong><small>{{ row.duplicates|length }} duplicate{{ '' if row.duplicates|length == 1 else 's' }}</small></summary><p><strong>Keep:</strong> {{ row.canonical.name }} · {{ row.group_names.get(row.canonical.crew_group_id, 'Unassigned group') }}{% if row.canonical.display_order is not none %} · display order {{ row.canonical.display_order }}{% endif %}</p><div class="record-list">{% for duplicate in row.duplicates %}<span><strong>Archive {{ duplicate.name }}</strong><small>{{ row.group_names.get(duplicate.crew_group_id, 'Unassigned group') }}</small></span>{% endfor %}</div><p class="muted">Transfer/deduplicate {{ row.capability_references }} capability and {{ row.preset_references }} preset reference(s). Leave {{ row.published_assignment_references }} published Assignment reference(s) unchanged.</p></details>{% endfor %}</div>
+  <form method="post" action="/admin/data-import/position-convergence"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Apply canonical Position convergence</button></form>
+  {% else %}<p class="muted">No duplicate active canonical Positions need remediation.</p>{% endif %}
+</section>
 
 <section class="panel stack">
   <div><p class="eyebrow">On Track interchange</p><h2>Provider-neutral JSON</h2><p>Credentials, payroll data, and provider-specific authentication are rejected.</p></div>
@@ -29,7 +44,7 @@
       </details>
       {% endfor %}
     </div>
-    {% for warning in import_plan.warnings %}<div class="alert">{{ warning }}</div>{% endfor %}
+    {% for warning in import_plan.warnings %}<div class="alert warning">{{ warning }}</div>{% endfor %}
     {% if import_plan.valid %}
     <form method="post" action="/admin/data-import/apply"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="import_json" value="{{ import_json }}"><button>Import these records</button></form>
     {% else %}<p>Resolve conflicts, missing Tracks, invalid providers, and ambiguous People before importing.</p>{% endif %}
@@ -49,8 +64,8 @@
   {% if transition_plan %}
   <div class="stack">
     <h3>Transition preview</h3>
-    <div class="summary-grid">{% for label, count in transition_plan.counts.items() %}<div><strong>{{ count }}</strong><span>{{ label|replace('_',' ')|title }}</span></div>{% endfor %}</div>
-    {% for warning in transition_plan.warnings %}<div class="alert">{{ warning }}</div>{% endfor %}
+    <div class="summary-grid">{% for label, count in transition_plan.counts.items() %}{% if count or label not in ['skipped_workdays', 'skipped_assignments'] %}<div><strong>{{ count }}</strong><span>{{ label|replace('_',' ')|title }}</span></div>{% endif %}{% endfor %}</div>
+    {% for warning in transition_plan.warnings %}<div class="alert warning">{{ warning }}</div>{% endfor %}
     {% for conflict in transition_plan.conflicts %}<div class="alert error">{{ conflict }}</div>{% endfor %}
     {% for section, rows in transition_plan.details.items() %}{% if rows %}<details class="control-record"><summary><strong>{{ section|title }}</strong><small>{{ rows|length }} preview row(s)</small></summary><div class="record-list">{% for row in rows %}<span>{{ row }}</span>{% endfor %}</div></details>{% endif %}{% endfor %}
     {% if transition_plan.valid %}<form method="post" action="/admin/data-import/deputy-apply"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="transition_json" value="{{ transition_json }}"><button>Apply this transition atomically</button></form>{% endif %}

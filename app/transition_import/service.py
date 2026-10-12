@@ -11,11 +11,18 @@ from datetime import UTC, date, datetime, time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.catalog.models import BasePosition, Track
+from app.catalog.models import Track
+from app.catalog.service import normalized_name
 from app.core.config import get_settings
 from app.core.time import parse_time, utcnow
 from app.external_calendar.models import TransitionSourceReference
 from app.identity.models import Person
+from app.positions.canonical import (
+    AmbiguousPositionError,
+    canonical_position_identity,
+    resolve_active_position,
+    resolve_or_create_position,
+)
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.service import create_workday
 
@@ -27,13 +34,7 @@ SAFE_IGNORED_FIELDS = (
     "meal-break, break-slot and other break data",
     "arbitrary captured response bodies",
 )
-POSITION_ALIASES = {
-    "dir": "Director",
-    "eng": "Engineer",
-    "soundvt": "Sound/VT",
-    "sound vt": "Sound/VT",
-    "back2": "Back 2",
-}
+MAX_PREVIEW_DETAILS = 100
 
 
 @dataclass
@@ -212,20 +213,21 @@ def _location(value: str) -> tuple[str, str, str] | None:
 
 
 def _track(db: Session, name: str) -> Track | None:
-    aliases = {
-        "rotorua": {"rotorua", "arawa park"},
-        "cambridge": {"cambridge", "cambridge synthetic"},
-        "pukekohe": {"pukekohe", "pukekohe park"},
-    }
-    key = " ".join(name.casefold().split())
-    accepted = aliases.get(key, {key})
-    matches = [
-        track
-        for track in db.scalars(select(Track).where(Track.lifecycle == "ACTIVE"))
-        if " ".join(track.name.casefold().split()) in accepted
-        or key in aliases.get(" ".join(track.name.casefold().split()), set())
-    ]
-    return matches[0] if len(matches) == 1 else None
+    alias_groups = (
+        {"cambridge", "cambridge synthetic"},
+        {"rotorua", "arawa park", "rotorua racecourse"},
+        {"pukekohe", "pukekohe park", "pukekohe racecourse"},
+    )
+    key = normalized_name(name)
+    active = list(db.scalars(select(Track).where(Track.lifecycle == "ACTIVE")))
+    exact = [track for track in active if normalized_name(track.name) == key]
+    if len(exact) == 1:
+        return exact[0]
+    if exact:
+        return None
+    accepted = next((group for group in alias_groups if key in group), {key})
+    aliases = [track for track in active if normalized_name(track.name) in accepted]
+    return aliases[0] if len(aliases) == 1 else None
 
 
 def _reference(db: Session, kind: str, key: str) -> TransitionSourceReference | None:
@@ -236,11 +238,6 @@ def _reference(db: Session, kind: str, key: str) -> TransitionSourceReference | 
             TransitionSourceReference.external_key == key,
         )
     )
-
-
-def _position_name(value: str) -> str:
-    clean = " ".join(value.split())
-    return POSITION_ALIASES.get(clean.casefold(), clean)
 
 
 def _local(value: object) -> datetime:
@@ -268,6 +265,26 @@ def race_note(value: str) -> tuple[int | None, time | None, time | None]:
     return None, None, None
 
 
+def _modal_local_time(values: list[object], *, boundary: str) -> time:
+    """Return the common local clock time.
+
+    When multiple values tie for the mode, start chooses the earliest and
+    finish chooses the latest. That deterministic conservative tie rule keeps
+    exceptional calls inside, rather than outside, the imported Workday span.
+    """
+    local_values = [_local(value).time().replace(tzinfo=None) for value in values]
+    counts = Counter(local_values)
+    highest = max(counts.values())
+    candidates = [value for value, count in counts.items() if count == highest]
+    return min(candidates) if boundary == "start" else max(candidates)
+
+
+def _append_detail(preview: TransitionPreview, section: str, value: str) -> None:
+    rows = preview.details.setdefault(section, [])
+    if value not in rows and len(rows) < MAX_PREVIEW_DETAILS:
+        rows.append(value)
+
+
 def preview_capture(db: Session, payload: dict[str, object]) -> TransitionPreview:
     payload = validate_payload(payload)
     shifts = [dict(row) for row in payload.get("shifts", []) if isinstance(row, dict)]
@@ -276,18 +293,27 @@ def preview_capture(db: Session, payload: dict[str, object]) -> TransitionPrevie
     preview = TransitionPreview(
         counts={
             "schedule_rows": len(shifts),
-            "published_rows": len(published),
+            "source_published_rows": len(published),
             "unpublished_ignored": ignored,
             "open_positions": sum(bool(row["open"]) for row in published),
         },
-        details={"people": [], "tracks": [], "positions": [], "workdays": []},
+        details={
+            "people": [],
+            "tracks": [],
+            "positions": [],
+            "workdays": [],
+            "skipped_workdays": [],
+        },
         warnings=[
-            f"{ignored} unpublished schedule row(s) will be ignored.",
+            *([f"{ignored} unpublished schedule row(s) will be ignored."] if ignored else []),
             *(f"Ignored: {value}." for value in SAFE_IGNORED_FIELDS),
         ],
         payload=payload,
     )
     people_seen: set[str] = set()
+    resolved: dict[tuple[date, uuid.UUID, str, str], list[dict[str, object]]] = {}
+    skipped_workdays: set[tuple[date, str, str]] = set()
+    skipped_assignments = 0
     for row in published:
         employee_id = str(row["employee_id"])
         employee_name = str(row["employee_name"])
@@ -300,61 +326,78 @@ def preview_capture(db: Session, payload: dict[str, object]) -> TransitionPrevie
                 if person.display_name.casefold() == employee_name.casefold()
             ]
             if mapping:
-                preview.details["people"].append(f"{employee_name}: already mapped")
+                _append_detail(preview, "people", f"{employee_name}: already mapped")
             elif len(matches) == 1:
-                preview.details["people"].append(f"{employee_name}: match existing Person")
+                _append_detail(preview, "people", f"{employee_name}: match existing Person")
             elif len(matches) > 1 or not employee_name:
                 preview.conflicts.append(f"Employee {employee_id} has an ambiguous or missing Person identity.")
                 preview.valid = False
             else:
-                preview.details["people"].append(f"{employee_name}: create Person (No Primary Region)")
+                _append_detail(preview, "people", f"{employee_name}: create Person (No Primary Region)")
+        work_date = _local(row["start"]).date()
         classified = _location(str(row["location"]))
         if not classified:
-            preview.details["tracks"].append(f"{row['location']}: unresolved operational location; skip")
+            label = f"{work_date.isoformat()} · {row['location']}"
+            skipped_workdays.add((work_date, normalized_name(str(row["location"])), "UNCLASSIFIED"))
+            skipped_assignments += 1
+            _append_detail(preview, "tracks", f"{row['location']}: unresolved operational location; skip")
+            _append_detail(preview, "skipped_workdays", f"{label}: unresolved operational location")
             continue
-        track_name, category, _discipline = classified
+        track_name, category, discipline = classified
         track = _track(db, track_name)
         if not track:
-            preview.details["tracks"].append(f"{row['location']}: unresolved Track; skip")
+            label = f"{work_date.isoformat()} · {row['location']}"
+            skipped_workdays.add((work_date, normalized_name(str(row["location"])), category))
+            skipped_assignments += 1
+            _append_detail(preview, "tracks", f"{row['location']}: unresolved Track; skip")
+            _append_detail(preview, "skipped_workdays", f"{label}: unresolved Track")
             continue
-        preview.details["tracks"].append(f"{row['location']}: {track.name}")
-        position = _position_name(str(row["area_name"]))
-        preview.details["positions"].append(f"{row['area_name']}: {position}")
-        work_date = _local(row["start"]).date()
-        preview.details["workdays"].append(f"{work_date.isoformat()} · {track.name} · {category}")
+        _append_detail(preview, "tracks", f"{row['location']}: {track.name}")
+        identity = canonical_position_identity(str(row["area_name"]))
+        try:
+            position = resolve_active_position(db, str(row["area_name"]))
+        except AmbiguousPositionError as exc:
+            message = str(exc)
+            if message not in preview.conflicts:
+                preview.conflicts.append(message)
+            preview.valid = False
+        else:
+            resolved_name = position.name if position else f"create {identity.canonical_name}"
+            _append_detail(preview, "positions", f"{row['area_name']}: {resolved_name}")
+        key = (work_date, track.id, category, discipline)
+        resolved.setdefault(key, []).append(row)
+        _append_detail(preview, "workdays", f"{work_date.isoformat()} · {track.name} · {category}")
     preview.counts["people"] = len(people_seen)
-    preview.counts["safe_workdays"] = len(set(preview.details["workdays"]))
-    preview.counts["assignments"] = sum(
-        1
-        for row in published
-        if (classified := _location(str(row["location"])))
-        and _track(db, classified[0])
-    )
-    existing_keys: set[tuple[date, uuid.UUID, str]] = set()
-    for row in published:
-        classified = _location(str(row["location"]))
-        if not classified or not (track := _track(db, classified[0])):
-            continue
-        key = (_local(row["start"]).date(), track.id, classified[1])
-        if key in existing_keys:
-            continue
-        existing_keys.add(key)
+    preview.counts["safe_workdays"] = len(resolved)
+    preview.counts["skipped_workdays"] = len(skipped_workdays)
+    preview.counts["skipped_assignments"] = skipped_assignments
+    existing_keys: set[tuple[date, uuid.UUID, str, str]] = set()
+    for key, _rows in resolved.items():
+        work_date, track_id, category, discipline = key
         existing = db.scalar(
             select(Workday)
             .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
             .where(
-                WorkdayRevision.work_date == key[0],
-                WorkdayRevision.track_id == key[1],
-                Workday.category == key[2],
+                WorkdayRevision.work_date == work_date,
+                WorkdayRevision.track_id == track_id,
+                Workday.category == category,
+                Workday.racing_discipline == discipline,
             )
         )
         if existing:
+            existing_keys.add(key)
+            track = db.get(Track, track_id)
             preview.warnings.append(
-                f"{key[0].isoformat()} · {track.name} · {key[2]} already has a publication and will not be changed."
+                f"{work_date.isoformat()} · {track.name if track else 'Track'} · {category} already has a publication and will not be changed."
             )
-    preview.counts["existing_publications"] = sum(
-        "already has a publication" in warning for warning in preview.warnings
+    preview.counts["existing_publications"] = len(existing_keys)
+    preview.counts["importable_assignments"] = sum(
+        len(rows) for key, rows in resolved.items() if key not in existing_keys
     )
+    if skipped_workdays:
+        preview.warnings.append(
+            f"{len(skipped_workdays)} unresolved Workday(s) and {skipped_assignments} assignment row(s) will be skipped."
+        )
     return preview
 
 
@@ -388,7 +431,7 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
     payload = validate_payload(payload)
     preview = preview_capture(db, payload)
     if not preview.valid:
-        raise ValueError("Resolve ambiguous People before applying this transition capture.")
+        raise ValueError("Resolve transition preview conflicts before applying this capture.")
     shifts = [
         dict(row)
         for row in payload.get("shifts", [])
@@ -409,8 +452,8 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
     counts = {"people": 0, "workdays": 0, "assignments": 0, "open": 0, "existing": 0}
     eligible: dict[tuple[date, uuid.UUID, str, str], list[dict[str, object]]] = {}
     for key, rows in grouped.items():
-        work_date, track_id, category, _discipline = key
-        workday_key = f"{work_date.isoformat()}:{track_id}:{category}"
+        work_date, track_id, category, discipline = key
+        workday_key = f"{work_date.isoformat()}:{track_id}:{category}:{discipline}"
         existing = db.scalar(
             select(Workday)
             .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
@@ -418,6 +461,7 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
                 WorkdayRevision.work_date == work_date,
                 WorkdayRevision.track_id == track_id,
                 Workday.category == category,
+                Workday.racing_discipline == discipline,
             )
         )
         if _reference(db, "WORKDAY", workday_key) or existing:
@@ -457,7 +501,7 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
     for (work_date, track_id, category, discipline), rows in eligible.items():
         track = db.get(Track, track_id)
         assert track is not None
-        workday_key = f"{work_date.isoformat()}:{track_id}:{category}"
+        workday_key = f"{work_date.isoformat()}:{track_id}:{category}:{discipline}"
         workday = create_workday(
             db,
             region_id=track.region_id,
@@ -471,10 +515,8 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
         )
         draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
         assert draft is not None
-        starts = [_timestamp(row["start"]) for row in rows]
-        ends = [_timestamp(row["end"]) for row in rows]
-        draft.start_time = min(starts).astimezone(get_settings().timezone).time().replace(tzinfo=None)
-        draft.end_time = max(ends).astimezone(get_settings().timezone).time().replace(tzinfo=None)
+        draft.start_time = _modal_local_time([row["start"] for row in rows], boundary="start")
+        draft.end_time = _modal_local_time([row["end"] for row in rows], boundary="finish")
         note_counts = Counter(str(row["note"]).strip() for row in rows if str(row["note"]).strip())
         shared_notes = {note for note, count in note_counts.items() if count > 1}
         day_notes: set[str] = set(shared_notes)
@@ -491,19 +533,11 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
             shift_key = str(row["id"] or _payload_hash(row))
             if _reference(db, "ASSIGNMENT", shift_key):
                 continue
-            position_name = _position_name(str(row["area_name"]))
-            position = next(
-                (
-                    item
-                    for item in db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE"))
-                    if item.name.casefold() == position_name.casefold()
-                ),
-                None,
+            position, identity, _created = resolve_or_create_position(
+                db,
+                str(row["area_name"]),
+                crew_group_id=None,
             )
-            if not position:
-                position = BasePosition(name=position_name, crew_group_id=None)
-                db.add(position)
-                db.flush()
             employee_id = str(row["employee_id"])
             person = None if bool(row["open"]) else people.get(employee_id)
             status = "OPEN" if bool(row["open"]) else ("ASSIGNED" if person else "TBC")
@@ -511,7 +545,10 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
                 revision_id=draft.id,
                 slot_key=uuid.uuid4(),
                 base_position_id=position.id,
-                display_name_snapshot=position.name,
+                slot_index=identity.slot_index,
+                display_name_snapshot=(
+                    identity.display_name if identity.slot_index is not None else position.name
+                ),
                 person_id=person.id if person else None,
                 person_name_snapshot=person.display_name if person else None,
                 status=status,

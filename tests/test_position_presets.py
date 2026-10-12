@@ -16,6 +16,8 @@ def test_position_preset_fallback_override_reset_and_inactive_filter(db) -> None
     region = Region(name="Preset Region")
     side_two = BasePosition(name="Side 2", display_order=2)
     side_one = BasePosition(name="Side 1", display_order=1)
+    ccu = BasePosition(name="CCU", display_order=3)
+    legacy_ccu_one = BasePosition(name="CCU1", display_order=4)
     inactive = BasePosition(name="Start", lifecycle=Lifecycle.ARCHIVED.value)
     custom = BasePosition(name="Custom", display_order=0)
     actor = User(
@@ -24,11 +26,12 @@ def test_position_preset_fallback_override_reset_and_inactive_filter(db) -> None
         credential_hash="test",
         credential_kind="pin",
     )
-    db.add_all([region, side_two, side_one, inactive, custom, actor])
+    db.add_all([region, side_two, side_one, ccu, legacy_ccu_one, inactive, custom, actor])
     db.flush()
 
     fallback = effective_position_presets(db, [region.id])[str(region.id)]
-    assert fallback["THOROUGHBRED"] == [str(side_one.id), str(side_two.id)]
+    assert fallback["THOROUGHBRED"] == [str(side_one.id), str(side_two.id), str(ccu.id)]
+    assert str(legacy_ccu_one.id) not in fallback["THOROUGHBRED"]
     assert str(inactive.id) not in fallback["THOROUGHBRED"]
     with pytest.raises(ValueError, match="active base positions"):
         save_position_preset(
@@ -55,6 +58,6 @@ def test_position_preset_fallback_override_reset_and_inactive_filter(db) -> None
     reset_position_preset(db, region_id=region.id, preset_key="THOROUGHBRED")
     db.flush()
     assert effective_position_presets(db, [region.id])[str(region.id)]["THOROUGHBRED"] == [
-        str(side_one.id), str(side_two.id)
+        str(side_one.id), str(side_two.id), str(ccu.id)
     ]
     assert db.get(type(row), row.id) is None

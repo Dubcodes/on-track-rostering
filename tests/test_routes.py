@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pyotp
 import pytest
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -3685,6 +3685,127 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
                 PositionCapability.base_position_id == position_id,
                 PositionCapability.signal == "MANAGER_ALLOW",
             )
+        )
+
+
+def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        regionless = Person(
+            display_name="Imported Regionless Crew",
+            email="regionless@example.com",
+            home_region_id=None,
+        )
+        db.add(regionless)
+        db.commit()
+        person_id = regionless.id
+        person_count = db.scalar(select(func.count()).select_from(Person))
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    manager_page = manager.get("/manage/crew")
+    assert "Imported Regionless Crew" not in manager_page.text
+    denied = manager.post(
+        f"/manage/crew/{person_id}/profile",
+        data={
+            "display_name": "Imported Regionless Crew",
+            "email": "regionless@example.com",
+            "home_region_id": str(region_id),
+            "csrf_token": manager_csrf,
+        },
+    )
+    assert denied.status_code == 404
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    queue = admin.get("/manage/crew?q=Regionless")
+    assert queue.status_code == 200
+    assert "No primary region" in queue.text
+    assert "Needs setup" in queue.text
+    assert "Imported Regionless Crew" in queue.text
+    assigned = admin.post(
+        f"/manage/crew/{person_id}/profile",
+        data={
+            "display_name": "Imported Regionless Crew",
+            "email": "regionless@example.com",
+            "home_region_id": str(region_id),
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert assigned.status_code == 303
+    regional_page = admin.get(f"/manage/crew?region_id={region_id}&q=Regionless")
+    assert "Imported Regionless Crew" in regional_page.text
+    assert "No linked account" in regional_page.text
+    assert "Invite as Employee" in regional_page.text
+    assert "Imported Regionless Crew" in admin.get("/manage/accounts").text
+
+    invited = admin.post(
+        "/manage/accounts/invitations",
+        data={
+            "email": "regionless@example.com",
+            "display_name": "Imported Regionless Crew",
+            "person_id": str(person_id),
+            "role": "EMPLOYEE",
+            "region_id": str(region_id),
+            "csrf_token": admin_csrf,
+        },
+    )
+    assert invited.status_code == 200 and "#token=" in invited.text
+    with factory() as db:
+        invitation = db.scalar(
+            select(Invitation).where(Invitation.email == "regionless@example.com")
+        )
+        assert invitation.person_id == person_id
+        assert invitation.role == "EMPLOYEE"
+        assert db.scalar(select(func.count()).select_from(Person)) == person_count
+        person = db.get(Person, person_id)
+        assert person.home_region_id == region_id
+        assert db.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.action == "person.profile.updated",
+                AuditEvent.target_id == str(person_id),
+            )
+        )
+
+
+def test_position_convergence_is_explicit_admin_only_and_audited(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (_region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        camera = CrewGroup(name="Camera Crew Convergence")
+        imported = CrewGroup(name="Operational Crew")
+        db.add_all([camera, imported])
+        db.flush()
+        canonical = BasePosition(name="Head On", crew_group_id=camera.id, display_order=2)
+        duplicate = BasePosition(name="Head On", crew_group_id=imported.id)
+        db.add_all([canonical, duplicate])
+        db.commit()
+        duplicate_id = duplicate.id
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    assert manager.get("/admin/data-import").status_code == 403
+    assert manager.post(
+        "/admin/data-import/position-convergence",
+        data={"csrf_token": manager_csrf},
+    ).status_code == 403
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    preview = admin.get("/admin/data-import")
+    assert preview.status_code == 200
+    assert "Canonical Position convergence" in preview.text
+    assert "Archive Head On" in preview.text
+    applied = admin.post(
+        "/admin/data-import/position-convergence",
+        data={"csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert applied.status_code == 303
+    with factory() as db:
+        assert db.get(BasePosition, duplicate_id).lifecycle == "ARCHIVED"
+        assert db.scalar(
+            select(AuditEvent.id).where(AuditEvent.action == "base_positions.converged")
         )
 
 

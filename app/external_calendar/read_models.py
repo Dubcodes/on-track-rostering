@@ -10,6 +10,20 @@ from app.external_calendar.models import CalendarDisplayPreference, ExternalCale
 from app.rostering.models import Workday, WorkdayRevision
 
 
+def _planning_identity(
+    workday: Workday, published: WorkdayRevision
+) -> tuple[date, object, str, str | None] | None:
+    event_kind = {"RACE_DAY": "RACE", "TRIALS": "TRIAL"}.get(workday.category)
+    if event_kind is None or published.track_id is None:
+        return None
+    return (
+        published.work_date,
+        published.track_id,
+        event_kind,
+        workday.racing_discipline,
+    )
+
+
 def calendar_preference(db: Session, user_id) -> CalendarDisplayPreference:  # type: ignore[no-untyped-def]
     return db.get(CalendarDisplayPreference, user_id) or CalendarDisplayPreference(
         user_id=user_id,
@@ -37,13 +51,39 @@ def external_calendar_items(
     )
     if region_ids is not None:
         statement = statement.where(Track.region_id.in_(region_ids))
+    event_rows = list(db.execute(statement))
+    visible_publication_identities: set[tuple[date, object, str, str | None]] = set()
+    publication_statement = (
+        select(Workday, WorkdayRevision)
+        .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
+        .where(
+            Workday.status == "SCHEDULED",
+            WorkdayRevision.work_date >= start,
+            WorkdayRevision.work_date < end,
+        )
+    )
+    if region_ids is not None:
+        publication_statement = publication_statement.where(Workday.region_id.in_(region_ids))
+    for workday, published in db.execute(publication_statement):
+        identity = _planning_identity(workday, published)
+        if identity and can_view_published(db, actor, workday, published):
+            visible_publication_identities.add(identity)
+
     result = []
-    for event, track in db.execute(statement):
+    for event, track in event_rows:
         linked = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
-        if linked and linked.current_published_revision_id:
+        if linked and linked.status == "SCHEDULED" and linked.current_published_revision_id:
             published = db.get(WorkdayRevision, linked.current_published_revision_id)
             if published and can_view_published(db, actor, linked, published):
                 continue
+        semantic_identity = (
+            event.event_date,
+            event.track_id,
+            event.event_kind,
+            event.discipline,
+        )
+        if semantic_identity in visible_publication_identities:
+            continue
         if event.discipline == "THOROUGHBRED" and not preference.show_thoroughbred:
             continue
         if event.discipline == "HARNESS" and not preference.show_harness:

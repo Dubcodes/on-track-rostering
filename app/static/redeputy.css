@@ -1269,6 +1269,62 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 }
 .assignment-conflict-dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .assignment-conflict-dialog h2 { margin-top: 0; }
+
+/* Transition onboarding surfaces use theme-owned colours and compact metrics. */
+.alert {
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.alert.warning {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--line));
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.alert.error {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.alert.success {
+  border-color: color-mix(in srgb, var(--ok) 60%, var(--line));
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.65rem;
+}
+.summary-grid > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+.summary-grid strong { color: var(--text); font-size: 1.35rem; }
+.summary-grid span { color: var(--muted); font-size: 0.75rem; font-weight: 800; line-height: 1.25; }
+.needs-setup { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.onboarding-card {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+.onboarding-card strong, .onboarding-card small { display: block; overflow-wrap: anywhere; }
+.account-onboarding { margin-top: 1rem; padding: 0.8rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+.account-onboarding p { margin: 0.35rem 0 0.75rem; }
+@media (max-width: 430px) {
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-grid > div { padding: 0.6rem; }
+  .summary-grid strong { font-size: 1.15rem; }
+}
 .leave-warning { color: var(--warning, #a15c00); font-weight: 800; }
 .leave-records { display: grid; gap: .75rem; }
 .leave-record { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.4fr) auto; gap: 1rem; align-items: start; padding: .85rem; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }

@@ -43,6 +43,7 @@ from app.external_calendar.service import (
     event_evidence,
     normalized_key,
 )
+from app.positions.canonical import apply_position_convergence, position_convergence_preview
 from app.rostering.models import Workday
 from app.transition_import.service import (
     apply_capture,
@@ -89,10 +90,18 @@ def _transition_text(pasted_capture: str, upload: UploadFile | None) -> str:
     return raw
 
 
+def _import_context(request: Request, db: Session, **values):  # type: ignore[no-untyped-def]
+    return context(
+        request,
+        position_convergence=position_convergence_preview(db),
+        **values,
+    )
+
+
 @router.get("/admin/data-import", response_class=HTMLResponse)
-def import_page(request: Request):
+def import_page(request: Request, db: Session = Depends(get_db)):
     require_admin(request.state.actor)
-    return templates.TemplateResponse("data_import.html", context(request))
+    return templates.TemplateResponse("data_import.html", _import_context(request, db))
 
 
 @router.post("/admin/data-import/preview", response_class=HTMLResponse)
@@ -110,12 +119,17 @@ def import_preview(
         bundle = parse_bundle(raw)
     except ValueError as exc:
         return templates.TemplateResponse(
-            "data_import.html", context(request, import_error=str(exc)), status_code=400
+            "data_import.html", _import_context(request, db, import_error=str(exc)), status_code=400
         )
     plan = preview_bundle(db, bundle)
     return templates.TemplateResponse(
         "data_import.html",
-        context(request, import_plan=plan, import_json=json.dumps(bundle, separators=(",", ":"))),
+        _import_context(
+            request,
+            db,
+            import_plan=plan,
+            import_json=json.dumps(bundle, separators=(",", ":")),
+        ),
     )
 
 
@@ -158,12 +172,15 @@ def deputy_import_preview(
         plan = preview_capture(db, payload)
     except ValueError as exc:
         return templates.TemplateResponse(
-            "data_import.html", context(request, transition_error=str(exc)), status_code=400
+            "data_import.html",
+            _import_context(request, db, transition_error=str(exc)),
+            status_code=400,
         )
     return templates.TemplateResponse(
         "data_import.html",
-        context(
+        _import_context(
             request,
+            db,
             transition_plan=plan,
             transition_json=json.dumps(payload, separators=(",", ":")),
         ),
@@ -194,9 +211,36 @@ def deputy_import_apply(
     except (json.JSONDecodeError, ValueError) as exc:
         db.rollback()
         return templates.TemplateResponse(
-            "data_import.html", context(request, transition_error=str(exc)), status_code=409
+            "data_import.html",
+            _import_context(request, db, transition_error=str(exc)),
+            status_code=409,
         )
     return RedirectResponse("/admin/data-import?transition_imported=1", status_code=303)
+
+
+@router.post("/admin/data-import/position-convergence")
+def converge_positions(
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    try:
+        result = apply_position_convergence(db)
+        record_audit(
+            db,
+            "base_positions.converged",
+            "base_position",
+            None,
+            request.state.user.id,
+            detail=result,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse("/admin/data-import?positions_converged=1", status_code=303)
 
 
 @router.get("/admin/online-sources", response_class=HTMLResponse)

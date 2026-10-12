@@ -233,6 +233,84 @@ def test_private_adoption_remains_visible_then_published_link_suppresses(db):  #
     assert db.scalar(select(func.count()).select_from(Workday)) == 1
 
 
+def test_external_items_semantically_suppress_only_visible_equivalent_publications(db) -> None:  # type: ignore[no-untyped-def]
+    user, region, track = foundation(db)
+    other_region = Region(name="Southern")
+    db.add(other_region)
+    db.flush()
+    other_track = Track(name="Other Track", region_id=region.id, palette_slot=2)
+    db.add(other_track)
+    db.flush()
+    for day in range(20, 29):
+        db.add(
+            ExternalCalendarEvent(
+                event_date=date(2026, 9, day),
+                track_id=track.id,
+                discipline="THOROUGHBRED",
+                event_kind="RACE",
+            )
+        )
+    db.flush()
+
+    def add_workday(
+        day: int,
+        *,
+        revision_day: int | None = None,
+        revision_track: Track = track,
+        category: str = "RACE_DAY",
+        discipline: str = "THOROUGHBRED",
+        status: str = "SCHEDULED",
+        workday_region: Region = region,
+        published: bool = True,
+    ) -> None:
+        workday = Workday(
+            region_id=workday_region.id,
+            category=category,
+            racing_discipline=discipline,
+            status=status,
+            created_by_user_id=user.id,
+        )
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED" if published else "DRAFT",
+            work_date=date(2026, 9, revision_day or day),
+            track_id=revision_track.id,
+            track_name_snapshot=revision_track.name,
+            title="Semantic publication",
+            created_by_user_id=user.id,
+        )
+        db.add(revision)
+        db.flush()
+        if published:
+            workday.current_published_revision_id = revision.id
+        else:
+            workday.current_draft_revision_id = revision.id
+
+    add_workday(20)
+    add_workday(21, revision_day=30)
+    add_workday(22, revision_track=other_track)
+    add_workday(23, category="TRIALS")
+    add_workday(24, discipline="HARNESS")
+    add_workday(25, published=False)
+    add_workday(26, status="CANCELLED")
+    add_workday(27, workday_region=other_region)
+    add_workday(28, status="ABANDONED")
+    db.flush()
+
+    items = external_calendar_items(
+        db,
+        actor(user, region, "MANAGER"),
+        date(2026, 9, 1),
+        date(2026, 10, 1),
+    )
+    assert {item["date"] for item in items} == {
+        date(2026, 9, day) for day in range(21, 29)
+    }
+
+
 def test_typed_import_rejects_malformed_and_literal_colour() -> None:
     with pytest.raises(ValueError, match="Invalid import field"):
         parse_bundle('{"version":"2"}')

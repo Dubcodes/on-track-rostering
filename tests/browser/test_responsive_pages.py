@@ -102,6 +102,10 @@ def browser_site():  # type: ignore[no-untyped-def]
         manager_person = Person(display_name="Browser Roster Manager")
         other_person = Person(display_name="Unrelated Browser Crew")
         leave_managed_person = Person(display_name="Browser Leave Managed Crew")
+        regionless_person = Person(
+            display_name="Browser Needs Setup Crew",
+            email="browser-needs-setup@example.test",
+        )
         db.add_all(
             [
                 region,
@@ -117,6 +121,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                 manager_person,
                 other_person,
                 leave_managed_person,
+                regionless_person,
             ]
         )
         db.flush()
@@ -777,6 +782,7 @@ def browser_site():  # type: ignore[no-untyped-def]
             "browser_person_id": str(person.id),
             "position_aware_person_id": str(other_person.id),
             "duplicate_person_ids": [str(duplicate_a.id), str(duplicate_b.id)],
+            "regionless_person_id": str(regionless_person.id),
         }
 
     with socket.socket() as probe:
@@ -1222,6 +1228,77 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     event_link.click()
     page.wait_for_url(f"**{event_href}")
     context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_transition_preview_and_regionless_onboarding_are_readable(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["admin"])
+    _select_theme(page, base_url, "daylight" if width == 375 else "race-night")
+    page.goto(base_url + "/admin/data-import")
+    transition_capture = (
+        "Deputy Web Capture\nSchedule Area References\n"
+        '[{"areaId":"readable-area","areaName":"Director"}]\n'
+        "Extracted Schedule Shift Records\n"
+        '[{"shiftId":"readable-transition-' + str(width) + '",'
+        '"employeeId":"readable-person-' + str(width) + '",'
+        '"employeeName":"Readable Transition Crew",'
+        '"locationName":"T- ' + values["track_name"] + '",'
+        '"areaId":"readable-area",'
+        '"start":"2033-02-01T20:00:00Z",'
+        '"end":"2033-02-02T04:00:00Z",'
+        '"isPublished":true,"isOpen":false}]'
+    )
+    page.locator('textarea[name="pasted_capture"]').fill(transition_capture)
+    page.get_by_role("button", name="Parse and preview transition").click()
+    alert = page.locator(".alert.warning").first
+    assert alert.is_visible()
+    contrast = alert.evaluate(
+        r"""element => {
+          const parse = value => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+          const luminance = value => {
+            const rgb = parse(value).map(channel => {
+              channel /= 255;
+              return channel <= .03928 ? channel / 12.92 : Math.pow((channel + .055) / 1.055, 2.4);
+            });
+            return .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
+          };
+          const style = getComputedStyle(element);
+          const foreground = luminance(style.color);
+          const background = luminance(style.backgroundColor);
+          return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05);
+        }"""
+    )
+    assert contrast >= 4.5
+    published_card = page.locator(".summary-grid > div", has_text="Source Published Rows")
+    assert published_card.count() == 1
+    assert published_card.locator("strong").inner_text() == "1"
+    assert published_card.locator("span").inner_text() == "Source Published Rows"
+    assert page.get_by_text("Skipped Workdays", exact=True).count() == 0
+    _assert_no_horizontal_overflow(page)
+    if width in {1280, 320}:
+        _capture_page(page, f"transition-onboarding-{width}.png")
+
+    page.goto(base_url + "/manage/crew?q=Needs+Setup")
+    queue = page.locator("#needs-setup")
+    assert queue.get_by_text("Browser Needs Setup Crew", exact=True).is_visible()
+    assert queue.get_by_text("No primary region", exact=True).count() >= 1
+    assert queue.get_by_text("Needs setup", exact=True).count() >= 1
+    assert queue.locator(f'form[action="/manage/crew/{values["regionless_person_id"]}/profile"]').count() == 1
+    _assert_no_horizontal_overflow(page)
+    assert errors == []
+    context.close()
+
+    manager_context = browser.new_context(viewport={"width": width, "height": 900})
+    manager_page = manager_context.new_page()
+    _login(manager_page, base_url, values["manager"])
+    manager_page.goto(base_url + "/manage/crew?q=Needs+Setup")
+    assert manager_page.get_by_text("Browser Needs Setup Crew", exact=True).count() == 0
+    _assert_no_horizontal_overflow(manager_page)
+    manager_context.close()
 
 
 def _login(page: Page, base_url: str, credentials: tuple[str, str]) -> None:
