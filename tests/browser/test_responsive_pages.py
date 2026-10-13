@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import time
 import uuid
+import zlib
 from datetime import time as clock_time
 from datetime import timedelta
 from pathlib import Path
@@ -56,7 +58,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def browser_site():  # type: ignore[no-untyped-def]
+def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
     if engine.dialect.name == "sqlite":
         Base.metadata.create_all(engine)
     suffix = uuid.uuid4().hex[:10]
@@ -799,11 +801,13 @@ def browser_site():  # type: ignore[no-untyped-def]
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    server_env = os.environ.copy()
+    server_env["ONTRACK_DATA_DIR"] = str(tmp_path_factory.mktemp("browser-data"))
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=server_env,
     )
     base_url = f"http://127.0.0.1:{port}"
     try:
@@ -1318,6 +1322,21 @@ def _login(page: Page, base_url: str, credentials: tuple[str, str]) -> None:
     page.locator('input[name="credential"]').fill(credentials[1])
     page.locator('button[type="submit"]').click()
     page.wait_for_url("**/month")
+
+
+def _browser_png_bytes(size: int = 64) -> bytes:
+    def chunk(name: bytes, content: bytes) -> bytes:
+        checksum = zlib.crc32(name + content) & 0xFFFFFFFF
+        return struct.pack(">I", len(content)) + name + content + struct.pack(">I", checksum)
+
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    scanline = b"\x00" + bytes((18, 59, 53, 255)) * size
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(scanline * size))
+        + chunk(b"IEND", b"")
+    )
 
 
 def _assert_page(page: Page, url: str) -> None:
@@ -2229,6 +2248,42 @@ def test_builder_travel_and_deliberate_day_swipe(browser_site) -> None:  # type:
     context.close()
 
 
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_admin_branding_icon_controls_are_responsive(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["admin"])
+    page.goto(base_url + "/admin#branding")
+    branding_panel = page.locator("#branding")
+    preview = branding_panel.locator(".branding-icon-preview")
+    assert preview.is_visible()
+    assert preview.evaluate("element => element.complete && element.naturalWidth > 0")
+    assert branding_panel.locator("[data-favicon-status]").is_visible()
+    assert branding_panel.locator('input[name="product_name"]').is_visible()
+    assert branding_panel.get_by_role("button", name="Save product name").is_visible()
+
+    upload = branding_panel.locator('input[type="file"][name="image"]')
+    assert upload.is_visible()
+    assert branding_panel.get_by_role("button", name="Upload icon").is_visible()
+    upload.set_input_files(
+        {"name": "browser-icon.png", "mimeType": "image/png", "buffer": _browser_png_bytes()}
+    )
+    branding_panel.get_by_role("button", name="Upload icon").click()
+    assert page.locator("#branding [data-favicon-status]").get_by_text("Custom PNG").is_visible()
+    reset = page.locator("#branding").get_by_role("button", name="Reset to On Track default")
+    assert reset.is_visible()
+    _assert_no_horizontal_overflow(page)
+    reset.click()
+    assert page.locator("#branding [data-favicon-status]").get_by_text(
+        "Built-in default"
+    ).is_visible()
+    _assert_no_horizontal_overflow(page)
+    assert not errors
+    context.close()
+
+
 @pytest.mark.parametrize("width", [1280, 320])
 def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
@@ -2424,7 +2479,6 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     _login(page, base_url, values["admin"])
     for path in ("/admin", "/manage/catalog", "/manage/accounts"):
         _assert_page(page, base_url + path)
-    page.goto(base_url + "/admin#branding")
     if width in {1280, 320}:
         _capture_page(page, f"admin-{width}.png")
     configured_name = "Trackside Operations Rostering Portal"

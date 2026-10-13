@@ -1,8 +1,11 @@
+import hashlib
 import io
 import re
+import struct
 import uuid
 import warnings
 import zipfile
+import zlib
 from calendar import monthrange
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -25,6 +28,7 @@ from app.auth.factors import begin_totp, generate_recovery_codes
 from app.auth.policy import actor_for
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
+from app.branding.service import MAX_FAVICON_BYTES
 from app.catalog.models import BasePosition, CrewGroup, PositionPreset, Region, Track, Vehicle
 from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
@@ -1004,6 +1008,17 @@ def _login(client: TestClient, email: str, pin: str) -> str:
     csrf = client.cookies.get("ontrack_csrf")
     assert csrf
     return csrf
+
+
+def _png_bytes(width: int, height: int, *, red: int = 18) -> bytes:
+    def chunk(name: bytes, content: bytes) -> bytes:
+        checksum = zlib.crc32(name + content) & 0xFFFFFFFF
+        return struct.pack(">I", len(content)) + name + content + struct.pack(">I", checksum)
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    scanline = b"\x00" + bytes((red, 59, 53, 255)) * width
+    pixels = zlib.compress(scanline * height)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
 
 
 def test_admin_credential_reset_route_and_public_completion_are_bounded(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -3571,6 +3586,171 @@ def test_global_product_branding_is_persistent_admin_only_and_escaped(routed_db)
             follow_redirects=False,
         )
         assert response.status_code == 403
+
+
+def test_configurable_favicon_is_bounded_persistent_audited_and_public(
+    routed_db, monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    import app.branding.service as branding_service
+
+    monkeypatch.setattr(
+        branding_service,
+        "get_settings",
+        lambda: SimpleNamespace(data_dir=tmp_path),
+    )
+    favicon_path = tmp_path / "branding" / "favicon.png"
+
+    anonymous = TestClient(app)
+    default_icon = anonymous.get("/branding/favicon")
+    assert default_icon.status_code == 200
+    assert default_icon.headers["content-type"].startswith("image/svg+xml")
+    assert default_icon.headers["cache-control"] == "no-cache, max-age=0, must-revalidate"
+    assert default_icon.headers["x-content-type-options"] == "nosniff"
+    assert b"<svg" in default_icon.content
+    assert anonymous.get(
+        "/branding/favicon", headers={"If-None-Match": default_icon.headers["etag"]}
+    ).status_code == 304
+    login_page = anonymous.get("/login")
+    assert '<link rel="icon" href="/branding/favicon">' in login_page.text
+    default_manifest = anonymous.get("/manifest.webmanifest")
+    assert default_manifest.headers["cache-control"] == "no-store"
+    assert default_manifest.json()["icons"] == [
+        {
+            "src": "/branding/favicon",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any",
+        }
+    ]
+
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    assert "Built-in default" in admin.get("/admin#branding").text
+    assert admin.post(
+        "/admin/branding/favicon",
+        data={"csrf_token": "wrong"},
+        files={"image": ("icon.png", _png_bytes(64, 64), "image/png")},
+    ).status_code == 403
+
+    validation_cases = (
+        (("icon.jpg", b"not an image", "image/jpeg"), "PNG image"),
+        (("fake.png", b"not a png", "image/png"), "PNG image"),
+        (
+            ("large.png", b"x" * (MAX_FAVICON_BYTES + 1), "image/png"),
+            "2 MB or smaller",
+        ),
+        (("wide.png", _png_bytes(64, 32), "image/png"), "must be square"),
+        (("small.png", _png_bytes(16, 16), "image/png"), "at least 32×32"),
+        (("huge.png", _png_bytes(1025, 1025), "image/png"), "no larger than 1024×1024"),
+        (("corrupt.png", b"\x89PNG\r\n\x1a\nIHDR", "image/png"), "uncorrupted PNG"),
+        (("empty.png", b"", "image/png"), "Choose a PNG image"),
+    )
+    for upload, message in validation_cases:
+        rejected = admin.post(
+            "/admin/branding/favicon",
+            data={"csrf_token": csrf},
+            files={"image": upload},
+        )
+        assert rejected.status_code == 400
+        assert message in rejected.json()["detail"]
+        assert not favicon_path.exists()
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    assert manager.post(
+        "/admin/branding/favicon",
+        data={"csrf_token": manager_csrf},
+        files={"image": ("manager.png", _png_bytes(64, 64), "image/png")},
+    ).status_code == 403
+    assert manager.post(
+        "/admin/branding/favicon/reset",
+        data={"csrf_token": manager_csrf},
+    ).status_code == 403
+
+    first_png = _png_bytes(64, 64)
+    uploaded = admin.post(
+        "/admin/branding/favicon",
+        data={"csrf_token": csrf},
+        files={"image": ("../../outside.png", first_png, "text/plain")},
+        follow_redirects=False,
+    )
+    assert uploaded.status_code == 303
+    assert uploaded.headers["location"] == "/admin#branding"
+    assert favicon_path.read_bytes() == first_png
+    assert list(favicon_path.parent.glob(".favicon-*.tmp")) == []
+    assert not (tmp_path / "outside.png").exists()
+
+    custom_icon = anonymous.get("/branding/favicon")
+    assert custom_icon.status_code == 200
+    assert custom_icon.headers["content-type"].startswith("image/png")
+    assert custom_icon.content == first_png
+    custom_manifest = anonymous.get("/manifest.webmanifest").json()
+    assert custom_manifest["name"] == "On Track"
+    assert custom_manifest["icons"] == [
+        {
+            "src": "/branding/favicon",
+            "sizes": "64x64",
+            "type": "image/png",
+            "purpose": "any",
+        }
+    ]
+    branding_page = admin.get("/admin#branding")
+    assert "Custom PNG · 64×64" in branding_page.text
+    assert 'action="/admin/branding/favicon/reset"' in branding_page.text
+
+    second_png = _png_bytes(128, 128, red=85)
+    replaced = admin.post(
+        "/admin/branding/favicon",
+        data={"csrf_token": csrf},
+        files={"image": ("replacement.png", second_png, "image/png")},
+        follow_redirects=False,
+    )
+    assert replaced.status_code == 303
+    assert favicon_path.read_bytes() == second_png
+    assert list(favicon_path.parent.iterdir()) == [favicon_path]
+
+    assert admin.post(
+        "/admin/branding/favicon/reset",
+        data={"csrf_token": "wrong"},
+    ).status_code == 403
+    reset = admin.post(
+        "/admin/branding/favicon/reset",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert reset.status_code == 303
+    assert not favicon_path.exists()
+    assert admin.get("/branding/favicon").headers["content-type"].startswith("image/svg+xml")
+    repeated = admin.post(
+        "/admin/branding/favicon/reset",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert repeated.status_code == 303
+    assert not favicon_path.exists()
+
+    with factory() as db:
+        uploads = list(
+            db.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.action == "system_branding.favicon_uploaded"
+                )
+            )
+        )
+        resets = list(
+            db.scalars(
+                select(AuditEvent).where(AuditEvent.action == "system_branding.favicon_reset")
+            )
+        )
+        assert len(uploads) == 2
+        assert uploads[-1].detail == {
+            "width": 128,
+            "height": 128,
+            "bytes": len(second_png),
+            "sha256": hashlib.sha256(second_png).hexdigest(),
+        }
+        assert [event.detail["had_custom_icon"] for event in resets] == [True, False]
 
 
 def test_management_workspaces_consolidate_controls_and_primary_region(routed_db) -> None:  # type: ignore[no-untyped-def]

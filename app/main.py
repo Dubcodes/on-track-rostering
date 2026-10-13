@@ -17,6 +17,8 @@ from app.auth.factor_routes import router as factor_router
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.routes import router as auth_router
 from app.auth.security import FreshAuthenticationRequired, is_safe_next
+from app.branding.routes import router as branding_router
+from app.branding.service import FAVICON_URL, favicon_asset
 from app.catalog.routes import router as catalog_router
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -49,6 +51,7 @@ app.add_middleware(AuthenticationMiddleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(get_settings().allowed_hosts))
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.include_router(auth_router)
+app.include_router(branding_router)
 app.include_router(factor_router)
 app.include_router(employee_router)
 app.include_router(external_calendar_router)
@@ -111,6 +114,7 @@ def scheduler_health_endpoint() -> JSONResponse:
 @app.get("/manifest.webmanifest", include_in_schema=False)
 def manifest(request: Request) -> JSONResponse:
     name = request.state.branding.product_name
+    favicon = favicon_asset()
     return JSONResponse(
         {
             "name": name,
@@ -119,6 +123,14 @@ def manifest(request: Request) -> JSONResponse:
             "display": "standalone",
             "background_color": "#f4f7f4",
             "theme_color": "#123b35",
+            "icons": [
+                {
+                    "src": FAVICON_URL,
+                    "sizes": favicon.sizes,
+                    "type": favicon.media_type,
+                    "purpose": "any",
+                }
+            ],
         },
         media_type="application/manifest+json",
         headers={"Cache-Control": "no-store"},

@@ -5,7 +5,7 @@ import uuid
 from datetime import date
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,7 +20,13 @@ from app.auth.security import (
     verify_csrf,
 )
 from app.auth.service import create_credential_reset, create_invitation, validated_email
-from app.branding.service import update_branding
+from app.branding.service import (
+    MAX_FAVICON_BYTES,
+    favicon_asset,
+    reset_custom_favicon,
+    save_custom_favicon,
+    update_branding,
+)
 from app.catalog.models import BasePosition, CrewGroup, Region
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -76,6 +82,7 @@ def admin_page(request: Request, db: Session = Depends(get_db)):
     settings = get_settings()
     scheduler = scheduler_health(db, interval_seconds=settings.scheduler_interval_seconds)
     readiness = evaluate_readiness(db, settings=settings)
+    favicon = favicon_asset()
     return templates.TemplateResponse(
         "admin.html",
         context(
@@ -85,6 +92,10 @@ def admin_page(request: Request, db: Session = Depends(get_db)):
             scheduler_health=scheduler,
             readiness_checks=readiness.checks,
             readiness_ready=readiness.ready,
+            favicon_is_custom=favicon.is_custom,
+            favicon_dimensions=(
+                f"{favicon.width}×{favicon.height}" if favicon.width and favicon.height else None
+            ),
         ),
     )
 
@@ -128,6 +139,58 @@ def update_system_branding(
         row.id,
         request.state.user.id,
         detail={"previous_product_name": previous_name, "product_name": row.product_name},
+    )
+    db.commit()
+    return RedirectResponse("/admin#branding", status_code=303)
+
+
+@router.post("/branding/favicon")
+def upload_system_favicon(
+    request: Request,
+    image: UploadFile = File(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _admin(request)
+    verify_csrf(request, csrf_token)
+    content = image.file.read(MAX_FAVICON_BYTES + 1)
+    try:
+        stored = save_custom_favicon(content)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    record_audit(
+        db,
+        "system_branding.favicon_uploaded",
+        "system_branding",
+        1,
+        request.state.user.id,
+        detail={
+            "width": stored.width,
+            "height": stored.height,
+            "bytes": stored.byte_count,
+            "sha256": stored.digest,
+        },
+    )
+    db.commit()
+    return RedirectResponse("/admin#branding", status_code=303)
+
+
+@router.post("/branding/favicon/reset")
+def reset_system_favicon(
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _admin(request)
+    verify_csrf(request, csrf_token)
+    had_custom_icon = reset_custom_favicon()
+    record_audit(
+        db,
+        "system_branding.favicon_reset",
+        "system_branding",
+        1,
+        request.state.user.id,
+        detail={"had_custom_icon": had_custom_icon},
     )
     db.commit()
     return RedirectResponse("/admin#branding", status_code=303)

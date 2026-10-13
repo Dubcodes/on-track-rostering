@@ -1100,6 +1100,13 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .admin-grid .record-list { margin-bottom: 10px; }
 .admin-grid details + details, .settings-grid details + details { margin-top: 8px; }
 .admin-grid details > form, .settings-grid details > form { margin-top: 12px; }
+.branding-name-form { margin-bottom: 14px; }
+.branding-icon-controls { display: grid; grid-template-columns: 64px minmax(150px,1fr) minmax(240px,1.25fr); gap: 12px; align-items: end; padding-top: 14px; border-top: 1px solid var(--line); }
+.branding-icon-preview { width: 64px; height: 64px; align-self: center; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); object-fit: contain; }
+.branding-icon-copy { display: grid; gap: 4px; align-self: center; min-width: 0; }
+.branding-icon-copy span, .branding-icon-copy small { display: block; }
+.branding-icon-upload { display: grid; grid-template-columns: minmax(150px,1fr) auto; gap: 10px; align-items: end; min-width: 0; }
+.branding-icon-reset { grid-column: 2 / -1; margin: 0; }
 .control-record { border-top: 1px solid var(--line); padding: 9px 2px; }
 .control-record > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .control-record[open] > summary { margin-bottom: 10px; }
@@ -1123,6 +1130,11 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .danger-actions { margin-top: 12px; }
 .admin-grid > #regions, .admin-grid > #tracks { grid-column: 1 / -1; }
 @media (max-width: 560px) {
+  .branding-icon-controls { grid-template-columns: 56px minmax(0,1fr); align-items: center; }
+  .branding-icon-preview { width: 56px; height: 56px; }
+  .branding-icon-upload, .branding-icon-reset { grid-column: 1 / -1; }
+  .branding-icon-upload { grid-template-columns: 1fr; }
+  .branding-icon-upload button, .branding-icon-reset button { width: 100%; }
   .compact-signout { align-items: stretch; flex-direction: column; }
   .control-record > summary { align-items: flex-start; }
   .audit-list .control-record > header { grid-template-columns: 1fr; }

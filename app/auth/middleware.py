@@ -26,6 +26,7 @@ PUBLIC_PATHS = {
     "/credential-reset/complete",
     "/health/live",
     "/health/ready",
+    "/branding/favicon",
     "/manifest.webmanifest",
     "/service-worker.js",
 }
@@ -45,7 +46,10 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return Response("Cross-site request rejected", status_code=403)
         resolved = None
         path = request.url.path
-        database_free = path == "/health/live" or path == "/service-worker.js" or path.startswith("/static/")
+        database_free = (
+            path in {"/branding/favicon", "/health/live", "/service-worker.js"}
+            or path.startswith("/static/")
+        )
         if not database_free:
             with SessionLocal() as db:
                 request.state.branding = branding_for(db)
