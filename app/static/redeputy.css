@@ -988,7 +988,7 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .hours-timeline dl { gap: 0; }
 .hours-timeline dl div { padding: 6px 0; border-top: 1px solid var(--line); }
 .hours-timeline dd { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
-.allowance-dot { border: 1px solid color-mix(in srgb,var(--warn) 45%,var(--line)); background: var(--warn-bg); color: var(--text); }
+.allowance-dot { border: 1px solid color-mix(in srgb,var(--warn) 45%,var(--line)); background: var(--warn-bg); color: var(--warn); }
 .allowance-dot strong { color: var(--warn); }
 @media (max-width: 560px) {
   .hours-person-detail { padding-left: 14px; }
