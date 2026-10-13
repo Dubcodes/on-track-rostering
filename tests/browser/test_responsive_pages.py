@@ -2479,6 +2479,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     _login(page, base_url, values["admin"])
     for path in ("/admin", "/manage/catalog", "/manage/accounts"):
         _assert_page(page, base_url + path)
+    page.goto(base_url + "/admin#branding")
     if width in {1280, 320}:
         _capture_page(page, f"admin-{width}.png")
     configured_name = "Trackside Operations Rostering Portal"
