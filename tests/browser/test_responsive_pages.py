@@ -2549,6 +2549,9 @@ def test_presets_fortnight_anchor_and_team_hours_are_responsive(
     if allowance_person.get_attribute("open") is None:
         allowance_person.locator(":scope > summary").click()
     allowance = allowance_person.locator(".allowance-dot").first
+    allowance_day = allowance.locator("xpath=ancestor::details[contains(@class, 'hours-day')]")
+    if allowance_day.get_attribute("open") is None:
+        allowance_day.locator(":scope > summary").click()
     assert allowance.is_visible()
     assert _contrast_ratio(allowance) >= 4.5
     _assert_no_horizontal_overflow(page)
