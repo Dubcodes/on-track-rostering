@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import uuid
 from datetime import date, time
 from decimal import Decimal
 
 from app.auth.policy import actor_for
 from app.auth.security import hash_credential
-from app.catalog.models import Region
+from app.catalog.models import Region, Track
 from app.core.enums import Role
 from app.hours.service import fortnight_bounds, group_people, published_hours
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
@@ -72,6 +73,31 @@ def test_fortnight_boundary_previous_and_next() -> None:
     )
 
 
+def test_team_hours_bucket_preserves_multiple_locations_and_presentations() -> None:
+    person_id = uuid.uuid4()
+    shared = {
+        "person_id": person_id,
+        "person": "Multi-location person",
+        "date": date(2026, 10, 14),
+        "minutes": 240,
+        "duration": "4h",
+        "category": "Race Day",
+        "role": "CCU",
+    }
+    rows = [
+        {**shared, "track": "Tauranga", "region": "Northern", "presentation": "track-03"},
+        {**shared, "track": "Ellerslie", "region": "Auckland", "presentation": "track-07"},
+    ]
+
+    bucket = group_people(
+        rows, start=date(2026, 10, 12), end=date(2026, 10, 25)
+    )[0]["buckets"][2]
+
+    assert bucket["minutes"] == 480
+    assert bucket["presentations"] == ["track-03", "track-07"]
+    assert "Tauranga" in bucket["label"] and "Ellerslie" in bucket["label"]
+
+
 def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) -> None:  # type: ignore[no-untyped-def]
     region = Region(name="Northern")
     creator = User(
@@ -89,6 +115,9 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
     )
     db.add_all([region, creator, person, employee])
     db.flush()
+    track = Track(region_id=region.id, name="Tauranga", palette_slot=3)
+    db.add(track)
+    db.flush()
     person.home_region_id = region.id
     db.add_all(
         [
@@ -105,6 +134,16 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
         start=time(7, 30),
         end=time(19, 30),
     )
+    labour_day.track_id = track.id
+    labour_day.track_name_snapshot = track.name
+    labour_day.on_track_time = time(8)
+    labour_day.first_trial_time = time(9, 7)
+    labour_day.last_trial_time = time(10, 2)
+    labour_day.first_race_time = time(12)
+    labour_day.last_race_time = time(17, 7)
+    labour_day.pack_up_minutes = 45
+    labour_day.return_travel_minutes = 90
+    labour_day.finish_destination = "Auckland office"
     _published_day(
         db,
         creator=creator,
@@ -132,6 +171,8 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
             status="ASSIGNED",
             start_time=time(6),
             end_time=time(20),
+            return_travel_minutes_override=30,
+            finish_destination_override="Amy's home",
         )
     )
     db.commit()
@@ -148,12 +189,20 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
     assert grouped["duration"] == "17h"
     assert len(grouped["buckets"]) == 14
     assert grouped["buckets"][7]["minutes"] == 840
-    assert grouped["buckets"][7]["intensity"] == "very-strong"
+    assert grouped["buckets"][7]["presentations"] == ["track-03"]
     assert grouped["buckets"][8]["minutes"] == 180
-    assert grouped["buckets"][0]["intensity"] == "empty"
+    assert grouped["buckets"][8]["presentations"] == ["unconfirmed"]
+    assert grouped["buckets"][0]["presentations"] == []
     assert rows[0]["holiday"] == "Labour Day"
     assert {item["kind"] for item in rows[0]["allowances"]} == {"LUNCH", "RESCHEDULED"}
     assert "no automatic break deduction" in rows[0]["raw"]
+    timeline = {item["label"]: item for item in rows[0]["timeline"]}
+    assert timeline["First trial"]["time"] == time(9, 7)
+    assert timeline["Event clear"]["time"] == time(17, 15)
+    assert timeline["Pack-up complete"]["time"] == time(18)
+    assert timeline["Return travel"]["detail"] == "0h 30m"
+    assert timeline["Finish / destination"]["detail"] == "Amy's home"
+    assert "First trial" not in {item["label"] for item in rows[1]["timeline"]}
     db.add_all(
         [
             PersonalWorkdayEntry(

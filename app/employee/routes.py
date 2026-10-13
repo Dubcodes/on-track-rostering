@@ -39,7 +39,12 @@ from app.core.enums import CapabilitySignal, Role, WorkdayCategory
 from app.core.holidays import holiday_info_for_date
 from app.core.themes import THEME_VALUES, normalize_theme
 from app.core.time import local_today, parse_time, utcnow, worked_minutes
-from app.employee.read_models import adjacent_published_workdays, day_assignments, month_items
+from app.employee.read_models import (
+    adjacent_published_workdays,
+    day_assignments,
+    month_items,
+    shows_time_exception,
+)
 from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
 from app.external_calendar.read_models import calendar_preference, external_calendar_items
 from app.external_calendar.service import event_evidence
@@ -287,6 +292,9 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             if row["is_own"]:
                 row["start"] = personal_entry.start_time or row["start"]
                 row["end"] = personal_entry.end_time or row["end"]
+                row["show_time_exception"] = shows_time_exception(
+                    revision, row["start"], row["end"]
+                )
                 if personal_entry.standard_travel_opt_out:
                     row["transport"] = "Making own way"
     participation = person_day_participation(revision, own_rows) if own_rows else None
@@ -754,6 +762,9 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             if row["is_own"]:
                 row["start"] = personal_entry.start_time or row["start"]
                 row["end"] = personal_entry.end_time or row["end"]
+                row["show_time_exception"] = shows_time_exception(
+                    revision, row["start"], row["end"]
+                )
                 if personal_entry.standard_travel_opt_out:
                     row["transport"] = "Making own way"
     own_rows = (

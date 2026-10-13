@@ -1,5 +1,5 @@
 import uuid
-from datetime import time
+from datetime import date, time
 
 import pytest
 
@@ -97,3 +97,59 @@ def test_published_assignment_order_does_not_mutate_identity(db) -> None:  # typ
     visible = day_assignments(db, actor, revision, can_view_all_rows=True, can_view_private_notes=False)
     assert [row["role"] for row in visible] == ["Side 2", "Head On", "Sound/VT", "CCU2", "CCU10"]
     assert identities == [(row.id, row.slot_key, row.slot_index, row.display_name_snapshot) for row in rows]
+
+
+@pytest.mark.parametrize(
+    ("normal_start", "normal_end", "assignment_start", "assignment_end", "expected"),
+    [
+        (time(8), time(18), None, None, False),
+        (time(8), time(18), time(7, 30), None, True),
+        (time(8), time(18), time(9), None, True),
+        (time(8), time(18), None, time(19), True),
+        (None, time(18), time(8), None, True),
+    ],
+)
+def test_published_crew_timing_only_marks_exceptions(
+    db, normal_start, normal_end, assignment_start, assignment_end, expected
+) -> None:  # type: ignore[no-untyped-def]
+    from app.catalog.models import Region
+    from app.rostering.models import Workday
+
+    user = User(
+        email=f"timing-{uuid.uuid4()}@example.test",
+        display_name="Timing",
+        credential_hash="unused",
+    )
+    region = Region(name=f"Timing {uuid.uuid4()}")
+    db.add_all([user, region])
+    db.flush()
+    workday = Workday(region_id=region.id, created_by_user_id=user.id)
+    db.add(workday)
+    db.flush()
+    revision = WorkdayRevision(
+        workday_id=workday.id,
+        revision_number=1,
+        state="PUBLISHED",
+        work_date=date(2026, 10, 14),
+        start_time=normal_start,
+        end_time=normal_end,
+        created_by_user_id=user.id,
+    )
+    db.add(revision)
+    db.flush()
+    db.add(
+        Assignment(
+            revision_id=revision.id,
+            display_name_snapshot="CCU",
+            start_time=assignment_start,
+            end_time=assignment_end,
+        )
+    )
+    db.flush()
+    actor = Actor(user_id=user.id, person_id=None, global_roles=frozenset(), regional_roles={})
+
+    row = day_assignments(
+        db, actor, revision, can_view_all_rows=True, can_view_private_notes=False
+    )[0]
+
+    assert row["show_time_exception"] is expected

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, time
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -255,6 +255,9 @@ def day_assignments(
                 "status": row.status,
                 "start": travel.start,
                 "end": travel.finish,
+                "show_time_exception": shows_time_exception(
+                    revision, travel.start, travel.finish
+                ),
                 "note": note,
                 "is_own": is_own,
                 "can_decline": bool(is_own and row.status == "ASSIGNED" and can_self_decline),
@@ -266,3 +269,12 @@ def day_assignments(
             }
         )
     return result
+
+
+def shows_time_exception(
+    revision: WorkdayRevision, start: time | None, end: time | None
+) -> bool:
+    """Keep ordinary crew rows quiet while surfacing useful timing differences."""
+    if start is None and end is None:
+        return False
+    return start != revision.start_time or end != revision.end_time

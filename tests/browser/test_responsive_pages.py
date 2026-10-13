@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Locator, Page, sync_playwright
 from sqlalchemy import delete, select
 
 from app.auth.security import hash_credential, token_hash
@@ -264,6 +265,7 @@ def browser_site():  # type: ignore[no-untyped-def]
                 status="ASSIGNED",
                 note="Unrelated private browser detail",
                 note_private=True,
+                start_time=clock_time(7),
             ),
             Assignment(
                 revision_id=revision.id,
@@ -1316,6 +1318,27 @@ def _assert_page(page: Page, url: str) -> None:
     _assert_no_horizontal_overflow(page)
 
 
+def _contrast_ratio(locator: Locator) -> float:
+    return float(
+        locator.evaluate(
+            r"""element => {
+              const parse = value => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+              const luminance = value => {
+                const rgb = parse(value).map(channel => channel / 255).map(
+                  channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4
+                );
+                return .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
+              };
+              const style = getComputedStyle(element);
+              const foreground = luminance(style.color);
+              const background = luminance(style.backgroundColor);
+              return (Math.max(foreground, background) + .05) /
+                (Math.min(foreground, background) + .05);
+            }"""
+        )
+    )
+
+
 def _assert_no_horizontal_overflow(page: Page) -> None:
     fits_viewport = page.evaluate(
         "document.documentElement.scrollWidth <= window.innerWidth + 1"
@@ -1644,6 +1667,11 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.locator(".published-roster-card").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
     )
+    ordinary_crew = page.locator(".crew-roster-row", has_text="Browser Crew Member")
+    exception_crew = page.locator(".crew-roster-row", has_text="Unrelated Browser Crew")
+    time_pattern = re.compile(r"\d{1,2}:\d{2}.*–.*\d{1,2}:\d{2}")
+    assert ordinary_crew.get_by_text(time_pattern).count() == 0
+    assert exception_crew.get_by_text(time_pattern).count() == 1
     page.goto(base_url + "/month")
     assert page.locator(".fortnight-total-marker").count() >= 1
     assert page.locator(".fortnight-total-marker strong").first.inner_text().strip()
@@ -2342,6 +2370,13 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     assert page.locator('input[name="weekly_digest"]').is_checked()
     page.goto(base_url + "/hours")
     assert page.locator(".hours-total strong").inner_text() != "0h 0m"
+    personal_day = page.locator("details.hours-day").first
+    personal_day.locator(":scope > summary").click()
+    assert personal_day.locator(".hours-timeline").is_visible()
+    allowance = personal_day.locator(".allowance-dot")
+    if allowance.count():
+        assert _contrast_ratio(allowance.first) >= 4.5
+    _assert_no_horizontal_overflow(page)
     page.goto(base_url + "/month?year=2026&month=1")
     holiday = page.locator(".holiday-marker").first
     assert page.locator('.holiday-marker summary[title*="Auckland Anniversary Day"]').count() == 1
@@ -2465,13 +2500,42 @@ def test_presets_fortnight_anchor_and_team_hours_are_responsive(
     )
     _assert_no_horizontal_overflow(page)
 
+    hours_theme = {
+        1280: "high-contrast",
+        430: "race-night",
+        375: "daylight",
+        320: "high-contrast",
+    }[width]
+    _select_theme(page, base_url, hours_theme)
     page.goto(base_url + "/manage/hours")
     people = page.locator(".hours-person")
-    assert people.count() >= 1
-    assert people.first.locator(".hours-segment").count() == 14
-    assert people.first.locator(".hours-distribution").get_attribute("aria-label")
+    assert people.count() >= 2
+    assert page.locator(".hours-matrix-header > span").count() == 16
+    assert people.first.locator(".hours-matrix-day").count() == 14
+    first_day = people.first.locator(".hours-matrix-day").first
+    assert first_day.get_attribute("tabindex") == "0"
+    assert first_day.get_attribute("aria-label")
+    header_day_box = page.locator(".hours-matrix-header > span").nth(1).bounding_box()
+    row_day_box = people.first.locator(".hours-matrix-day").first.bounding_box()
+    assert header_day_box and row_day_box
+    assert abs(header_day_box["x"] - row_day_box["x"]) < 1
+    second_row_day_box = people.nth(1).locator(".hours-matrix-day").first.bounding_box()
+    assert second_row_day_box
+    assert abs(row_day_box["x"] - second_row_day_box["x"]) < 1
+    matrix_scroll = page.locator(".hours-matrix-scroll")
+    if width < 1068:
+        assert matrix_scroll.evaluate("element => element.scrollWidth > element.clientWidth")
+    worked = people.first.locator(".hours-matrix-day.is-worked").first
+    assert worked.locator(".hours-cell-colours i[data-presentation]").count() >= 1
+    assert worked.locator(".hours-cell-colours i").first.evaluate(
+        "element => getComputedStyle(element).backgroundColor !== 'rgba(0, 0, 0, 0)'"
+    )
     people.first.locator(":scope > summary").click()
     assert people.first.locator(".hours-day").count() >= 1
+    assert people.first.locator(".hours-timeline").count() >= 1
+    allowance = people.first.locator(".allowance-dot").first
+    assert allowance.is_visible()
+    assert _contrast_ratio(allowance) >= 4.5
     _assert_no_horizontal_overflow(page)
 
     page.goto(base_url + "/admin#system-settings")

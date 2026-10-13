@@ -68,6 +68,7 @@ def employee_hours(request: Request, offset: int = Query(0), db: Session = Depen
             start=start,
             end=end,
             offset=offset,
+            matrix_dates=[],
         ),
     )
 
@@ -98,5 +99,6 @@ def management_hours(request: Request, offset: int = Query(0), db: Session = Dep
             start=start,
             end=end,
             offset=offset,
+            matrix_dates=[start + timedelta(days=index) for index in range(14)],
         ),
     )
