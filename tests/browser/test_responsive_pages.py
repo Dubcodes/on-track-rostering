@@ -39,6 +39,7 @@ from app.identity.models import (
 from app.notices.models import OperationalNotice
 from app.notifications.models import NotificationPreference
 from app.rostering.models import (
+    AllowanceIndicator,
     Assignment,
     OpenPositionApplication,
     PersonalWorkdayEntry,
@@ -288,6 +289,14 @@ def browser_site():  # type: ignore[no-untyped-def]
                 status="MANAGER_ACTION_REQUIRED",
             ),
             open_assignment]
+        )
+        db.add(
+            AllowanceIndicator(
+                revision_id=revision.id,
+                person_id=person.id,
+                kind="LUNCH",
+                explanation="Browser fixture allowance for theme contrast qualification.",
+            )
         )
         db.flush()
         db.add(
