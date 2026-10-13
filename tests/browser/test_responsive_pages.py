@@ -2546,7 +2546,8 @@ def test_presets_fortnight_anchor_and_team_hours_are_responsive(
         has=page.locator(".hours-person-cell", has_text="Browser Crew Member")
     )
     assert allowance_person.count() == 1
-    allowance_person.locator(":scope > summary").click()
+    if allowance_person.get_attribute("open") is None:
+        allowance_person.locator(":scope > summary").click()
     allowance = allowance_person.locator(".allowance-dot").first
     assert allowance.is_visible()
     assert _contrast_ratio(allowance) >= 4.5
