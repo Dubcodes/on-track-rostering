@@ -2542,7 +2542,12 @@ def test_presets_fortnight_anchor_and_team_hours_are_responsive(
     people.first.locator(":scope > summary").click()
     assert people.first.locator(".hours-day").count() >= 1
     assert people.first.locator(".hours-timeline").count() >= 1
-    allowance = people.first.locator(".allowance-dot").first
+    allowance_person = people.filter(
+        has=page.locator(".hours-person-cell", has_text="Browser Crew Member")
+    )
+    assert allowance_person.count() == 1
+    allowance_person.locator(":scope > summary").click()
+    allowance = allowance_person.locator(".allowance-dot").first
     assert allowance.is_visible()
     assert _contrast_ratio(allowance) >= 4.5
     _assert_no_horizontal_overflow(page)
