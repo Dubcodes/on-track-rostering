@@ -57,6 +57,8 @@ Ready People may then receive fresh-auth, CSRF-protected batch Employee invitati
 
 Operational leave accepts `Person Name<TAB>Start Date<TAB>End Date`, with DD/MM/YYYY or YYYY-MM-DD dates. Exact normalized active-Person names are required. Preview performs no writes; Apply is atomic and an exact existing active range is idempotent.
 
+This is intentionally a conservative first parser contract. Extend it only from a real copied external-leave sample; do not guess extra columns, fuzzy names, or implicit dates. The broader real-data transition remains: import and reconcile master/source data first, complete Person metadata through Preview/Apply, generate setup links separately, and validate the resulting demo workflows in private staging before production promotion.
+
 ## Staging setup controls
 
 Administration and **Master data** now use the same Region and Track controls.

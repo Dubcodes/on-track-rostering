@@ -30,6 +30,8 @@ When executing a row, record date/time, deployed footer SHA, role/browser/device
 
 No other row is pre-qualified.
 
+The next release candidate is qualified source `d3e0d0a4f15629e93829f86bfabaff7155daf832`, image `ghcr.io/dubcodes/on-track-rostering:sha-d3e0d0a4f15629e93829f86bfabaff7155daf832`, digest `sha256:8b0a356a26894045c6d015c5f935532b718c8ff3d0f6a1a62e20ffc0d1c5e7e1`. These are CI facts only. Every candidate-specific row below remains **PENDING** until the private staging stack is deliberately redeployed and observed.
+
 ## Infrastructure and persistence
 
 | Check | Status | Operator evidence / procedure |
@@ -40,11 +42,14 @@ No other row is pre-qualified.
 | Admin deployment-readiness panel and `production-check` agree | PENDING | Record statuses only; never record configured values. |
 | App container reports healthy | PENDING | Record Portainer health only; do not expose secrets. |
 | PostgreSQL container reports healthy | PENDING | Record health only. |
-| Startup migration reaches Alembic head | PENDING | Review startup log after redeploy. |
+| Startup migration reaches Alembic head | PENDING | Confirm startup reaches release-candidate head `d7a4c9e2f610`. |
 | Repeated app restart keeps Alembic idempotent | PENDING | Restart only the app safely; confirm no migration error. |
 | Session and database state survive app restart | PENDING | Create demo state, restart app, re-check it. |
-| Correct new build SHA appears after redeploy | PENDING | Match footer exactly to the qualified commit. |
+| Scheduler state survives/restarts correctly | PENDING | Record heartbeat before and after a safe scheduler restart; confirm due-state resumes without a duplicate concurrent owner. |
+| Correct new build SHA appears after redeploy | PENDING | Footer must equal the deliberately selected qualified commit, currently `d3e0d0a4f15629e93829f86bfabaff7155daf832`. |
 | Startup/runtime logs have no unexpected errors | PENDING | Review app logs after redeploy and smoke flow. |
+| Scheduler logs have no unexpected errors | PENDING | Review one complete tick; source, notification and Contractor maintenance failures remain isolated and intelligible. |
+| Source refresh logs are clean | PENDING | Confirm no unexpected Love Racing programme/map refresh errors; retain evidence without private payloads. |
 | No production/shared database volume is attached | PENDING | Verify stack service/volume names without changing them. |
 | Staging app has no host-published port | PENDING | After redeploy, verify tunnel reaches `staging_app:8000` over `ontrack_staging_internal`. |
 
@@ -110,6 +115,9 @@ Configured staging origin must be exactly `https://ontrackrostering.dubcodesmedi
 | Login branding changes | PENDING | Log out and check login. |
 | Browser page title changes | PENDING | Check multiple pages. |
 | Dynamic manifest changes | PENDING | Fetch `/manifest.webmanifest`. |
+| Built-in favicon loads | PENDING | Check a clean browser profile and direct favicon request. |
+| Custom Admin PNG favicon and reset | PENDING | Upload a safe demo PNG, verify browser/manifest use after refresh, then reset to built-in. |
+| Favicon cache/installed-app behavior | PENDING | Verify build/version refresh and installed-app icon where practical; record device/browser, not image content. |
 | Settings/help copy changes where relevant | PENDING | Check product-name surfaces. |
 | Passkey/TOTP RP-facing display name changes where appropriate | PENDING | Do not change RP ID/origin. |
 | Restore desired product name | PENDING | Record restored value, not credentials. |
@@ -138,6 +146,26 @@ Configured staging origin must be exactly `https://ontrackrostering.dubcodesmedi
 | Final active Admin protection | PENDING | Never risk the bootstrap Admin; create two demo Admins first. |
 | Duplicate email/identity is controlled | PENDING | Confirm friendly 400/409, never 500. |
 
+## Imported-People onboarding
+
+Use demo-only People and never record raw setup tokens.
+
+| Check | Status | Operator evidence / procedure |
+|---|---|---|
+| Needs Region state | PENDING | Create/import a regionless demo Person and confirm Admin-only nationwide visibility. |
+| Needs Email state | PENDING | Use an in-scope demo Person with Region but no email. |
+| Ready to Invite state | PENDING | Supply valid unique email and Primary Region through the worksheet workflow. |
+| Invitation Pending state | PENDING | Generate one setup link and confirm the Person is no longer selectable as Ready. |
+| Account Linked state | PENDING | Complete activation and confirm linkage to the exact pre-existing Person UUID. |
+| UUID worksheet export | PENDING | Confirm `person_id` is the On Track UUID and no Deputy employee ID is required or exposed. |
+| Metadata Preview is read-only | PENDING | Preview email/Region changes and confirm no Person/User mutation before Apply. |
+| Metadata Apply is atomic and metadata-only | PENDING | Apply valid demo rows; confirm Person email/Region update and no User, credential or invitation is created. |
+| Invalid/duplicate metadata is blocked | PENDING | Exercise invalid/unknown UUID, duplicate row/email and unknown/out-of-scope Region without partial writes. |
+| Batch setup links require CSRF and fresh auth | PENDING | Allow fresh-auth expiry, verify denial, reauthenticate and retry. |
+| Absolute trusted-origin fragment link | PENDING | Confirm public staging origin and `#token=...`; never record the token and confirm it is absent from the HTTP URL/log. |
+| One-time no-store result and client CSV | PENDING | Confirm response is no-store, copy/download occurs locally, and no raw-link POST follows. |
+| Recipient chooses credential | PENDING | Complete one demo activation and verify Employee grant plus intended Person linkage; no automatic email is sent. |
+
 ## Roles and authorization
 
 Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer accounts. For every role, test normal UI visibility and direct crafted requests; hidden controls alone are not authorization proof.
@@ -165,6 +193,10 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Invalid UUID/reference inputs are controlled | PENDING | Crafted Person/Region/Track/Position values must not yield 500. |
 | Cross-region administration is denied | PENDING | Manager outside scope. |
 | Historical snapshots survive rename/archive | PENDING | Publish first, then rename/archive master record. |
+| Region base and Track physical addresses | PENDING | Configure demo addresses and default travel; confirm travel stays configured rather than route-derived. |
+| Published address snapshot immutability | PENDING | Publish, edit live Track/base addresses, and confirm the historical Day retains the original values. |
+| Track map automatic/manual/reset lifecycle | PENDING | Verify safe automatic image, scoped manual override, reset and last-good retention. |
+| Cambridge venues stay distinct | PENDING | Confirm Cambridge Harness and Cambridge Synthetic have separate identity, address, map and travel configuration. |
 
 ## Roster lifecycle
 
@@ -172,11 +204,16 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 |---|---|---|
 | Create incomplete Workday | PENDING | Confirm warnings do not block manual work. |
 | Unified Builder creation | PENDING | Open an empty calendar date and `/manage/workdays/new`; confirm date prefill and no Workday until Save & Preview. |
-| Live Position/Person/Vehicle search | PENDING | Confirm search, selection, and scoped results in the Builder. |
+| Position picker interaction | PENDING | Focus opens the complete valid list; typing filters; Escape restores the selected label/hidden ID; keyboard and touch selection work. |
+| Person picker interaction | PENDING | Repeat complete-list, filter, Escape, hidden-ID, keyboard and touch checks with scoped People. |
+| Vehicle picker interaction | PENDING | Repeat complete-list, filter, Escape, hidden-ID, keyboard and touch checks with normal and truck Vehicles. |
 | Race Day workflow | PENDING | Edit → Preview → Publish. |
-| Race Day automatic timing | PENDING | Confirm programme timing derives Start, On track, and Finish and remains advisory to explicit Manager choices. |
+| Race Day automatic timing | PENDING | With demo values prove first-race floor, Region setup lead, snapshotted Track travel, `last race start + 10m`, race-clear quarter ceiling, Pack-up, Return travel and Finish. |
+| Timing explanation consistency | PENDING | Builder, Preview, published Day calculation detail and Team Hours must agree for the same demo Race Day. |
+| Known timing examples | PENDING | Verify `12:12 → 12:00`, `12:35 → 12:30`, `16:27 + 10 → 16:45`, and `17:44 + 10 → 18:00` without private roster data. |
 | Track default travel snapshot | PENDING | Confirm Track travel derives the default crew call and published timing does not change after master-data edit. |
 | Call-time derivation and explicit reset | PENDING | Confirm vehicle/self travel behavior, explicit timing override, and reset to calculation. |
+| Truck Person-effective start | PENDING | Normal vehicle starts at normal Workday Start; truck starts 15 minutes earlier; Workday Start itself does not move and Hours includes the earlier Person start. |
 | Generated travel | PENDING | Confirm eligible overnight travel creates the parent-linked prior-day Travel Day and publishes atomically. |
 | Non-Race-Day category | PENDING | Confirm race-only wording/fields are absent where appropriate. |
 | Private draft creation | PENDING | Verify employee cannot see it. |
@@ -198,6 +235,22 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Republish/history/human diff | PENDING | Include a change reason. |
 | Date change behavior | PENDING | Old publication remains immutable in history. |
 | Reschedule published Workday | PENDING | Confirm a new linked Workday/publication and preserved source history. |
+
+## Love Racing programme and Race/Trial association
+
+Use a current public meeting and keep manual roster entry available throughout.
+
+| Check | Status | Operator evidence / procedure |
+|---|---|---|
+| Meeting discovery | PENDING | Refresh Love Racing and confirm a current meeting is discovered without creating authoritative roster data. |
+| Race programme detail | PENDING | Confirm complete/partial status, race count, first race, last race and numbered evidence from Meeting-Overview. |
+| Trial Heat programme detail | PENDING | Confirm complete/partial status, first Trial, last Trial where available, count and numbered Heat evidence. |
+| Automatic bounded refresh | PENDING | Observe scheduler refresh and retry state; a complete programme is not fetched every scheduler tick. |
+| No ordinary per-event refresh | PENDING | External Event detail has no “Refresh programme now” control; provider-wide Admin diagnostics remain. |
+| Last-good preservation | PENDING | Where practical, observe a transient failure without losing previously accepted structured facts. |
+| Same-day Race/Trial presentation | PENDING | Same Track/date/discipline and known first times within 180 minutes display together while source rows remain distinct. |
+| Association exclusions | PENDING | Different Track/discipline, unknown timing, or more than 180 minutes remain separate. |
+| Published Race Day with related Trial | PENDING | Workday remains authoritative and Trial context does not change calculated Race Day Start/Finish. |
 
 ## Concurrency and stale writes
 
@@ -246,8 +299,22 @@ Use two independent browser profiles or sessions on the same Workday.
 | Normal Day note | PENDING | Visible according to documented Day policy. |
 | Human Change History | PENDING | No unrelated crew disclosure to event-only users. |
 | Cross-region one-event access | PENDING | Does not become permanent region access. |
+| Track/base/accommodation privacy | PENDING | Assigned Contractor sees the operational Track address needed for the event; accommodation address and private assignment detail remain own/scoped-management only. |
 | Personal offline Day JSON | PENDING | No unrelated crew. |
 | Management data cached offline | PENDING | Must not be cached. |
+
+## Operational leave intake
+
+Use demo-only People and the documented conservative three-column format.
+
+| Check | Status | Operator evidence / procedure |
+|---|---|---|
+| Paste and Preview | PENDING | Paste `Person Name<TAB>Start Date<TAB>End Date`; verify exact Person/date interpretation and zero writes before Apply. |
+| Atomic Apply | PENDING | Apply a valid multi-row preview and confirm all rows appear together. |
+| Duplicate/idempotent range | PENDING | Reapply an exact active range and confirm it is unchanged rather than duplicated. |
+| Invalid/ambiguous input | PENDING | Invalid date, reverse range, unknown or duplicate exact name blocks Apply without partial writes. |
+| Builder warning and deliberate override | PENDING | Roster a demo Person on leave only after the warning; Manager override remains possible. |
+| Team Hours leave state | PENDING | Leave-only Person appears and a worked-on-leave day visibly retains both states. |
 
 ## Hours
 
@@ -261,6 +328,10 @@ Use two independent browser profiles or sessions on the same Workday.
 | Public/regional holiday marker | PENDING | Person geography drives empty-cell marker. |
 | Break deduction | PENDING | No automatic deduction. |
 | Allowances | PENDING | Informational and do not increase hours. |
+| Fourteen-day Track-colour matrix | PENDING | Desktop columns align; Track colour is the day identity and Person/Total columns remain readable. |
+| No weekend-special presentation | PENDING | Saturday/Sunday use the same workload treatment as other operating days. |
+| Leave and worked-on-leave state | PENDING | Leave-only Person appears; a worked day on leave visibly retains both states. |
+| Mobile Hours behavior | PENDING | At 430/375/320 the matrix scrolls within its container, body does not overflow, visible daily duration is hidden, title/accessible detail remains, and expansion gives exact hours. |
 
 ## Offline / PWA
 
@@ -283,6 +354,7 @@ Use two independent browser profiles or sessions on the same Workday.
 | Preferences UI and save behavior | PENDING | Toggle each reminder preference. |
 | Enable on this device UX | PENDING | Record configured/unconfigured message. |
 | Real Web Push provider delivery | PENDING | Keep pending if staging VAPID is absent; never fake a pass. |
+| Push deliberately disabled without staging VAPID | PENDING | With staging-specific keys empty, app/scheduler behavior is quiet and deterministic with no recurring error noise. |
 | Event generation is distinct from delivery | PENDING | Review redacted worker/database evidence. |
 | Durable scheduler invokes worker | PENDING | Observe scheduler heartbeat and notification status; the manual CLI remains diagnostic only. |
 
@@ -292,9 +364,9 @@ Test desktop plus 430px, 375px, and 320px. On each applicable width inspect Logi
 
 | Check | Status | Expected result |
 |---|---|---|
-| No unintended horizontal overflow | PENDING | Include realistically long names. |
+| No unintended horizontal overflow | PENDING | Include realistically long names across Builder, Team Hours, Accounts onboarding, Leave, Month/Day and maps at 1280/430/375/320. |
 | Navigation remains usable | PENDING | No inaccessible destinations or controls. |
-| Forms and selectors remain usable | PENDING | Labels, errors, buttons, and pickers fit. |
+| Forms and selectors remain usable | PENDING | Timing controls align; Position/Person/Vehicle menus remain attached and usable with keyboard/touch. |
 | Calendar/list controls remain usable | PENDING | Include swipe/keyboard where supported. |
 
 ## Logs and security

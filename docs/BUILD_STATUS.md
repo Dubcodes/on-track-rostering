@@ -1,8 +1,8 @@
-# Build status — 2026-10-13
+# Build status — 2026-10-15
 
 ## Current source and deployment boundary
 
-The current qualified `main` is exact SHA `6930da44c4b98ff12f8c14593787d44a0bfe80a4` (release-gate run `38235415281`): **271 PostgreSQL-backed tests** and **56 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified production image was built and published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-6930da44c4b98ff12f8c14593787d44a0bfe80a4` with digest `sha256:594bf3f9b6d084783acdee9ff61171206e1ec25f6b41c348a7c02826105ee5ff`. Staging references that same digest.
+The current qualified `main` is exact SHA `d3e0d0a4f15629e93829f86bfabaff7155daf832` (release-gate run `38617776551`): **300 PostgreSQL-backed tests** and **68 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified production image was built and published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-d3e0d0a4f15629e93829f86bfabaff7155daf832` with digest `sha256:8b0a356a26894045c6d015c5f935532b718c8ff3d0f6a1a62e20ffc0d1c5e7e1`. The registry `:staging` tag points to that same digest, but this does **not** establish that the private staging stack has been redeployed to it.
 
 CI qualification is neither a staging deployment nor a production deployment. No deployment is implied by this checkpoint.
 
@@ -25,6 +25,12 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 - Passkeys, optional TOTP, single-display SHA-256 recovery codes for TOTP, trusted-device/fresh-auth protections, and bounded administrator-assisted primary credential reset. Primary reset revokes sessions and challenges while preserving authenticators, recovery codes, roles, Person linkage, and pending grants.
 - Consolidated Master Data, Crew, Accounts, Hours, Audit, Settings, external calendar/import/source management, configurable branding, provider-neutral racing evidence, Operations, TravelLegs, accommodation, notification delivery, and personal offline read models.
 - Stable racing programme detail parsing and correction, private-draft synchronization/application, trusted persistent Track maps with scoped manual overrides, regional account linking/invitations, and an atomic allowlisted Deputy capture transition importer.
+- Love Racing Race/Start and Trial Heat/Time programme detail, bounded refresh and last-good evidence; same-day Race/Trial presentation association keeps source records independent and leaves manual rostering authoritative.
+- One authoritative Race Day timing rule: first-race quarter-hour floor, Region setup lead, snapshotted Track travel, stable code-level `last race + 10 minutes` clearance before quarter-hour ceiling, Pack-up and Return travel. New Race Days also support a 15-minute Person-effective truck start without moving normal Workday Start.
+- Operational Track/Region/accommodation addresses with immutable publication snapshots, Track-specific map identity/discovery, and explicit Cambridge Harness/Synthetic separation.
+- Paste-based operational leave Preview/atomic Apply, exact-range idempotency, Team Hours leave state, Track-colour fourteen-day presentation, and contained mobile behavior without weekend-specific treatment.
+- Nationwide imported-People onboarding through Person UUID worksheets, metadata-only Preview/Apply, fresh-auth batch setup links, absolute trusted-origin fragment URLs, and client-side one-time CSV creation without automatic email.
+- Shared searchable-picker behavior that opens the complete valid list on focus and restores the authoritative selected label/ID on cancellation, plus built-in and optional Admin PNG favicon/manifest branding.
 - The same application image supplies a PostgreSQL-advisory-locked scheduler for racing discovery/programme/map refresh, Contractor expiry, and notification generation/delivery. Durable scheduler heartbeat plus live, ready, and scheduler health endpoints provide an operations foundation; readiness remains database-only.
 
 ## Qualification history

@@ -100,10 +100,14 @@ Person leave/unavailability is an inclusive whole-date scheduling signal, not an
 
 Race Day operational timing is derived by default from source programme times, Region setup lead, the Workday's Track-travel snapshot, Pack-up, and Return travel. Managers remain authoritative: deliberate Start, On track, Track travel, and Finish overrides are explicitly tracked and survive revision cloning. Published history never consults the current Track master default. Client calculation is feedback only; the save service recalculates non-overridden values from validated database policy and draft inputs.
 
-The final-race source value is a start time. On Track adds the single domain constant of 10 minutes before applying the quarter-hour ceiling. The historical Re-Deputy +3-minute value is not used. Truck early-start policy is a Person-effective offset only: new Race Days default to 15 minutes, while migrated historical revisions remain zero.
+The final-race source value is a start time. On Track adds the single code-level domain constant of 10 minutes before applying the quarter-hour ceiling. It is deliberately not runtime, environment, Admin, SystemSettings, request, or Workday configuration; a deliberate code correction requires normal release requalification. The historical Re-Deputy +3-minute value is not used. Truck early-start policy is a Person-effective offset only: new Race Days default to 15 minutes, while migrated historical revisions remain zero.
 
 Race and Trial source records are never merged. A read model may present same-Track, same-date, same-discipline activity together when known first times differ by at most three hours. Related Trial timing is context and does not change the Race Day calculation automatically.
 
 Operational place addresses are stored without routing or geocoding. Track/base values are snapshotted into revisions, accommodation address stays assignment-scoped, and Cambridge Harness is never treated as an alias of Cambridge Synthetic.
 
 External HR leave remains a paste-driven operational intake, not payroll. People rollout uses Person UUID worksheets, metadata-only Preview/Apply, and separately generated one-time Employee setup links. There is no automatic onboarding email and no Deputy identity dependency.
+
+## Release-candidate UX changes wait for staging evidence
+
+Builder and Team Hours received bounded responsive and interaction corrections before this release candidate. Broader decluttering, control removal, section reorganisation, or another Team Hours visual redesign is deferred until the qualified build is observed on real staging desktop/mobile devices. The conservative leave-paste grammar likewise remains fixed until a real copied source sample exists; it must not grow through guessed or fuzzy parsing.

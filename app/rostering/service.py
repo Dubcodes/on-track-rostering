@@ -418,9 +418,7 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
         pack_up_minutes=draft.pack_up_minutes,
         return_travel_minutes=draft.return_travel_minutes,
         explicit_finish_time=draft.end_time if draft.end_time_is_override else None,
-        last_event_clearance_minutes=(
-            10 if workday.category == WorkdayCategory.RACE_DAY.value else 0
-        ),
+        apply_race_clearance=workday.category == WorkdayCategory.RACE_DAY.value,
     )
     if not draft.end_time_is_override:
         draft.end_time = calculation.race_finish

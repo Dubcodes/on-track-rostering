@@ -155,7 +155,7 @@ def calculate_standard_travel(
     pack_up_minutes: int = 60,
     return_travel_minutes: int | None,
     explicit_finish_time: time | None = None,
-    last_event_clearance_minutes: int = 10,
+    apply_race_clearance: bool = True,
 ) -> StandardTravelCalculation:
     durations = [
         travel_to_hotel_minutes,
@@ -176,8 +176,8 @@ def calculate_standard_travel(
         last_race_at = clock_after(last_race_time, reference=on_track_at)
         race_clear_at_value = (
             race_clear_at(last_race_at)
-            if last_event_clearance_minutes == 10
-            else ceil_to_quarter(last_race_at + timedelta(minutes=last_event_clearance_minutes))
+            if apply_race_clearance
+            else ceil_to_quarter(last_race_at)
         )
         pack_up_done_at = race_clear_at_value + timedelta(minutes=pack_up_minutes)
     else:

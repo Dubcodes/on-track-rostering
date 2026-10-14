@@ -77,7 +77,7 @@ def test_trials_last_trial_or_explicit_finish_drives_standard_travel() -> None:
         hotel_to_track_minutes=30,
         pack_up_minutes=0,
         return_travel_minutes=90,
-        last_event_clearance_minutes=0,
+        apply_race_clearance=False,
     )
     assert (derived.race_clear, derived.race_finish) == (time(14, 15), time(15, 45))
     explicit = calculate_standard_travel(

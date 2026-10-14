@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
+# Stable code-level domain policy. This is intentionally not runtime/Admin configuration.
 LAST_RACE_CLEARANCE_MINUTES = 10
 
 
