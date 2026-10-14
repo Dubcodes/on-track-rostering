@@ -23,6 +23,8 @@ class ExternalCalendarEvent(Base):
     meeting_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     programme_status: Mapped[str] = mapped_column(String(24), default="DISCOVERED")
     first_trial_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    last_trial_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    trial_count: Mapped[int | None] = mapped_column(nullable=True)
     first_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     last_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     race_count: Mapped[int | None] = mapped_column(nullable=True)

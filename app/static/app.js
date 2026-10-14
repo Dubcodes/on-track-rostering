@@ -155,6 +155,33 @@
     }
     go(deltaX < 0 ? rosterNav.dataset.nextUrl : rosterNav.dataset.prevUrl);
   }, {passive: true});
+  document.querySelector("[data-select-ready]")?.addEventListener("change", (event) => {
+    document.querySelectorAll("[data-ready-person]").forEach((item) => {
+      item.checked = event.currentTarget.checked;
+    });
+  });
+  document.querySelectorAll("[data-copy-setup-link]").forEach((button) => {
+    button.addEventListener("click", () => {
+      navigator.clipboard.writeText(button.closest("article").dataset.url);
+    });
+  });
+  document.querySelector("[data-download-setup-links]")?.addEventListener("click", () => {
+    const quote = (value) => `"${value.replaceAll('"', '""')}"`;
+    const rows = [
+      ["person", "email", "setup_url"],
+      ...[...document.querySelectorAll("[data-setup-links] article")].map((item) => [
+        item.dataset.person, item.dataset.email, item.dataset.url,
+      ]),
+    ];
+    const blob = new Blob([rows.map((row) => row.map(quote).join(",")).join("\r\n")], {
+      type: "text/csv",
+    });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "on-track-setup-links.csv";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
   if ("serviceWorker" in navigator && document.body.dataset.userNamespace) {
     const buildId = document.body.dataset.buildId || "local";
     const workerUrl = `/service-worker.js?v=${encodeURIComponent(buildId)}`;

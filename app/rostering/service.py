@@ -75,6 +75,7 @@ class AssignmentInput:
     vehicle_id: uuid.UUID | None = None
     custom_transport_text: str = ""
     accommodation_name: str = ""
+    accommodation_address: str = ""
     uses_standard_travel: bool = True
     hotel_to_track_minutes_override: int | None = None
     finish_destination_override: str = ""
@@ -117,6 +118,7 @@ class DraftDetailsInput:
     hotel_to_track_minutes: int | None = None
     return_travel_minutes: int | None = None
     pack_up_minutes: int = 60
+    truck_start_offset_minutes: int = 15
 
 
 def _validated_track_record(
@@ -171,6 +173,7 @@ def create_workday(
         work_date=work_date,
         track_id=track_id,
         track_name_snapshot=track_name,
+        track_address_snapshot=track.address or "" if track else "",
         title=title.strip() or category.replace("_", " ").title(),
         track_travel_minutes=(
             track.default_travel_minutes
@@ -182,6 +185,11 @@ def create_workday(
             if category == WorkdayCategory.RACE_DAY.value and track
             else None
         ),
+        truck_start_offset_minutes=(15 if category == WorkdayCategory.RACE_DAY.value else 0),
+        start_origin=region.base_name or "",
+        start_address_snapshot=region.base_address or "",
+        finish_destination=region.base_name or "",
+        finish_address_snapshot=region.base_address or "",
         created_by_user_id=actor_user_id,
     )
     db.add(draft)
@@ -282,6 +290,7 @@ def ensure_draft(
         work_date=published.work_date,
         track_id=published.track_id,
         track_name_snapshot=published.track_name_snapshot,
+        track_address_snapshot=published.track_address_snapshot,
         title=published.title,
         start_time=published.start_time,
         start_time_is_override=published.start_time_is_override,
@@ -297,7 +306,9 @@ def ensure_draft(
         last_race_time=published.last_race_time,
         race_count=published.race_count,
         start_origin=published.start_origin,
+        start_address_snapshot=published.start_address_snapshot,
         finish_destination=published.finish_destination,
+        finish_address_snapshot=published.finish_address_snapshot,
         standard_travel_enabled=published.standard_travel_enabled,
         travel_departure_time=published.travel_departure_time,
         travel_to_hotel_minutes=published.travel_to_hotel_minutes,
@@ -305,6 +316,7 @@ def ensure_draft(
         hotel_to_track_minutes=published.hotel_to_track_minutes,
         return_travel_minutes=published.return_travel_minutes,
         pack_up_minutes=published.pack_up_minutes,
+        truck_start_offset_minutes=published.truck_start_offset_minutes,
         day_note=published.day_note,
         created_by_user_id=actor_user_id,
     )
@@ -330,6 +342,7 @@ def ensure_draft(
                 transport_mode=old.transport_mode,
                 custom_transport_text=old.custom_transport_text,
                 accommodation_name=old.accommodation_name,
+                accommodation_address=old.accommodation_address,
                 uses_standard_travel=old.uses_standard_travel,
                 hotel_to_track_minutes_override=old.hotel_to_track_minutes_override,
                 finish_destination_override=old.finish_destination_override,
@@ -405,6 +418,9 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
         pack_up_minutes=draft.pack_up_minutes,
         return_travel_minutes=draft.return_travel_minutes,
         explicit_finish_time=draft.end_time if draft.end_time_is_override else None,
+        last_event_clearance_minutes=(
+            10 if workday.category == WorkdayCategory.RACE_DAY.value else 0
+        ),
     )
     if not draft.end_time_is_override:
         draft.end_time = calculation.race_finish
@@ -817,9 +833,12 @@ def save_draft(
             raise ValueError("Enter the custom transport arrangement.")
         prepared.append((item, position, person))
 
+    previous_start_origin = draft.start_origin
+    previous_finish_destination = draft.finish_destination
     draft.work_date = details.work_date
     draft.track_id = details.track_id
     draft.track_name_snapshot = track_name
+    draft.track_address_snapshot = track.address or "" if track else ""
     draft.title = details.title.strip() or workday.category.replace("_", " ").title()
     draft.start_time, draft.end_time, draft.on_track_time = (
         details.start_time,
@@ -838,6 +857,25 @@ def save_draft(
     draft.change_reason = details.change_reason.strip()
     draft.start_origin = details.start_origin.strip()
     draft.finish_destination = details.finish_destination.strip()
+    if (
+        draft.start_origin != previous_start_origin
+        or draft.finish_destination != previous_finish_destination
+    ):
+        region_for_places = db.get(Region, workday.region_id)
+        if region_for_places is None:
+            raise ValueError("Workday region not found.")
+        if draft.start_origin != previous_start_origin:
+            draft.start_address_snapshot = (
+                region_for_places.base_address or ""
+                if draft.start_origin == (region_for_places.base_name or "")
+                else ""
+            )
+        if draft.finish_destination != previous_finish_destination:
+            draft.finish_address_snapshot = (
+                region_for_places.base_address or ""
+                if draft.finish_destination == (region_for_places.base_name or "")
+                else ""
+            )
     draft.standard_travel_enabled = details.standard_travel_enabled
     draft.travel_departure_time = details.travel_departure_time
     draft.travel_to_hotel_minutes = details.travel_to_hotel_minutes
@@ -845,10 +883,13 @@ def save_draft(
     draft.hotel_to_track_minutes = details.hotel_to_track_minutes
     draft.return_travel_minutes = details.return_travel_minutes
     draft.pack_up_minutes = details.pack_up_minutes
+    draft.truck_start_offset_minutes = details.truck_start_offset_minutes
 
     if workday.category == WorkdayCategory.RACE_DAY.value:
         if not 0 <= draft.pack_up_minutes <= 1440:
             raise ValueError("Pack-up minutes must be between 0 and 1440.")
+        if not 0 <= draft.truck_start_offset_minutes <= 1440:
+            raise ValueError("Truck start offset must be between 0 and 1440 minutes.")
         for value, label in (
             (details.track_travel_minutes, "Track travel"),
             (details.return_travel_minutes, "Return travel"),
@@ -917,6 +958,7 @@ def save_draft(
         )
         assignment.custom_transport_text = item.custom_transport_text.strip()
         assignment.accommodation_name = item.accommodation_name.strip() or None
+        assignment.accommodation_address = item.accommodation_address.strip() or None
         assignment.uses_standard_travel = item.uses_standard_travel
         assignment.hotel_to_track_minutes_override = item.hotel_to_track_minutes_override
         assignment.finish_destination_override = item.finish_destination_override.strip() or None
@@ -1332,6 +1374,7 @@ def reschedule_published_workday(
             work_date=new_date,
             track_id=published.track_id,
             track_name_snapshot=published.track_name_snapshot,
+            track_address_snapshot=published.track_address_snapshot,
             title=published.title,
             start_time=published.start_time,
             start_time_is_override=published.start_time_is_override,
@@ -1347,7 +1390,9 @@ def reschedule_published_workday(
             last_race_time=published.last_race_time,
             race_count=published.race_count,
             start_origin=published.start_origin,
+            start_address_snapshot=published.start_address_snapshot,
             finish_destination=published.finish_destination,
+            finish_address_snapshot=published.finish_address_snapshot,
             standard_travel_enabled=published.standard_travel_enabled,
             travel_departure_time=published.travel_departure_time,
             travel_to_hotel_minutes=published.travel_to_hotel_minutes,
@@ -1355,6 +1400,7 @@ def reschedule_published_workday(
             hotel_to_track_minutes=published.hotel_to_track_minutes,
             return_travel_minutes=published.return_travel_minutes,
             pack_up_minutes=published.pack_up_minutes,
+            truck_start_offset_minutes=published.truck_start_offset_minutes,
             day_note=published.day_note,
             change_reason="",
             created_by_user_id=actor_user_id,
@@ -1381,6 +1427,7 @@ def reschedule_published_workday(
                     transport_mode=old.transport_mode,
                     custom_transport_text=old.custom_transport_text,
                     accommodation_name=old.accommodation_name,
+                    accommodation_address=old.accommodation_address,
                     uses_standard_travel=old.uses_standard_travel,
                     hotel_to_track_minutes_override=old.hotel_to_track_minutes_override,
                     finish_destination_override=old.finish_destination_override,
@@ -1580,6 +1627,7 @@ def decline_published_assignment(
             work_date=published.work_date,
             track_id=published.track_id,
             track_name_snapshot=published.track_name_snapshot,
+            track_address_snapshot=published.track_address_snapshot,
             title=published.title,
             start_time=published.start_time,
             start_time_is_override=published.start_time_is_override,
@@ -1595,7 +1643,9 @@ def decline_published_assignment(
             last_race_time=published.last_race_time,
             race_count=published.race_count,
             start_origin=published.start_origin,
+            start_address_snapshot=published.start_address_snapshot,
             finish_destination=published.finish_destination,
+            finish_address_snapshot=published.finish_address_snapshot,
             standard_travel_enabled=published.standard_travel_enabled,
             travel_departure_time=published.travel_departure_time,
             travel_to_hotel_minutes=published.travel_to_hotel_minutes,
@@ -1603,6 +1653,7 @@ def decline_published_assignment(
             hotel_to_track_minutes=published.hotel_to_track_minutes,
             return_travel_minutes=published.return_travel_minutes,
             pack_up_minutes=published.pack_up_minutes,
+            truck_start_offset_minutes=published.truck_start_offset_minutes,
             day_note=published.day_note,
             change_reason="Employee declined assignment",
             created_by_user_id=actor_user_id,
@@ -1637,6 +1688,7 @@ def decline_published_assignment(
                     transport_mode=old.transport_mode,
                     custom_transport_text=old.custom_transport_text,
                     accommodation_name=old.accommodation_name,
+                    accommodation_address=old.accommodation_address,
                     uses_standard_travel=old.uses_standard_travel,
                     hotel_to_track_minutes_override=old.hotel_to_track_minutes_override,
                     finish_destination_override=old.finish_destination_override,

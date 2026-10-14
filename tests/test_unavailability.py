@@ -11,11 +11,31 @@ from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.unavailability.models import PersonUnavailability
 from app.unavailability.service import (
     active_for_people_on_date,
+    apply_leave_import,
     cancel_unavailability,
     create_unavailability,
+    preview_leave_import,
     roster_conflicts,
     unavailability_label,
 )
+
+
+def test_pasted_leave_preview_is_strict_and_apply_is_idempotent(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Paste Leave")
+    user = User(email="paste-leave@example.test", display_name="Manager", credential_hash="unused")
+    person = Person(display_name="Exact Crew", home_region_id=None)
+    db.add_all([region, user, person])
+    db.flush()
+    person.home_region_id = region.id
+    raw = "Exact Crew\t14/10/2026\t2026-10-16"
+    rows = preview_leave_import(raw, [person])
+    assert rows[0].state == "READY"
+    assert db.scalar(select(PersonUnavailability)) is None
+    assert apply_leave_import(db, rows=rows, actor_user_id=user.id) == (1, 0)
+    repeated = preview_leave_import(raw, [person])
+    assert apply_leave_import(db, rows=repeated, actor_user_id=user.id) == (0, 1)
+    bad = preview_leave_import("Exact Crew\t16/10/2026\t14/10/2026", [person])
+    assert bad[0].state == "ERROR"
 
 
 def test_unavailability_inclusive_overlap_cancellation_and_history(db) -> None:  # type: ignore[no-untyped-def]

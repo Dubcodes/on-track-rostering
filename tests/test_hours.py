@@ -198,8 +198,8 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
     assert "no automatic break deduction" in rows[0]["raw"]
     timeline = {item["label"]: item for item in rows[0]["timeline"]}
     assert timeline["First trial"]["time"] == time(9, 7)
-    assert timeline["Event clear"]["time"] == time(17, 15)
-    assert timeline["Pack-up complete"]["time"] == time(18)
+    assert timeline["Race clear"]["time"] == time(17, 30)
+    assert timeline["Pack-up complete"]["time"] == time(18, 15)
     assert timeline["Return travel"]["detail"] == "0h 30m"
     assert timeline["Finish / destination"]["detail"] == "Amy's home"
     assert "First trial" not in {item["label"] for item in rows[1]["timeline"]}

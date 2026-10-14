@@ -37,7 +37,7 @@ def due_love_racing_events(db: Session, *, now=None) -> list[ExternalCalendarEve
             select(ExternalCalendarEvent)
             .where(
                 programme_identity_exists,
-                ExternalCalendarEvent.event_kind == "RACE",
+                ExternalCalendarEvent.event_kind.in_(("RACE", "TRIAL")),
                 ExternalCalendarEvent.event_date >= now.astimezone(get_settings().timezone).date(),
             )
             .order_by(ExternalCalendarEvent.event_date)
@@ -82,17 +82,18 @@ def refresh_love_racing_programme(
     url = f"https://loveracing.nz/RaceInfo/{identity.provider_event_id}/Meeting-Overview.aspx"
     try:
         response = client.get(url, accept="text/html")
-        programme = parse_love_racing_programme(response.text)
+        programme = parse_love_racing_programme(response.text, event_kind=event.event_kind)
         facts: dict[str, object] = {
             "programme_status": programme.status,
-            "race_count": programme.race_count,
-            "first_race_time": (
-                programme.first_race_time.strftime("%H:%M") if programme.first_race_time else None
-            ),
-            "last_race_time": (
-                programme.last_race_time.strftime("%H:%M") if programme.last_race_time else None
-            ),
         }
+        prefix = "race" if event.event_kind == "RACE" else "trial"
+        facts[f"{prefix}_count"] = programme.race_count
+        facts[f"first_{prefix}_time"] = (
+            programme.first_race_time.strftime("%H:%M") if programme.first_race_time else None
+        )
+        facts[f"last_{prefix}_time"] = (
+            programme.last_race_time.strftime("%H:%M") if programme.last_race_time else None
+        )
         if programme.meeting_name:
             facts["meeting_name"] = programme.meeting_name
         _event, outcome = reconcile_observation(
@@ -107,7 +108,7 @@ def refresh_love_racing_programme(
                 facts=facts,
                 raw_payload={
                     "meeting_url": url,
-                    "races": [
+                    f"{prefix}s": [
                         {
                             "number": number,
                             "scheduled_start": value.strftime("%H:%M") if value else None,
@@ -121,8 +122,8 @@ def refresh_love_racing_programme(
                     "provider_event_id": identity.provider_event_id,
                     "meeting_name": normalized_key(programme.meeting_name or ""),
                     "programme_status": programme.status,
-                    "race_count": programme.race_count,
-                    "races": [
+                    f"{prefix}_count": programme.race_count,
+                    f"{prefix}s": [
                         {
                             "number": number,
                             "scheduled_start": value.strftime("%H:%M") if value else None,

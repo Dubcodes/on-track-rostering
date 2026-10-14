@@ -21,6 +21,8 @@
     <span><small>Races</small><strong>{{ event.race_count if event.race_count is not none else 'Unknown' }}</strong></span>
     {% else %}
     <span><small>First trial</small><strong>{{ event.first_trial_time|display_time or 'Unknown' }}</strong></span>
+    <span><small>Last trial</small><strong>{{ event.last_trial_time|display_time or 'Unknown' }}</strong></span>
+    <span><small>Heats</small><strong>{{ event.trial_count if event.trial_count is not none else 'Unknown' }}</strong></span>
     {% endif %}
   </div>
 
@@ -33,12 +35,9 @@
     {% elif can_build %}
     <form method="post" action="/external-events/{{ event.id }}/build"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Build this {{ 'race day' if event.event_kind == 'RACE' else 'trial day' }}</button></form>
     {% endif %}
-    {% if event.event_kind == 'RACE' and can_refresh_programme %}
-    <form method="post" action="/external-events/{{ event.id }}/refresh-programme"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Refresh programme now</button></form>
-    {% endif %}
   </div>
 
-  {% if event.event_kind == 'RACE' %}
+  {% if event.event_kind in ('RACE', 'TRIAL') %}
   <p class="muted programme-source-status"><strong>Love Racing</strong> · Programme {{ event.programme_status|replace('_', ' ')|lower }} · Checked {{ event.detail_checked_at|display_datetime if event.detail_checked_at else 'never' }}</p>
   <details class="source-programme-diagnostics">
     <summary>Programme source diagnostics</summary>

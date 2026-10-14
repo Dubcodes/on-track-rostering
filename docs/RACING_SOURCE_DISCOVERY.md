@@ -24,6 +24,12 @@ The official `https://events.loveracing.nz/` calendar is stable structured HTML 
 
 No documented public Love Racing API was found. No authentication, cookie capture, challenge bypass, or unofficial source is used.
 
+Love Racing calendar discovery uses the public `RaceInfo.aspx/GetCalendarEvents` website endpoint. Detailed Race and Trial programmes use public `RaceInfo/<meeting-id>/Meeting-Overview.aspx` pages. The strict parser accepts Race/Start and Heat/Time tables, retains the complete numbered sequence in observation evidence, and exposes structured first/last/count summaries. Invalid, duplicate, conflicting, or non-contiguous schedules become awaiting/partial evidence and are never guessed.
+
+The scheduler owns bounded detail refresh for both Race and Trial meetings, including failure backoff and last-good retention. Complete schedules stop routine polling apart from the existing deliberate confirmation window. Ordinary event pages have no per-event Refresh button; provider-wide Admin diagnostics remain available. TAB is not a configured provider.
+
+Month presentation may associate independent same-Track/date/discipline Race and Trial rows when both first times are known and differ by no more than 180 minutes. This never merges source rows or authoritative Workdays.
+
 ## Harness Racing New Zealand
 
 ### Race meetings

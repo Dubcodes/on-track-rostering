@@ -2310,8 +2310,8 @@ def test_trials_builder_renders_switchable_timing_fields_and_clears_race_fields(
     with factory() as db:
         workday = db.get(Workday, workday_id)
         draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
-        assert draft.last_trial_time is None
-        assert draft.first_trial_time is None
+        assert draft.last_trial_time == time(11, 30)
+        assert draft.first_trial_time == time(9, 45)
         assert draft.first_race_time == time(12)
         version = workday.lock_version
     switched = manager.post(
@@ -2695,7 +2695,7 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
     assert '<details class="source-programme-diagnostics">' in detail.text
     assert "Last detail check" in detail.text and "Next automatic retry" in detail.text
     assert "Source response exceeded the configured size limit." in detail.text
-    assert "Refresh programme now" in detail.text
+    assert "Refresh programme now" not in detail.text
 
     monkeypatch.setattr("app.external_calendar.routes.local_today", lambda: date(2026, 10, 8))
     sources = manager.get("/admin/online-sources")
@@ -2706,55 +2706,10 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
     programme_detail = sources.text.split("<h3>Programme detail</h3>", 1)[1].split("</dl>", 1)[0]
     assert "<dt>Partial / Awaiting</dt><dd>1</dd>" in programme_detail
 
-    calls: list[uuid.UUID] = []
-    monkeypatch.setattr(
-        "app.external_calendar.routes.refresh_love_racing_programme",
-        lambda _db, refreshed_event: calls.append(refreshed_event.id)
-        or SimpleNamespace(outcome="ENRICHED", programme_status="PARTIAL"),
-    )
-    refreshed = manager.post(
+    assert manager.post(
         f"/external-events/{event_id}/refresh-programme",
         data={"csrf_token": manager_csrf},
-        follow_redirects=False,
-    )
-    assert refreshed.status_code == 303
-    assert refreshed.headers["location"].endswith("?programme_refresh=partial")
-    assert calls == [event_id]
-    assert "Programme checked — partial schedule available" in manager.get(
-        refreshed.headers["location"]
-    ).text
-
-    for status, outcome, state, message in (
-        ("COMPLETE", "DUPLICATE", "unchanged", "Programme checked — no changes"),
-        ("COMPLETE", "ENRICHED", "updated", "Programme updated"),
-        ("AWAITING_SCHEDULE", "DUPLICATE", "awaiting", "Programme checked — schedule not available yet"),
-        ("AWAITING_SCHEDULE", "ERROR", "failed", "Programme refresh failed"),
-    ):
-        with factory() as db:
-            db.get(ExternalCalendarEvent, event_id).programme_status = status
-            db.commit()
-        monkeypatch.setattr(
-            "app.external_calendar.routes.refresh_love_racing_programme",
-            lambda _db, _event, result=outcome, parsed_status=status: SimpleNamespace(
-                outcome=result,
-                programme_status=None if result == "ERROR" else parsed_status,
-            ),
-        )
-        result = manager.post(
-            f"/external-events/{event_id}/refresh-programme",
-            data={"csrf_token": manager_csrf},
-            follow_redirects=False,
-        )
-        assert result.status_code == 303
-        assert result.headers["location"].endswith(f"?programme_refresh={state}")
-        assert message in manager.get(result.headers["location"]).text
-
-    submanager = TestClient(app)
-    submanager_csrf = _login(submanager, "submanager@example.test", "445566")
-    assert submanager.post(
-        f"/external-events/{event_id}/refresh-programme",
-        data={"csrf_token": submanager_csrf},
-    ).status_code == 403
+    ).status_code == 404
 
 
 def test_online_source_status_is_regional_but_controls_are_admin_only(

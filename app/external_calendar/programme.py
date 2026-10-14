@@ -17,6 +17,23 @@ class ProgrammeResult:
     races: tuple[tuple[int, time | None], ...]
     diagnostics: tuple[str, ...]
     content_hash: str
+    event_kind: str = "RACE"
+
+    @property
+    def trial_count(self) -> int | None:
+        return self.race_count if self.event_kind == "TRIAL" else None
+
+    @property
+    def first_trial_time(self) -> time | None:
+        return self.first_race_time if self.event_kind == "TRIAL" else None
+
+    @property
+    def last_trial_time(self) -> time | None:
+        return self.last_race_time if self.event_kind == "TRIAL" else None
+
+    @property
+    def trials(self) -> tuple[tuple[int, time | None], ...]:
+        return self.races if self.event_kind == "TRIAL" else ()
 
 
 class _ProgrammeParser(HTMLParser):
@@ -164,7 +181,14 @@ def parse_programme_clock(value: str) -> time:
     return time(hour, minute)
 
 
-def parse_love_racing_programme(html: str) -> ProgrammeResult:
+def parse_love_racing_programme(html: str, *, event_kind: str = "RACE") -> ProgrammeResult:
+    event_kind = event_kind.upper()
+    if event_kind not in {"RACE", "TRIAL"}:
+        raise ValueError("Programme kind must be RACE or TRIAL.")
+    sequence_label = "Race" if event_kind == "RACE" else "Heat"
+    sequence_header = sequence_label.casefold()
+    time_header_label = "Start" if event_kind == "RACE" else "Time"
+    time_headers = {"start", "scheduled start"} if event_kind == "RACE" else {"time", "scheduled time"}
     parser = _ProgrammeParser()
     parser.feed(html)
     candidates: dict[int, list[time | None]] = {}
@@ -176,7 +200,7 @@ def parse_love_racing_programme(html: str) -> ProgrammeResult:
         if "overview-info" in classes:
             overview_tables.append(table)
         headers = {text.casefold() for row in table for tag, text in row if tag == "th"}
-        if "race" not in headers or not ({"start", "scheduled start"} & headers):
+        if sequence_header not in headers or not (time_headers & headers):
             continue
         saw_header = True
         header_tables.append(table)
@@ -194,16 +218,16 @@ def parse_love_racing_programme(html: str) -> ProgrammeResult:
                 scheduled_start = parse_programme_clock(clock_text)
             except ValueError:
                 scheduled_start = None
-                diagnostics.append(f"Race {number} had an invalid scheduled start.")
+                diagnostics.append(f"{sequence_label} {number} had an invalid scheduled start.")
             candidates.setdefault(number, []).append(scheduled_start)
     races: list[tuple[int, time | None]] = []
     conflicting = False
     for number in sorted(candidates):
         values = {value for value in candidates[number] if value is not None}
         if len(candidates[number]) > 1:
-            diagnostics.append(f"Race {number} appeared {len(candidates[number])} times.")
+            diagnostics.append(f"{sequence_label} {number} appeared {len(candidates[number])} times.")
         if len(values) > 1:
-            diagnostics.append(f"Race {number} has conflicting scheduled starts.")
+            diagnostics.append(f"{sequence_label} {number} has conflicting scheduled starts.")
             conflicting = True
             continue
         races.append((number, next(iter(values), None)))
@@ -213,14 +237,14 @@ def parse_love_racing_programme(html: str) -> ProgrammeResult:
     scheduled_count = sum(value is not None for value in by_number.values())
     if contiguous and not conflicting and scheduled_count == maximum:
         status = "COMPLETE"
-    elif scheduled_count:
+    elif scheduled_count or (candidates and conflicting):
         status = "PARTIAL"
     else:
         status = "AWAITING_SCHEDULE"
     if not saw_header:
-        diagnostics.append("Race/Start summary header was not found.")
+        diagnostics.append(f"{sequence_label}/{time_header_label} summary header was not found.")
     if candidates and not contiguous:
-        diagnostics.append("Race numbers were not a contiguous sequence.")
+        diagnostics.append(f"{sequence_label} numbers were not a contiguous sequence.")
     return ProgrammeResult(
         meeting_name=_meeting_name([*parser.titles, " ".join(parser.title_parts)]),
         status=status,
@@ -228,6 +252,7 @@ def parse_love_racing_programme(html: str) -> ProgrammeResult:
         first_race_time=by_number.get(1),
         last_race_time=by_number.get(maximum) if maximum else None,
         races=tuple(races),
+        event_kind=event_kind,
         diagnostics=tuple(diagnostics),
         content_hash=hashlib.sha256(html.encode("utf-8", errors="replace")).hexdigest(),
     )

@@ -16,12 +16,16 @@ class ImportRow(BaseModel):
 class RegionImport(ImportRow):
     name: str = Field(min_length=1, max_length=100)
     lifecycle: Literal["ACTIVE", "ARCHIVED"] = "ACTIVE"
+    base_name: str | None = Field(default=None, max_length=160)
+    base_address: str | None = Field(default=None, max_length=500)
 
 
 class TrackImport(ImportRow):
     name: str = Field(min_length=1, max_length=120)
     region: str = Field(min_length=1, max_length=100)
     map_reference: str | None = Field(default=None, max_length=500)
+    address: str | None = Field(default=None, max_length=500)
+    default_travel_minutes: int | None = Field(default=None, ge=0, le=1440)
     lifecycle: Literal["ACTIVE", "ARCHIVED"] = "ACTIVE"
 
 
@@ -52,12 +56,16 @@ class PersonImport(ImportRow):
 
 class ExternalFactsImport(ImportRow):
     first_trial_time: time | None = None
+    last_trial_time: time | None = None
+    trial_count: int | None = Field(default=None, ge=0, le=100)
     first_race_time: time | None = None
     last_race_time: time | None = None
     race_count: int | None = Field(default=None, ge=0, le=100)
     status: str | None = Field(default=None, min_length=1, max_length=24)
 
-    @field_validator("first_trial_time", "first_race_time", "last_race_time", mode="before")
+    @field_validator(
+        "first_trial_time", "last_trial_time", "first_race_time", "last_race_time", mode="before"
+    )
     @classmethod
     def friendly_time(cls, value: object) -> object:
         if value in (None, "") or isinstance(value, time):
@@ -67,7 +75,7 @@ class ExternalFactsImport(ImportRow):
             raise ValueError("time must be HH:MM, H:MM, HHMM, or HMM")
         return parsed
 
-    @field_serializer("first_trial_time", "first_race_time", "last_race_time")
+    @field_serializer("first_trial_time", "last_trial_time", "first_race_time", "last_race_time")
     def serialize_time(self, value: time | None) -> str | None:
         return value.strftime("%H:%M") if value else None
 

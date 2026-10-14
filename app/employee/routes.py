@@ -3,7 +3,7 @@ from __future__ import annotations
 import calendar
 import uuid
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -66,6 +66,7 @@ from app.rostering.models import (
 )
 from app.rostering.participation import active_published_assignments, person_day_participation
 from app.rostering.service import decline_published_assignment, respond_to_reschedule
+from app.rostering.timing import derive_race_day_timing
 from app.track_maps.service import effective_map
 from app.web import context, month_grid, templates
 
@@ -121,6 +122,29 @@ def month_view(
     start, end = _month_bounds(year, month)
     items = month_items(db, request.state.actor, start, end)
     external_items = external_calendar_items(db, request.state.actor, start, end)
+    for item in items:
+        if item["category"] != "RACE_DAY":
+            continue
+        related = [
+            external
+            for external in external_items
+            if external["kind"] == "TRIAL"
+            and external["date"] == item["date"]
+            and external["track_id"] == item["track_id"]
+            and external["discipline"] == item["racing_discipline"]
+            and external["time"] is not None
+            and item["first_race_time"] is not None
+            and abs(
+                (
+                    datetime.combine(item["date"], external["time"])
+                    - datetime.combine(item["date"], item["first_race_time"])
+                ).total_seconds()
+            )
+            <= 180 * 60
+        ]
+        if related:
+            item["related_external"] = related
+            external_items = [external for external in external_items if external not in related]
     by_date: dict[date, list[dict[str, object]]] = {}
     for item in items:
         by_date.setdefault(item["date"], []).append(item)  # type: ignore[arg-type]
@@ -363,6 +387,29 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
     replacement_revision = (
         db.get(WorkdayRevision, replacement.current_published_revision_id) if replacement else None
     )
+    operational_timing = (
+        derive_race_day_timing(
+            work_date=revision.work_date,
+            first_race_time=revision.first_race_time,
+            last_race_time=revision.last_race_time,
+            setup_lead_minutes=region.lead_minutes_race_day if region else 120,
+            track_travel_minutes=revision.track_travel_minutes,
+            pack_up_minutes=revision.pack_up_minutes,
+            return_travel_minutes=revision.return_travel_minutes,
+            on_track_time=revision.on_track_time,
+            on_track_is_override=revision.on_track_time_is_override,
+            start_time=revision.start_time,
+            start_is_override=revision.start_time_is_override,
+            finish_time=revision.end_time,
+            finish_is_override=revision.end_time_is_override,
+        )
+        if workday.category == "RACE_DAY" else None
+    )
+    operational_minutes = (
+        worked_minutes(revision.work_date, operational_timing.start, operational_timing.finish)
+        if operational_timing and operational_timing.start and operational_timing.finish
+        else 0
+    )
     return templates.TemplateResponse(
         "day.html",
         context(
@@ -402,6 +449,8 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             source_event=source_event,
             programme_changed=programme_changed,
             track_map=track_map,
+            operational_timing=operational_timing,
+            operational_minutes=operational_minutes,
             source_title=(
                 f"Raw {'Race' if source_event.event_kind == 'RACE' else 'Trial'} Day Data"
                 if source_event

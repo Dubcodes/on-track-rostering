@@ -127,6 +127,7 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         "vehicle_id",
         "custom_transport_text",
         "accommodation_name",
+        "accommodation_address",
         "uses_standard_travel",
         "hotel_to_track_minutes_override",
         "finish_destination_override",
@@ -157,6 +158,7 @@ def _draft_payload(  # type: ignore[no-untyped-def]
             vehicle_id=_optional_uuid(values["vehicle_id"][index]),
             custom_transport_text=str(values["custom_transport_text"][index]),
             accommodation_name=str(values["accommodation_name"][index]),
+            accommodation_address=str(values["accommodation_address"][index]),
             uses_standard_travel=str(values["uses_standard_travel"][index]) == "1",
             hotel_to_track_minutes_override=_optional_int(
                 values["hotel_to_track_minutes_override"][index]
@@ -173,7 +175,6 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         WorkdayCategory.TRIALS.value,
     }
     race_day = category == WorkdayCategory.RACE_DAY.value
-    trials = category == WorkdayCategory.TRIALS.value
     details = DraftDetailsInput(
         work_date=date.fromisoformat(str(form["work_date"])),
         track_id=_optional_uuid(form.get("track_id")),
@@ -205,8 +206,8 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         track_travel_minutes_is_override=(
             race_day and str(form.get("track_travel_minutes_is_override", "")) == "1"
         ),
-        first_trial_time=parse_time(str(form.get("first_trial_time", ""))) if trials else None,
-        last_trial_time=parse_time(str(form.get("last_trial_time", ""))) if trials else None,
+        first_trial_time=parse_time(str(form.get("first_trial_time", ""))) if racing else None,
+        last_trial_time=parse_time(str(form.get("last_trial_time", ""))) if racing else None,
         first_race_time=parse_time(str(form.get("first_race_time", ""))) if race_day else None,
         last_race_time=parse_time(str(form.get("last_race_time", ""))) if race_day else None,
         race_count=_optional_int(form.get("race_count")) if race_day else None,
@@ -228,6 +229,9 @@ def _draft_payload(  # type: ignore[no-untyped-def]
             60
             if _optional_int(form.get("pack_up_minutes")) is None
             else _optional_int(form.get("pack_up_minutes"))
+        ),
+        truck_start_offset_minutes=(
+            15 if race_day and str(form.get("truck_leaves_early", "")) == "1" else 0
         ),
     )
     return details, assignments

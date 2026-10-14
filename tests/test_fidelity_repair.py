@@ -49,7 +49,7 @@ from app.rostering.travel import (
 )
 
 
-def test_ruakaka_standard_travel_rounds_last_race_without_extra_allowance(db) -> None:  # type: ignore[no-untyped-def]
+def test_ruakaka_standard_travel_applies_race_clearance_before_rounding(db) -> None:  # type: ignore[no-untyped-def]
     calculation = calculate_standard_travel(
         race_date=date(2026, 10, 14),
         on_track_time=time(9),
@@ -63,9 +63,9 @@ def test_ruakaka_standard_travel_rounds_last_race_without_extra_allowance(db) ->
     assert calculation.travel_date == date(2026, 10, 13)
     assert (calculation.travel_start, calculation.travel_finish) == (time(12), time(17))
     assert calculation.race_start == time(8, 30)
-    assert calculation.race_clear == time(16, 30)
-    assert calculation.pack_up_done == time(17, 30)
-    assert calculation.race_finish == time(22, 30)
+    assert calculation.race_clear == time(16, 45)
+    assert calculation.pack_up_done == time(17, 45)
+    assert calculation.race_finish == time(22, 45)
 
 
 def test_trials_last_trial_or_explicit_finish_drives_standard_travel() -> None:
@@ -77,6 +77,7 @@ def test_trials_last_trial_or_explicit_finish_drives_standard_travel() -> None:
         hotel_to_track_minutes=30,
         pack_up_minutes=0,
         return_travel_minutes=90,
+        last_event_clearance_minutes=0,
     )
     assert (derived.race_clear, derived.race_finish) == (time(14, 15), time(15, 45))
     explicit = calculate_standard_travel(
@@ -222,7 +223,7 @@ def test_conflicts_use_effective_hotel_departure_and_return_override(db) -> None
     db.commit()
     conflicts = publication_conflicts(db, target, draft)
     assert {item.kind for item in conflicts} == {"PERSON", "VEHICLE"}
-    assert all(item.timing.startswith("08:00–19:00") for item in conflicts)
+    assert all(item.timing.startswith("08:00–19:15") for item in conflicts)
 
 
 def test_standard_plan_generates_one_linked_travel_participation_per_person(db) -> None:  # type: ignore[no-untyped-def]
@@ -304,7 +305,7 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     assert person_row.start_time is None
     assert effective_person_travel(draft, person_row).start == time(8, 45)
     assert next(row for row in race_rows if row.person_id == local_person.id).start_time == time(8, 50)
-    assert (draft.start_time, draft.end_time) == (time(9), time(22, 30))
+    assert (draft.start_time, draft.end_time) == (time(9), time(22, 45))
     db.refresh(workday)
     save_draft(
             db,
@@ -357,7 +358,7 @@ def test_standard_plan_generates_one_linked_travel_participation_per_person(db) 
     assert {row.display_name_snapshot for row in multi_rows} == {"ENG", "CCU1"}
     participation = person_day_participation(draft, multi_rows)
     assert participation.role_summary == "CCU1 + ENG"
-    assert participation.minutes == 600
+    assert participation.minutes == 615
     travel_rows = list(db.scalars(select(Assignment).where(
         Assignment.revision_id == travel_revision.id, Assignment.person_id == person.id)))
     assert len(travel_rows) == 1

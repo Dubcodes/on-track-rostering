@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Preview leave import · {{ branding.product_name }}{% endblock %}
+{% block content %}
+<section class="page-heading"><p class="eyebrow">Operational leave</p><h1>Preview pasted leave</h1><p>No changes have been made.</p></section>
+<section class="panel"><div class="table-scroll"><table><thead><tr><th>Line</th><th>Person</th><th>Start</th><th>End</th><th>Result</th></tr></thead><tbody>{% for row in import_rows %}<tr><td>{{ row.line }}</td><td>{{ row.person_name }}</td><td>{{ row.start_date or '—' }}</td><td>{{ row.end_date or '—' }}</td><td><strong>{{ row.state }}</strong> · {{ row.message }}</td></tr>{% endfor %}</tbody></table></div>{% if import_rows and not import_rows|selectattr('state','equalto','ERROR')|list %}<form method="post" action="/manage/leave/import-apply"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><textarea name="pasted_rows" hidden>{{ import_raw }}</textarea><button>Apply leave</button></form>{% endif %}<a class="button secondary" href="/manage/leave">Cancel</a></section>
+{% endblock %}

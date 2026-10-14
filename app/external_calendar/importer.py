@@ -113,10 +113,19 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
     }
     for row in bundle.get("regions", []):
         matches = _named(regions, str(row.get("name", "")))
+        changed_fields = []
+        if len(matches) == 1:
+            for field_name in ("base_name", "base_address"):
+                if field_name in row and (getattr(matches[0], field_name) or "") != str(row[field_name]).strip():
+                    changed_fields.append(field_name)
+        result = "update" if changed_fields else "match" if len(matches) == 1 else "conflict" if matches else "create"
+        label = str(row.get("name", ""))
+        if changed_fields:
+            label += f" (updates {', '.join(changed_fields)})"
         plan.bump(
             "regions",
-            "match" if len(matches) == 1 else "conflict" if matches else "create",
-            str(row.get("name", "")),
+            result,
+            label,
         )
     for row in bundle.get("tracks", []):
         region = _named(regions, str(row.get("region", "")))
@@ -128,10 +137,28 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
             and normalized_key(item.name) == normalized_key(str(row.get("name", "")))
         ]
         region_known = len(region) == 1 or normalized_key(str(row.get("region", ""))) in bundle_regions
+        changed_fields = []
+        if len(matches) == 1:
+            for field_name in ("address", "map_reference", "default_travel_minutes"):
+                if field_name not in row:
+                    continue
+                incoming = row[field_name]
+                current = getattr(matches[0], field_name)
+                if field_name in {"address", "map_reference"}:
+                    incoming, current = str(incoming).strip(), current or ""
+                if current != incoming:
+                    changed_fields.append(field_name)
+        result = (
+            "update" if changed_fields else "match" if len(matches) == 1
+            else "conflict" if not region_known else "create"
+        )
+        label = f"{row.get('region', '')} / {row.get('name', '')}"
+        if changed_fields:
+            label += f" (updates {', '.join(changed_fields)})"
         plan.bump(
             "tracks",
-            "match" if len(matches) == 1 else "conflict" if not region_known else "create",
-            f"{row.get('region', '')} / {row.get('name', '')}",
+            result,
+            label,
         )
     for row in bundle.get("crew_groups", []):
         plan.bump(
@@ -297,6 +324,8 @@ def preview_bundle(db: Session, bundle: dict[str, object]) -> ImportPlan:
         enrich = False
         for fact_name in (
             "first_trial_time",
+            "last_trial_time",
+            "trial_count",
             "first_race_time",
             "last_race_time",
             "race_count",
@@ -329,8 +358,14 @@ def apply_bundle(db: Session, bundle: dict[str, object], actor_user_id) -> Impor
         raise ValueError("Resolve import conflicts and ambiguous people before importing.")
     for row in bundle.get("regions", []):
         name = str(row["name"]).strip()
-        if not db.scalar(select(Region).where(func.lower(Region.name) == name.casefold())):
-            db.add(Region(name=name, lifecycle=str(row.get("lifecycle", "ACTIVE"))))
+        region = db.scalar(select(Region).where(func.lower(Region.name) == name.casefold()))
+        if not region:
+            region = Region(name=name, lifecycle=str(row.get("lifecycle", "ACTIVE")))
+            db.add(region)
+        if "base_name" in row:
+            region.base_name = str(row["base_name"]).strip() or None
+        if "base_address" in row:
+            region.base_address = str(row["base_address"]).strip() or None
     db.flush()
     for row in bundle.get("crew_groups", []):
         name = str(row["name"]).strip()
@@ -346,15 +381,19 @@ def apply_bundle(db: Session, bundle: dict[str, object], actor_user_id) -> Impor
             select(Track).where(Track.region_id == region.id, func.lower(Track.name) == name.casefold())
         )
         if not existing:
-            db.add(
-                Track(
+            existing = Track(
                     name=name,
                     region_id=region.id,
                     palette_slot=allocate_palette_slot(db, region.id),
-                    map_reference=str(row.get("map_reference", "")).strip() or None,
                     lifecycle=str(row.get("lifecycle", "ACTIVE")),
                 )
-            )
+            db.add(existing)
+        if "map_reference" in row:
+            existing.map_reference = str(row["map_reference"]).strip() or None
+        if "address" in row:
+            existing.address = str(row["address"]).strip() or None
+        if "default_travel_minutes" in row:
+            existing.default_travel_minutes = row["default_travel_minutes"]
     db.flush()
     for row in bundle.get("positions", []):
         group = db.scalar(

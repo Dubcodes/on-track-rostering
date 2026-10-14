@@ -193,12 +193,17 @@ def reset_region_position_preset(
 def create_region(
     request: Request,
     name: str = Form(...),
+    base_name: str = Form(""),
+    base_address: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     require_admin(request.state.actor)
     verify_csrf(request, csrf_token)
-    row = Region(name=_name(name, 100))
+    row = Region(
+        name=_name(name, 100), base_name=base_name.strip()[:160] or None,
+        base_address=base_address.strip()[:500] or None,
+    )
     with controlled_integrity(db, "A region already uses that name."):
         db.add(row)
         db.flush()
@@ -225,7 +230,7 @@ def _active_group(db: Session, raw_id: str) -> CrewGroup | None:
 
 
 @router.post("/tracks")
-def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str = Form(...), map_reference: str = Form(""), default_travel_minutes: int | None = Form(None), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str = Form(...), address: str = Form(""), map_reference: str = Form(""), default_travel_minutes: int | None = Form(None), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     verify_csrf(request, csrf_token)
     region = db.get(Region, region_id)
     if not region or region.lifecycle != Lifecycle.ACTIVE.value:
@@ -241,7 +246,7 @@ def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str =
         slot = allocate_palette_slot(db, region_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    row = Track(region_id=region_id, name=clean_name, palette_slot=slot, map_reference=map_reference.strip()[:500] or None, default_travel_minutes=default_travel_minutes)
+    row = Track(region_id=region_id, name=clean_name, palette_slot=slot, address=address.strip()[:500] or None, map_reference=map_reference.strip()[:500] or None, default_travel_minutes=default_travel_minutes)
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.add(row)
         db.flush()
@@ -252,7 +257,7 @@ def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str =
 
 
 @router.post("/tracks/{track_id}")
-def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), region_id: uuid.UUID = Form(...), lifecycle: str = Form(...), map_reference: str = Form(""), default_travel_minutes: int | None = Form(None), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), region_id: uuid.UUID = Form(...), lifecycle: str = Form(...), address: str = Form(""), map_reference: str = Form(""), default_travel_minutes: int | None = Form(None), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     verify_csrf(request, csrf_token)
     row = db.scalar(select(Track).where(Track.id == track_id).with_for_update())
     if not row:
@@ -276,6 +281,7 @@ def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), r
             raise HTTPException(409, str(exc)) from exc
     previous_default_travel_minutes = row.default_travel_minutes
     row.name, row.region_id = clean_name, region_id
+    row.address = address.strip()[:500] or None
     row.map_reference, row.lifecycle = map_reference.strip()[:500] or None, clean_lifecycle
     row.default_travel_minutes = default_travel_minutes
     record_audit(db, "track.updated", "track", row.id, request.state.user.id, region_id=row.region_id,
@@ -289,7 +295,7 @@ def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), r
 
 
 @router.post("/regions/{region_id}")
-def update_region(region_id: uuid.UUID, request: Request, name: str = Form(...), lifecycle: str = Form(...), decline_policy: str = Form(...), lead_minutes_race_day: int = Form(...), statutory_holiday_region: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
+def update_region(region_id: uuid.UUID, request: Request, name: str = Form(...), lifecycle: str = Form(...), decline_policy: str = Form(...), lead_minutes_race_day: int = Form(...), statutory_holiday_region: str = Form(""), base_name: str = Form(""), base_address: str = Form(""), csrf_token: str = Form(...), db: Session = Depends(get_db)):
     require_admin(request.state.actor)
     verify_csrf(request, csrf_token)
     row = db.get(Region, region_id)
@@ -300,6 +306,8 @@ def update_region(region_id: uuid.UUID, request: Request, name: str = Form(...),
     row.name, row.lifecycle = _name(name, 100), _lifecycle(lifecycle)
     row.decline_policy, row.lead_minutes_race_day = decline_policy, lead_minutes_race_day
     row.statutory_holiday_region = statutory_holiday_region.strip()[:80] or None
+    row.base_name = base_name.strip()[:160] or None
+    row.base_address = base_address.strip()[:500] or None
     record_audit(db, "region.updated", "region", row.id, request.state.user.id, region_id=row.id)
     with controlled_integrity(db, "A region already uses that name."):
         db.commit()
@@ -564,6 +572,7 @@ def create_vehicle(
     category: str = Form("Operational"),
     model: str = Form(""),
     fuel_type: str = Form(""),
+    is_truck: bool = Form(False),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -571,7 +580,7 @@ def create_vehicle(
     _vehicle_region(db, request.state.actor, home_region_id)
     row = Vehicle(name=_name(name, 100), home_region_id=home_region_id,
                   category=_name(category, 80), model=model.strip()[:100] or None,
-                  fuel_type=fuel_type.strip()[:40] or None)
+                  fuel_type=fuel_type.strip()[:40] or None, is_truck=is_truck)
     with controlled_integrity(db, "A vehicle already uses that name."):
         db.add(row)
         db.flush()
@@ -591,6 +600,7 @@ def update_vehicle(
     category: str = Form("Operational"),
     model: str = Form(""),
     fuel_type: str = Form(""),
+    is_truck: bool = Form(False),
     lifecycle: str = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
@@ -611,6 +621,7 @@ def update_vehicle(
     row.name, row.home_region_id = _name(name, 100), home_region_id
     row.category, row.model = _name(category, 80), model.strip()[:100] or None
     row.fuel_type, row.lifecycle = fuel_type.strip()[:40] or None, _lifecycle(lifecycle)
+    row.is_truck = is_truck
     record_audit(db, "vehicle.updated", "vehicle", row.id, request.state.user.id,
                  region_id=row.home_region_id,
                  detail={"previous": previous, "name": row.name, "home_region_id": str(row.home_region_id),

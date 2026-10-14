@@ -3,11 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
+LAST_RACE_CLEARANCE_MINUTES = 10
+
 
 @dataclass(frozen=True)
 class RaceDayTiming:
+    first_race_floor: time | None
     on_track: time | None
     start: time | None
+    race_clear: time | None
+    pack_up_complete: time | None
     finish: time | None
 
 
@@ -28,6 +33,11 @@ def clock_after(value: time, *, reference: datetime) -> datetime:
     if result < reference:
         result += timedelta(days=1)
     return result
+
+
+def race_clear_at(last_race_at: datetime) -> datetime:
+    """Return operational clear time from the final race's scheduled start."""
+    return ceil_to_quarter(last_race_at + timedelta(minutes=LAST_RACE_CLEARANCE_MINUTES))
 
 
 def derive_race_day_timing(
@@ -58,10 +68,11 @@ def derive_race_day_timing(
     first_race_at = (
         datetime.combine(work_date, first_race_time) if first_race_time is not None else None
     )
+    first_race_floor = floor_to_quarter(first_race_at) if first_race_at is not None else None
     if not on_track_is_override:
         on_track_time = (
-            floor_to_quarter(first_race_at) - timedelta(minutes=setup_lead_minutes)
-        ).time() if first_race_at is not None else None
+            first_race_floor - timedelta(minutes=setup_lead_minutes)
+        ).time() if first_race_floor is not None else None
 
     if not start_is_override:
         start_time = (
@@ -69,20 +80,30 @@ def derive_race_day_timing(
             - timedelta(minutes=track_travel_minutes or 0)
         ).time() if on_track_time is not None else None
 
+    race_clear = None
+    pack_up_complete = None
+    if last_race_time is not None:
+        reference = (
+            datetime.combine(work_date, on_track_time)
+            if on_track_time is not None
+            else datetime.combine(work_date, time.min)
+        )
+        race_clear = race_clear_at(clock_after(last_race_time, reference=reference))
+        pack_up_complete = race_clear + timedelta(minutes=pack_up_minutes)
     if not finish_is_override:
         if last_race_time is None:
             finish_time = None
         else:
-            reference = (
-                datetime.combine(work_date, on_track_time)
-                if on_track_time is not None
-                else datetime.combine(work_date, time.min)
-            )
-            last_race_at = clock_after(last_race_time, reference=reference)
             finish_time = (
-                ceil_to_quarter(last_race_at)
-                + timedelta(minutes=pack_up_minutes)
+                pack_up_complete
                 + timedelta(minutes=return_travel_minutes or 0)
             ).time()
 
-    return RaceDayTiming(on_track=on_track_time, start=start_time, finish=finish_time)
+    return RaceDayTiming(
+        first_race_floor=first_race_floor.time() if first_race_floor else None,
+        on_track=on_track_time,
+        start=start_time,
+        race_clear=race_clear.time() if race_clear else None,
+        pack_up_complete=pack_up_complete.time() if pack_up_complete else None,
+        finish=finish_time,
+    )

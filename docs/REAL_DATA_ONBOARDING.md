@@ -47,6 +47,16 @@ python -m app.external_calendar.inventory --format json --provider HRNZ
 
 Preview every import in the Admin UI before applying it. Preview performs zero writes; Apply is transactional.
 
+## Operational place and People worksheets
+
+The neutral master-data bundle accepts Region `base_name`/`base_address` and Track `address`, configured default travel minutes, and a safe Love Racing catalogue `map_reference`. Travel time is never calculated from an address. Cambridge Harness and Cambridge Synthetic must remain separate canonical Tracks.
+
+Accounts → People onboarding exports `person_id,display_name,email,primary_region,account_state`. `person_id` is the exact On Track Person UUID; Deputy employee IDs are neither required nor exported. Preview validates the complete worksheet without writes. Apply updates only Person email and Primary region in one transaction and creates no User, PIN, password, or invitation.
+
+Ready People may then receive fresh-auth, CSRF-protected batch Employee invitations bound to those exact People. Setup URLs use the configured trusted origin and place the raw token only in the fragment. The no-store result can create a CSV entirely in the browser; raw links are never posted back or persisted as a CSV. On Track sends no onboarding email.
+
+Operational leave accepts `Person Name<TAB>Start Date<TAB>End Date`, with DD/MM/YYYY or YYYY-MM-DD dates. Exact normalized active-Person names are required. Preview performs no writes; Apply is atomic and an exact existing active range is idempotent.
+
 ## Staging setup controls
 
 Administration and **Master data** now use the same Region and Track controls.

@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.accounts.onboarding import (
+    apply_metadata_rows,
+    onboarding_state,
+    parse_metadata_csv,
+)
 from app.audit.service import record_audit
-from app.auth.policy import can_administer_person, can_administer_user
+from app.auth.policy import can_administer_person, can_administer_user, require_admin
 from app.auth.security import active_device_count, require_fresh_auth, verify_csrf
-from app.auth.service import approve_signup, create_invitation, grant_role, revoke_role_grant
+from app.auth.service import (
+    approve_signup,
+    create_invitation,
+    grant_role,
+    revoke_role_grant,
+    validated_email,
+)
 from app.catalog.models import Region
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.enums import Role
 from app.core.forms import optional_uuid
@@ -66,6 +80,38 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
             User.id.in_(linked_user_ids) | User.id.in_(granted_user_ids)
         )
     users = list(db.scalars(users_query.order_by(User.display_name)))
+    people_query = select(Person).where(
+        Person.lifecycle == "ACTIVE", Person.id.not_in(linked_people)
+    )
+    if not request.state.actor.is_admin:
+        people_query = people_query.where(Person.home_region_id.in_(region_ids))
+    people = list(db.scalars(people_query.order_by(Person.display_name)))
+    onboarding_query = select(Person)
+    if not request.state.actor.is_admin:
+        onboarding_query = onboarding_query.where(Person.home_region_id.in_(region_ids))
+    onboarding_records = [
+        {"person": person, "state": onboarding_state(db, person)}
+        for person in db.scalars(onboarding_query.order_by(Person.display_name))
+    ]
+    onboarding_q = request.query_params.get("onboarding_q", "").strip().casefold()
+    onboarding_region = request.query_params.get("onboarding_region", "").strip()
+    onboarding_state_filter = request.query_params.get("onboarding_state", "").strip().upper()
+    if onboarding_q:
+        onboarding_records = [
+            item for item in onboarding_records
+            if onboarding_q in item["person"].display_name.casefold()
+            or onboarding_q in (item["person"].email or "").casefold()
+        ]
+    if onboarding_region:
+        onboarding_records = [
+            item for item in onboarding_records
+            if (onboarding_region == "NONE" and item["person"].home_region_id is None)
+            or str(item["person"].home_region_id) == onboarding_region
+        ]
+    if onboarding_state_filter:
+        onboarding_records = [
+            item for item in onboarding_records if item["state"] == onboarding_state_filter
+        ]
     invitations_query = select(Invitation)
     if not request.state.actor.is_admin:
         invitations_query = invitations_query.where(Invitation.region_id.in_(region_ids))
@@ -110,16 +156,11 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
             request,
             regions=regions,
             signup_requests=list(db.scalars(signup_query.order_by(SignupRequest.created_at))),
-            people=list(
-                db.scalars(
-                    select(Person)
-                    .where(
-                        Person.lifecycle == "ACTIVE",
-                        Person.id.not_in(linked_people),
-                        Person.home_region_id.in_(region_ids),
-                    )
-                    .order_by(Person.display_name)
-                )
+            people=people,
+            onboarding_people=onboarding_records,
+            onboarding_states=(
+                "NEEDS_REGION", "NEEDS_EMAIL", "READY_TO_INVITE", "INVITATION_PENDING",
+                "INVITATION_EXPIRED", "ACCOUNT_LINKED", "ARCHIVED",
             ),
             users=users,
             device_counts=(
@@ -139,6 +180,129 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 else [Role.SUB_MANAGER.value]
             ),
         ),
+    )
+
+
+@router.get("/people-metadata.csv")
+def export_people_metadata(request: Request, db: Session = Depends(get_db)):
+    require_admin(request.state.actor)
+    regions = _regions(request, db)
+    allowed = None if request.state.actor.is_admin else {region.id for region in regions}
+    region_names = {region.id: region.name for region in regions}
+    query = select(Person).where(Person.lifecycle == "ACTIVE").order_by(Person.display_name)
+    people = list(db.scalars(query))
+    if allowed is not None:
+        people = [person for person in people if person.home_region_id in allowed]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(("person_id", "display_name", "email", "primary_region", "account_state"))
+    for person in people:
+        writer.writerow((
+            person.id, person.display_name, person.email or "",
+            region_names.get(person.home_region_id, ""), onboarding_state(db, person),
+        ))
+    return Response(
+        output.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=on-track-people-metadata.csv"},
+    )
+
+
+def _metadata_scope(request: Request, db: Session) -> set[uuid.UUID] | None:
+    regions = _regions(request, db)
+    return None if request.state.actor.is_admin else {region.id for region in regions}
+
+
+@router.post("/people-metadata/preview", response_class=HTMLResponse)
+def preview_people_metadata(
+    request: Request,
+    worksheet: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    try:
+        rows = parse_metadata_csv(db, worksheet, _metadata_scope(request, db))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return templates.TemplateResponse(
+        "people_metadata_preview.html",
+        context(request, rows=rows, worksheet=worksheet),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/people-metadata/apply")
+def apply_people_metadata(
+    request: Request,
+    worksheet: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    rows = parse_metadata_csv(db, worksheet, _metadata_scope(request, db))
+    try:
+        count = apply_metadata_rows(db, rows)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(f"/manage/accounts?metadata={count}", status_code=303)
+
+
+@router.post("/people-invitations", response_class=HTMLResponse)
+def batch_people_invitations(
+    request: Request,
+    person_ids: list[uuid.UUID] = Form(...),
+    confirm: bool = Form(False),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_admin(request.state.actor)
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    if not confirm:
+        raise HTTPException(400, "Confirm setup-link creation before continuing.")
+    allowed = _metadata_scope(request, db)
+    links: list[dict[str, str]] = []
+    origin = get_settings().webauthn_origin.rstrip("/")
+    for person_id in dict.fromkeys(person_ids):
+        person = db.get(Person, person_id)
+        if (
+            not person or onboarding_state(db, person) != "READY_TO_INVITE"
+            or not person.email or person.home_region_id is None
+            or (allowed is not None and person.home_region_id not in allowed)
+        ):
+            db.rollback()
+            raise HTTPException(409, "Every selected Person must still be ready to invite.")
+        try:
+            clean_email = validated_email(person.email)
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(409, "Every selected Person must have a valid email.") from exc
+        duplicate_person = db.scalar(
+            select(Person.id).where(
+                Person.id != person.id,
+                Person.lifecycle == "ACTIVE",
+                func.lower(Person.email) == clean_email,
+            ).limit(1)
+        )
+        duplicate_user = db.scalar(select(User.id).where(func.lower(User.email) == clean_email).limit(1))
+        if duplicate_person or duplicate_user:
+            db.rollback()
+            raise HTTPException(409, "Every selected Person must have a unique email.")
+        _invitation, raw = create_invitation(
+            db, email=clean_email, display_name=person.display_name, person_id=person.id,
+            role=Role.EMPLOYEE.value, region_id=person.home_region_id,
+            actor_user_id=request.state.user.id, commit=False,
+        )
+        links.append({"person": person.display_name, "email": person.email,
+                      "url": f"{origin}/invite#token={raw}"})
+    db.commit()
+    return templates.TemplateResponse(
+        "people_invitation_links.html", context(request, links=links),
+        headers={"Cache-Control": "no-store"},
     )
 
 

@@ -1,14 +1,14 @@
 {
   "version": "1",
   "regions": [
-    {"name": "Northern"},
+    {"name": "Northern", "base_name": "Example Northern Base", "base_address": "1 Example Base Road"},
     {"name": "Central"},
     {"name": "Christchurch"},
     {"name": "Dunedin"},
     {"name": "Office"}
   ],
   "tracks": [
-    {"name": "Example Raceway", "region": "Northern", "map_reference": "https://example.invalid/map"}
+    {"name": "Example Raceway", "region": "Northern", "address": "100 Example Raceway Road", "default_travel_minutes": 45}
   ],
   "crew_groups": [
     {"name": "OB Crew"},

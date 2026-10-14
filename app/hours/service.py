@@ -23,8 +23,9 @@ from app.rostering.models import (
     WorkdayRevision,
 )
 from app.rostering.participation import active_published_assignments, person_day_participation
-from app.rostering.timing import ceil_to_quarter, clock_after
+from app.rostering.timing import ceil_to_quarter, clock_after, derive_race_day_timing
 from app.rostering.travel import EffectivePersonTravel, effective_person_travel
+from app.unavailability.models import PersonUnavailability
 
 
 def fortnight_bounds(
@@ -138,20 +139,39 @@ def _operational_timeline(
         if value is not None:
             timeline.append(_timeline_item(label, at=value))
 
-    last_events = [
-        value
-        for value in (revision.last_trial_time, revision.last_race_time)
-        if value is not None
-    ]
-    if last_events:
-        last_event_at = max(clock_after(value, reference=reference) for value in last_events)
-        event_clear = ceil_to_quarter(last_event_at)
-        timeline.append(_timeline_item("Event clear", at=event_clear.time()))
-        pack_up_complete = event_clear + timedelta(minutes=revision.pack_up_minutes)
+    if revision.last_race_time:
+        timing = derive_race_day_timing(
+            work_date=revision.work_date,
+            first_race_time=revision.first_race_time,
+            last_race_time=revision.last_race_time,
+            setup_lead_minutes=0,
+            track_travel_minutes=revision.track_travel_minutes,
+            pack_up_minutes=revision.pack_up_minutes,
+            return_travel_minutes=revision.return_travel_minutes,
+            on_track_time=revision.on_track_time,
+            on_track_is_override=True,
+            start_time=revision.start_time,
+            start_is_override=True,
+            finish_time=revision.end_time,
+            finish_is_override=revision.end_time_is_override,
+        )
+        timeline.append(_timeline_item("Race clear", at=timing.race_clear))
         timeline.append(
             _timeline_item(
                 "Pack-up complete",
-                at=pack_up_complete.time(),
+                at=timing.pack_up_complete,
+                detail=format_minutes(revision.pack_up_minutes),
+            )
+        )
+    elif revision.last_trial_time:
+        event_clear = ceil_to_quarter(
+            clock_after(revision.last_trial_time, reference=reference)
+        )
+        timeline.append(_timeline_item("Event clear", at=event_clear.time()))
+        timeline.append(
+            _timeline_item(
+                "Pack-up complete",
+                at=(event_clear + timedelta(minutes=revision.pack_up_minutes)).time(),
                 detail=format_minutes(revision.pack_up_minutes),
             )
         )
@@ -326,7 +346,8 @@ def published_hours(
 
 
 def group_people(
-    rows: list[dict[str, object]], *, start: date, end: date
+    rows: list[dict[str, object]], *, start: date, end: date,
+    leave_rows: list[tuple[Person, PersonUnavailability]] | None = None,
 ) -> list[dict[str, object]]:
     grouped: dict[uuid.UUID, dict[str, object]] = {}
     for row in rows:
@@ -340,7 +361,14 @@ def group_people(
         days = group["days"]
         assert isinstance(days, list)
         days.append(row)
-    for group in grouped.values():
+    leave_by_person: dict[uuid.UUID, list[PersonUnavailability]] = defaultdict(list)
+    for person, leave in leave_rows or []:
+        leave_by_person[person.id].append(leave)
+        grouped.setdefault(
+            person.id,
+            {"person": person.display_name, "minutes": 0, "days": []},
+        )
+    for person_id, group in grouped.items():
         group["duration"] = format_minutes(int(group["minutes"]))
         days = group["days"]
         assert isinstance(days, list)
@@ -366,19 +394,29 @@ def group_people(
                 f'{item["track"]} · {item["region"]} · {item["category"]} · {item["role"]}'
                 for item in bucket_rows
             )
+            leave = next(
+                (
+                    item for item in leave_by_person.get(person_id, [])
+                    if item.start_date <= bucket_date <= item.end_date
+                ),
+                None,
+            )
             buckets.append(
                 {
                     "date": bucket_date,
                     "minutes": minutes,
                     "duration": duration,
                     "worked": bool(minutes),
+                    "leave": leave is not None,
                     "location": location_summary,
                     "presentations": presentations,
                     "items": bucket_rows,
                     "label": (
                         f"{bucket_date.strftime('%a %d %b')}; {duration}; {details}"
+                        + ("; On leave" if leave else "")
                         if details
-                        else f"{bucket_date.strftime('%a %d %b')}; 0h; Not worked"
+                        else f"{bucket_date.strftime('%a %d %b')}; 0h; "
+                        + ("On leave" if leave else "Not worked")
                     ),
                 }
             )

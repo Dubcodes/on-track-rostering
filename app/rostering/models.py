@@ -17,8 +17,9 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.catalog.models import Vehicle
 from app.core.database import Base
 from app.core.enums import AssignmentStatus, RevisionState, WorkdayCategory, WorkdayStatus
 from app.core.time import utcnow
@@ -74,6 +75,7 @@ class WorkdayRevision(Base):
     work_date: Mapped[date] = mapped_column(Date, index=True)
     track_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tracks.id"), nullable=True)
     track_name_snapshot: Mapped[str] = mapped_column(String(120), default="To be confirmed")
+    track_address_snapshot: Mapped[str] = mapped_column(String(500), default="")
     title: Mapped[str] = mapped_column(String(160), default="Race Day")
     start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     start_time_is_override: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -89,7 +91,9 @@ class WorkdayRevision(Base):
     last_race_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     race_count: Mapped[int | None] = mapped_column(nullable=True)
     start_origin: Mapped[str] = mapped_column(String(160), default="")
+    start_address_snapshot: Mapped[str] = mapped_column(String(500), default="")
     finish_destination: Mapped[str] = mapped_column(String(160), default="")
+    finish_address_snapshot: Mapped[str] = mapped_column(String(500), default="")
     standard_travel_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     travel_departure_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     travel_to_hotel_minutes: Mapped[int | None] = mapped_column(nullable=True)
@@ -97,6 +101,7 @@ class WorkdayRevision(Base):
     hotel_to_track_minutes: Mapped[int | None] = mapped_column(nullable=True)
     return_travel_minutes: Mapped[int | None] = mapped_column(nullable=True)
     pack_up_minutes: Mapped[int] = mapped_column(default=60)
+    truck_start_offset_minutes: Mapped[int] = mapped_column(default=0)
     day_note: Mapped[str] = mapped_column(Text, default="")
     change_reason: Mapped[str] = mapped_column(String(500), default="")
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
@@ -125,9 +130,11 @@ class Assignment(Base):
     note_private: Mapped[bool] = mapped_column(Boolean, default=True)
     vehicle_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("vehicles.id"), nullable=True)
     vehicle_name_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    vehicle: Mapped[Vehicle | None] = relationship()
     transport_mode: Mapped[str] = mapped_column(String(24), default="UNASSIGNED")
     custom_transport_text: Mapped[str] = mapped_column(String(160), default="")
     accommodation_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    accommodation_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     uses_standard_travel: Mapped[bool] = mapped_column(Boolean, default=True)
     hotel_to_track_minutes_override: Mapped[int | None] = mapped_column(nullable=True)
     finish_destination_override: Mapped[str | None] = mapped_column(String(160), nullable=True)

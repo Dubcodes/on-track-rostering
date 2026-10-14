@@ -17,6 +17,7 @@ from app.hours.service import (
     published_hours,
 )
 from app.identity.models import Person
+from app.unavailability.models import PersonUnavailability
 from app.web import context, templates
 
 router = APIRouter()
@@ -88,13 +89,30 @@ def management_hours(request: Request, offset: int = Query(0), db: Session = Dep
         offset, anchor=request.state.system_settings.fortnight_anchor
     )
     rows = published_hours(db, actor=request.state.actor, start=start, end=end, management=True)
+    leave_statement = (
+        select(Person, PersonUnavailability)
+        .join(PersonUnavailability, PersonUnavailability.person_id == Person.id)
+        .where(
+            Person.lifecycle == "ACTIVE",
+            PersonUnavailability.cancelled_at.is_(None),
+            PersonUnavailability.start_date <= end,
+            PersonUnavailability.end_date >= start,
+        )
+    )
+    if not request.state.actor.is_admin:
+        visible_regions = {
+            region_id for region_id, roles in request.state.actor.regional_roles.items()
+            if {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
+        }
+        leave_statement = leave_statement.where(Person.home_region_id.in_(visible_regions))
+    leave_rows = list(db.execute(leave_statement))
     return templates.TemplateResponse(
         "hours.html",
         context(
             request,
             management=True,
             rows=[],
-            people=group_people(rows, start=start, end=end),
+            people=group_people(rows, start=start, end=end, leave_rows=leave_rows),
             total="",
             start=start,
             end=end,

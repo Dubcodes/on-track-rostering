@@ -955,8 +955,13 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
     crew_option.wait_for(state="visible")
     crew_option.click()
     assert preset_row.locator("[data-person-value]").input_value()
-    preset_row.locator('[data-picker-kind="person"] [data-picker-input]').fill("not selected")
-    assert preset_row.locator("[data-person-value]").input_value() == ""
+    person_input = preset_row.locator('[data-picker-kind="person"] [data-picker-input]')
+    selected_person_id = preset_row.locator("[data-person-value]").input_value()
+    selected_person_label = person_input.get_attribute("data-selected-label")
+    person_input.fill("not selected")
+    assert preset_row.locator("[data-person-value]").input_value() == selected_person_id
+    person_input.press("Escape")
+    assert person_input.input_value() == selected_person_label
     page.locator('select[name="day_type"]').select_option("OFFICE_DAY:")
     page.once("dialog", lambda dialog: dialog.accept())
     page.get_by_role("button", name="Apply defaults").click()
@@ -1097,7 +1102,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     diagnostics = page.locator("details.source-programme-diagnostics")
     assert diagnostics.count() == 1
     assert diagnostics.get_attribute("open") is None
-    assert page.get_by_role("button", name="Refresh programme now").count() == 1
+    assert page.get_by_role("button", name="Refresh programme now").count() == 0
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"external-event-detail-{width}.png")
 
@@ -1312,6 +1317,63 @@ def test_transition_preview_and_regionless_onboarding_are_readable(browser_site,
     _login(manager_page, base_url, values["manager"])
     manager_page.goto(base_url + "/manage/crew?q=Needs+Setup")
     assert manager_page.get_by_text("Browser Needs Setup Crew", exact=True).count() == 0
+    _assert_no_horizontal_overflow(manager_page)
+    manager_context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 430, 375, 320])
+def test_people_onboarding_and_one_time_links_are_responsive(
+    browser_site, width: int
+) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    person_name = f"Browser Setup Person {width}"
+    with SessionLocal() as db:
+        person = Person(
+            display_name=person_name,
+            email=f"browser-setup-{width}-{uuid.uuid4().hex[:8]}@example.com",
+            home_region_id=uuid.UUID(values["region_id"]),
+        )
+        db.add(person)
+        db.commit()
+        person_id = str(person.id)
+
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["admin"])
+    page.goto(base_url + f"/manage/accounts?onboarding_q={person_name.replace(' ', '+')}")
+    onboarding = page.locator("#people-onboarding")
+    assert onboarding.get_by_role("heading", name="People onboarding").is_visible()
+    assert onboarding.get_by_text(person_name, exact=True).is_visible()
+    assert onboarding.locator("small", has_text="Ready To Invite").is_visible()
+    assert onboarding.get_by_role("link", name="Export metadata worksheet").is_visible()
+    onboarding.locator(f'input[name="person_ids"][value="{person_id}"]').check()
+    onboarding.locator('input[name="confirm"]').check()
+    with page.expect_response(
+        lambda response: response.url.endswith("/manage/accounts/people-invitations")
+    ) as result:
+        onboarding.get_by_role("button", name="Create setup links for selected ready People").click()
+    assert result.value.headers.get("cache-control") == "no-store"
+    setup = page.locator(f'[data-setup-links] article[data-person="{person_name}"]')
+    setup_url = setup.get_attribute("data-url") or ""
+    assert setup_url.startswith("http")
+    assert "#token=" in setup_url
+    assert "?token=" not in setup_url
+    with page.expect_download() as download:
+        page.get_by_role("button", name="Download CSV").click()
+    assert download.value.suggested_filename == "on-track-setup-links.csv"
+    _assert_no_horizontal_overflow(page)
+    assert errors == []
+    context.close()
+
+    manager_context = browser.new_context(viewport={"width": width, "height": 900})
+    manager_page = manager_context.new_page()
+    _login(manager_page, base_url, values["manager"])
+    manager_page.goto(base_url + f"/manage/accounts?onboarding_q={person_name.replace(' ', '+')}")
+    manager_onboarding = manager_page.locator("#people-onboarding")
+    assert manager_onboarding.get_by_text(person_name, exact=True).is_visible()
+    assert manager_onboarding.get_by_role("link", name="Export metadata worksheet").count() == 0
+    assert manager_onboarding.locator('input[name="person_ids"]').count() == 0
     _assert_no_horizontal_overflow(manager_page)
     manager_context.close()
 
@@ -2704,7 +2766,7 @@ def test_unpublished_builder_switches_timing_fields_without_reload(browser_site,
     assert page.locator('[data-standard-plan-unavailable]').is_visible()
     day_type.select_option("RACE_DAY:THOROUGHBRED")
     assert page.locator('input[name="on_track_time"]').is_visible()
-    assert not page.locator('input[name="first_trial_time"]').is_visible()
+    assert page.locator('input[name="first_trial_time"]').is_visible()
     assert page.locator('input[name="first_race_time"]').is_visible()
     assert page.locator('[data-standard-plan-control]').is_visible()
     assert page.locator('[data-standard-plan]').is_enabled()
@@ -2712,7 +2774,7 @@ def test_unpublished_builder_switches_timing_fields_without_reload(browser_site,
     assert page.locator('input[name="last_trial_time"]').is_visible()
     assert not page.locator('input[name="first_race_time"]').is_visible()
     day_type.select_option("RACE_DAY:HARNESS")
-    assert not page.locator('input[name="last_trial_time"]').is_visible()
+    assert page.locator('input[name="last_trial_time"]').is_visible()
     assert page.locator('input[name="race_count"]').is_visible()
     _assert_no_horizontal_overflow(page)
     assert not errors

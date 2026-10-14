@@ -28,7 +28,15 @@ from app.external_calendar.service import (
 from app.identity.models import Person, User
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.scheduler import scheduler_lock, scheduler_tick
-from app.track_maps.service import effective_map, image_dimensions, reset_manual_map, save_manual_map
+from app.track_maps.service import (
+    canonical_track_name,
+    effective_map,
+    image_candidates,
+    image_dimensions,
+    reset_manual_map,
+    save_manual_map,
+    trusted_image_url,
+)
 from app.transition_import.service import apply_capture, parse_capture, preview_capture
 
 
@@ -84,6 +92,42 @@ def test_programme_parser_handles_love_racing_clocks_and_meeting_heading() -> No
             pass
         else:
             raise AssertionError(f"{value} should be rejected as a programme clock")
+
+
+def test_trial_heat_programme_uses_same_strict_sequence_contract() -> None:
+    complete = parse_love_racing_programme(
+        """<h2>Trials at Te Rapa</h2><table><tr><th>Heat</th><th>Time</th></tr>
+        <tr><td>1</td><td>12:05</td></tr><tr><td>2</td><td>12:28</td></tr></table>""",
+        event_kind="TRIAL",
+    )
+    assert complete.status == "COMPLETE"
+    assert (complete.trial_count, complete.first_trial_time, complete.last_trial_time) == (
+        2, time(12, 5), time(12, 28)
+    )
+    partial = parse_love_racing_programme(
+        """<table><tr><th>Heat</th><th>Time</th></tr>
+        <tr><td>1</td><td>12:05</td></tr><tr><td>1</td><td>12:10</td></tr></table>""",
+        event_kind="TRIAL",
+    )
+    assert partial.status == "PARTIAL"
+    assert "Heat 1 has conflicting scheduled starts." in partial.diagnostics
+
+
+def test_map_identity_keeps_cambridge_venues_distinct_and_unwraps_safe_image() -> None:
+    assert canonical_track_name("Cambridge Synthetic") == "cambridge synthetic"
+    assert canonical_track_name("Cambridge Harness") == "cambridge harness"
+    wrapped = (
+        "https://loveracing.nz/Image.ashx?path="
+        "%2FOnHorseFiles%2FRacecourses%2FTracks%2FCambridge.jpg"
+    )
+    assert trusted_image_url(wrapped, "https://loveracing.nz/course") == (
+        "https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Cambridge.jpg"
+    )
+    assert trusted_image_url("https://example.test/map.jpg", "https://loveracing.nz") is None
+    candidates = image_candidates(
+        f'<a href="{wrapped}">Map</a>', "https://loveracing.nz/course"
+    )
+    assert candidates == ["https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Cambridge.jpg"]
 
 
 def test_programme_cadence_and_backoff_are_deterministic() -> None:

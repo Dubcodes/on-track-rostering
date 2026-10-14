@@ -17,8 +17,10 @@ from app.core.time import local_today
 from app.identity.models import Person
 from app.unavailability.models import PersonUnavailability
 from app.unavailability.service import (
+    apply_leave_import,
     cancel_unavailability,
     create_unavailability,
+    preview_leave_import,
     roster_conflicts,
 )
 from app.web import context, templates
@@ -108,7 +110,54 @@ def leave_page(
             history_records=history,
             conflicts_by_record=conflicts,
             leave_error=request.query_params.get("error"),
+            import_rows=None,
+            import_raw="",
         ),
+    )
+
+
+def _import_people(db: Session, request: Request) -> list[Person]:
+    query = select(Person).where(Person.lifecycle == "ACTIVE").order_by(Person.display_name)
+    people = list(db.scalars(query))
+    if request.state.actor.is_admin:
+        return people
+    allowed = {region.id for region in _authorized_regions(db, request)}
+    return [person for person in people if person.home_region_id in allowed]
+
+
+@router.post("/import-preview", response_class=HTMLResponse)
+def preview_leave(
+    request: Request,
+    pasted_rows: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    rows = preview_leave_import(pasted_rows, _import_people(db, request))
+    return templates.TemplateResponse(
+        "leave_import_preview.html",
+        context(request, import_rows=rows, import_raw=pasted_rows),
+    )
+
+
+@router.post("/import-apply")
+def apply_leave(
+    request: Request,
+    pasted_rows: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    rows = preview_leave_import(pasted_rows, _import_people(db, request))
+    try:
+        created, unchanged = apply_leave_import(
+            db, rows=rows, actor_user_id=request.state.user.id
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(
+        f"/manage/leave?imported={created}&unchanged={unchanged}", status_code=303
     )
 
 

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.rostering.models import Assignment, WorkdayRevision
 
-from app.rostering.timing import ceil_to_quarter, clock_after
+from app.rostering.timing import ceil_to_quarter, clock_after, race_clear_at
 
 TRANSPORT_UNASSIGNED = "UNASSIGNED"
 TRANSPORT_VEHICLE = "VEHICLE"
@@ -96,13 +96,25 @@ def effective_person_travel(
         start = revision.on_track_time
     if start is None:
         start = revision.start_time
+    if (
+        assignment.start_time is None
+        and not uses_standard
+        and assignment.transport_mode == TRANSPORT_VEHICLE
+        and bool(getattr(getattr(assignment, "vehicle", None), "is_truck", False))
+        and start is not None
+        and revision.truck_start_offset_minutes
+    ):
+        start = (
+            datetime.combine(revision.work_date, start)
+            - timedelta(minutes=revision.truck_start_offset_minutes)
+        ).time()
     finish = assignment.end_time or revision.end_time
     return_minutes = (
         assignment.return_travel_minutes_override
         if assignment.return_travel_minutes_override is not None
         else revision.return_travel_minutes
     )
-    last_event = revision.last_trial_time or revision.last_race_time
+    last_event = revision.last_race_time or revision.last_trial_time
     if (
         assignment.end_time is None
         and uses_standard
@@ -112,7 +124,8 @@ def effective_person_travel(
         and revision.on_track_time is not None
     ):
         reference = datetime.combine(revision.work_date, revision.on_track_time)
-        cleared = ceil_to_quarter(clock_after(last_event, reference=reference))
+        event_at = clock_after(last_event, reference=reference)
+        cleared = race_clear_at(event_at) if revision.last_race_time else ceil_to_quarter(event_at)
         finish = (
             cleared
             + timedelta(minutes=revision.pack_up_minutes)
@@ -142,6 +155,7 @@ def calculate_standard_travel(
     pack_up_minutes: int = 60,
     return_travel_minutes: int | None,
     explicit_finish_time: time | None = None,
+    last_event_clearance_minutes: int = 10,
 ) -> StandardTravelCalculation:
     durations = [
         travel_to_hotel_minutes,
@@ -160,11 +174,15 @@ def calculate_standard_travel(
     race_start_at = on_track_at - timedelta(minutes=hotel_to_track_minutes)
     if last_race_time is not None:
         last_race_at = clock_after(last_race_time, reference=on_track_at)
-        race_clear_at = ceil_to_quarter(last_race_at)
-        pack_up_done_at = race_clear_at + timedelta(minutes=pack_up_minutes)
+        race_clear_at_value = (
+            race_clear_at(last_race_at)
+            if last_event_clearance_minutes == 10
+            else ceil_to_quarter(last_race_at + timedelta(minutes=last_event_clearance_minutes))
+        )
+        pack_up_done_at = race_clear_at_value + timedelta(minutes=pack_up_minutes)
     else:
         pack_up_done_at = clock_after(explicit_finish_time, reference=on_track_at)  # type: ignore[arg-type]
-        race_clear_at = pack_up_done_at
+        race_clear_at_value = pack_up_done_at
     race_finish_at = (
         clock_after(explicit_finish_time, reference=on_track_at)
         if explicit_finish_time is not None
@@ -175,7 +193,7 @@ def calculate_standard_travel(
         travel_start=travel_start_at.time(),
         travel_finish=travel_finish_at.time(),
         race_start=race_start_at.time(),
-        race_clear=race_clear_at.time(),
+        race_clear=race_clear_at_value.time(),
         pack_up_done=pack_up_done_at.time(),
         race_finish=race_finish_at.time(),
     )

@@ -176,6 +176,78 @@ def test_preferences_filter_external_only_with_expected_defaults(db):  # type: i
     assert len(items) == 1 and items[0]["discipline"] == "HARNESS" and items[0]["minimal"] is True
 
 
+@pytest.mark.parametrize(
+    ("trial_time", "expected_items"),
+    ((time(9, 30), 1), (time(9, 29), 2), (None, 2)),
+)
+def test_race_and_trial_grouping_obeys_exact_three_hour_boundary(
+    db, trial_time, expected_items
+) -> None:  # type: ignore[no-untyped-def]
+    user, region, track = foundation(db)
+    db.add(CalendarDisplayPreference(user_id=user.id, show_trials=True))
+    db.add_all(
+        [
+            ExternalCalendarEvent(
+                event_date=date(2026, 9, 20),
+                track_id=track.id,
+                discipline="THOROUGHBRED",
+                event_kind="TRIAL",
+                first_trial_time=trial_time,
+            ),
+            ExternalCalendarEvent(
+                event_date=date(2026, 9, 20),
+                track_id=track.id,
+                discipline="THOROUGHBRED",
+                event_kind="RACE",
+                first_race_time=time(12, 30),
+            ),
+        ]
+    )
+    db.flush()
+
+    items = external_calendar_items(
+        db, actor(user, region), date(2026, 9, 1), date(2026, 10, 1)
+    )
+
+    assert len(items) == expected_items
+    assert db.scalar(select(func.count()).select_from(ExternalCalendarEvent)) == 2
+    if expected_items == 1:
+        assert items[0]["kind"] == "RACE"
+        assert [item["kind"] for item in items[0]["related"]] == ["TRIAL"]
+
+
+def test_race_and_trial_grouping_requires_same_track_date_and_discipline(db) -> None:  # type: ignore[no-untyped-def]
+    user, region, track = foundation(db)
+    other_track = Track(name="Cambridge", region_id=region.id, palette_slot=2)
+    db.add_all([other_track, CalendarDisplayPreference(user_id=user.id, show_trials=True)])
+    db.flush()
+    db.add(
+        ExternalCalendarEvent(
+            event_date=date(2026, 9, 20), track_id=track.id,
+            discipline="THOROUGHBRED", event_kind="RACE", first_race_time=time(12, 30),
+        )
+    )
+    for event_date, track_id, discipline in (
+        (date(2026, 9, 21), track.id, "THOROUGHBRED"),
+        (date(2026, 9, 20), other_track.id, "THOROUGHBRED"),
+        (date(2026, 9, 20), track.id, "HARNESS"),
+    ):
+        db.add(
+            ExternalCalendarEvent(
+                event_date=event_date, track_id=track_id, discipline=discipline,
+                event_kind="TRIAL", first_trial_time=time(12),
+            )
+        )
+    db.flush()
+
+    items = external_calendar_items(
+        db, actor(user, region), date(2026, 9, 1), date(2026, 10, 1)
+    )
+
+    assert len(items) == 4
+    assert all(not item.get("related") for item in items)
+
+
 def test_external_items_are_region_scoped_and_contractors_get_no_planning_feed(db):  # type: ignore[no-untyped-def]
     user, northern, track = foundation(db)
     central = Region(name="Central")
@@ -318,6 +390,26 @@ def test_typed_import_rejects_malformed_and_literal_colour() -> None:
         parse_bundle('{"tracks":[{"name":"Te Rapa","region":"Northern","colour":"#fff"}]}')
     with pytest.raises(ValueError, match="forbidden field"):
         parse_bundle('{"people":[],"accessToken":"nope"}')
+
+
+def test_master_data_preview_discloses_address_and_travel_updates(db) -> None:  # type: ignore[no-untyped-def]
+    user, region, track = foundation(db)
+    bundle = parse_bundle(
+        '{"version":"1","regions":[{"name":"Northern","base_name":"Example Base",'
+        '"base_address":"1 Example Road"}],"tracks":[{"name":"Te Rapa",'
+        '"region":"Northern","address":"100 Example Raceway Road",'
+        '"default_travel_minutes":45}]}'
+    )
+
+    preview = preview_bundle(db, bundle)
+
+    assert preview.counts["regions"]["update"] == 1
+    assert preview.counts["tracks"]["update"] == 1
+    assert "updates base_name, base_address" in preview.details["regions"][0]["label"]
+    assert "updates address, default_travel_minutes" in preview.details["tracks"][0]["label"]
+    apply_bundle(db, bundle, user.id)
+    assert (region.base_name, region.base_address) == ("Example Base", "1 Example Road")
+    assert (track.address, track.default_travel_minutes) == ("100 Example Raceway Road", 45)
 
 
 class FixtureAdapter:

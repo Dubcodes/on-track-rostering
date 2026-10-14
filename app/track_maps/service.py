@@ -8,7 +8,7 @@ from datetime import timedelta
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,7 +23,7 @@ MAX_MANUAL_MAP_BYTES = 15 * 1024 * 1024
 COURSES: dict[str, tuple[str, str]] = {
     "rotorua": ("/RaceInfo/Clubs-And-Courses/1/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Arawa%20Park%20copy.jpg"),
     "avondale": ("/RaceInfo/Clubs-And-Courses/4/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Avondale%202.jpg"),
-    "cambridge": ("/RaceInfo/Clubs-And-Courses/7/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/Cambridge-synthethic_2D.jpg"),
+    "cambridge synthetic": ("/RaceInfo/Clubs-And-Courses/7/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/Cambridge-synthethic_2D.jpg"),
     "ellerslie": ("/RaceInfo/Clubs-And-Courses/9/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/Ellerslie_2025.png"),
     "matamata": ("/RaceInfo/Clubs-And-Courses/18/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Matamata%20copy.jpg"),
     "pukekohe": ("/RaceInfo/Clubs-And-Courses/26/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Pukekohe%20copy.jpg"),
@@ -41,7 +41,6 @@ def canonical_track_name(value: str) -> str:
     clean = re.sub(r"^TRIALS?\s*[-–—:]?\s*", "", clean, flags=re.IGNORECASE)
     aliases = {
         "arawa park": "rotorua",
-        "cambridge synthetic": "cambridge",
         "pukekohe park": "pukekohe",
     }
     return aliases.get(clean.casefold(), clean.casefold())
@@ -56,6 +55,8 @@ class _CandidateParser(HTMLParser):
         values = {key.lower(): value or "" for key, value in attrs}
         if tag == "meta" and values.get("property", "").lower() == "og:image":
             self.values.append(values.get("content", ""))
+        if tag == "a" and values.get("href"):
+            self.values.append(values["href"])
         if tag != "img":
             return
         joined = " ".join(values.values()).lower()
@@ -79,7 +80,18 @@ def trusted_image_url(value: str, base_url: str) -> str | None:
     if host != "loveracing.nz" and not host.endswith(".loveracing.nz"):
         return None
     if not re.search(r"\.(?:jpe?g|png|webp)$", unquote(parsed.path), re.IGNORECASE):
-        return None
+        if not parsed.path.casefold().endswith("/image.ashx"):
+            return None
+        nested = next(
+            (
+                candidate
+                for values in parse_qs(parsed.query).values()
+                for candidate in values
+                if re.search(r"\.(?:jpe?g|png|webp)$", unquote(candidate), re.IGNORECASE)
+            ),
+            None,
+        )
+        return trusted_image_url(nested, absolute) if nested else None
     return absolute
 
 
@@ -223,7 +235,8 @@ def map_refresh_due(row: TrackMap | None, *, now=None) -> bool:  # type: ignore[
 def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -> TrackMap:
     row = db.get(TrackMap, track.id) or TrackMap(track_id=track.id)
     db.add(row)
-    course = COURSES.get(canonical_track_name(track.name))
+    reference = canonical_track_name(track.map_reference or track.name)
+    course = COURSES.get(reference)
     now = utcnow()
     if not course:
         row.automatic_status = "UNAVAILABLE"

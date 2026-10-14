@@ -34,7 +34,7 @@
           <div class="shift-list">{% if can_build and day.in_month and not items_by_date.get(day.date) and not external_by_date.get(day.date) %}<span class="empty-build-hint">Build</span>{% endif %}{% for item in items_by_date.get(day.date, []) %}
             <a class="shift-card{% if item.cross_region %} cross-region{% endif %}{% if item.workday_status != 'SCHEDULED' %} is-cancelled{% endif %}" href="{{ item.url }}" data-work-date="{{ item.date.isoformat() }}" data-presentation="{{ item.presentation }}" data-category="{{ item.category }}">
               <strong class="shift-track">{{ item.track or item.title }}</strong>
-              <span class="shift-mini"><span class="shift-mini-role">{{ item.role }}</span><span class="shift-mini-time">{{ item.start|display_time or 'TBC' }}</span></span>
+              <span class="shift-mini"><span class="shift-mini-role">{{ item.role }}</span><span class="shift-mini-time">{{ item.start|display_time or 'TBC' }}</span></span>{% for related in item.related_external or [] %}<span class="shift-meta">Trial · {{ related.discipline|replace('_',' ')|title }} · {{ related.time|display_time }}</span>{% endfor %}
               {% if items_by_date.get(day.date, [])|length == 1 and item.minutes %}<span class="shift-meta">{{ item.minutes // 60 }}h {{ item.minutes % 60 }}m</span>{% endif %}
               {% if item.has_open %}<span class="available-shift-dot">Open</span>{% endif %}
               {% if item.has_draft and not item.draft_only %}<span class="available-shift-dot">Draft changes</span>{% endif %}

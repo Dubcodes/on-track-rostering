@@ -146,6 +146,9 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "category": workday.category,
                 "title": revision.title,
                 "track": revision.track_name_snapshot,
+                "track_id": revision.track_id,
+                "racing_discipline": workday.racing_discipline,
+                "first_race_time": revision.first_race_time,
                 "presentation": track_token(palette_slot, workday.category),
                 "start": participation.start if participation else revision.start_time,
                 "end": participation.end if participation else revision.end_time,
@@ -266,6 +269,9 @@ def day_assignments(
                 ),
                 "vehicle": row.vehicle_name_snapshot,
                 "accommodation": travel.accommodation,
+                "accommodation_address": (
+                    row.accommodation_address if is_own or can_view_private_notes else None
+                ),
             }
         )
     return result

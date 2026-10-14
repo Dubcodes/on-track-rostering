@@ -30,6 +30,8 @@ class Region(Base):
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
     decline_policy: Mapped[str] = mapped_column(String(32), default=DeclinePolicy.MANAGER_REVIEW.value)
     lead_minutes_race_day: Mapped[int] = mapped_column(default=120)
+    base_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    base_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     statutory_holiday_region: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -53,6 +55,7 @@ class Track(Base):
     name: Mapped[str] = mapped_column(String(120))
     palette_slot: Mapped[int] = mapped_column()
     map_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     default_travel_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -152,4 +155,5 @@ class Vehicle(Base):
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     home_region_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("regions.id"), nullable=True)
     fuel_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    is_truck: Mapped[bool] = mapped_column(Boolean, default=False)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)

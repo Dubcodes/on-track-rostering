@@ -80,10 +80,14 @@
   };
   const closePicker = (picker) => {
     const menu = picker.querySelector("[data-picker-menu]");
+    const input = picker.querySelector("[data-picker-input]");
+    if (!menu.hidden && input.value !== (input.dataset.selectedLabel || "")) {
+      input.value = input.dataset.selectedLabel || "";
+    }
     menu.hidden = true;
     menu.removeAttribute("data-placement");
     menu.removeAttribute("style");
-    picker.querySelector("[data-picker-input]").setAttribute("aria-expanded", "false");
+    input.setAttribute("aria-expanded", "false");
     if (openPicker === picker) {
       openPicker = null;
       removePositioningListeners();
@@ -282,7 +286,7 @@
   };
   const finishConflict = (action) => {
     if (!pendingConflict) return;
-    const {picker, option, existingRow, input} = pendingConflict;
+    const {picker, option, existingRow} = pendingConflict;
     if (action === "move" && existingRow) resetPersonRow(existingRow);
     if (action === "keep") {
       const targetRow = picker.closest("[data-assignment-row]");
@@ -291,7 +295,6 @@
     if (action !== "cancel") applyPersonChoice(picker, option);
     pendingConflict = null;
     conflictDialog.close();
-    input.focus();
   };
   const choose = (picker, option) => {
     if (picker.dataset.pickerKind === "person" && option.dataset.value) {
@@ -340,23 +343,6 @@
   const wirePicker = (picker) => {
     const input = picker.querySelector("[data-picker-input]");
     input.dataset.selectedLabel = input.value;
-    const clearStaleSelection = () => {
-      if (input.value === (input.dataset.selectedLabel || "")) return;
-      const row = picker.closest("[data-assignment-row]");
-      if (picker.dataset.pickerKind === "position") {
-        row.querySelector("[data-position-value]").value = "";
-      } else if (picker.dataset.pickerKind === "person") {
-        row.querySelector("[data-person-value]").value = "";
-        row.querySelector("[data-assignment-state]").value = "TBC";
-      } else if (picker.dataset.pickerKind === "vehicle") {
-        row.querySelector("[data-vehicle-value]").value = "";
-        row.querySelector("[data-transport-value]").value = "UNASSIGNED";
-        input.dataset.selectedLabel = "";
-        projectPersonTravel(row);
-      }
-      input.dataset.selectedLabel = "";
-      refreshRow(row);
-    };
     const open = () => {
       document.querySelectorAll("[data-search-picker]").forEach((other) => { if (other !== picker) closePicker(other); });
       picker.querySelector("[data-picker-menu]").hidden = false;
@@ -367,8 +353,8 @@
       positionPicker(picker);
       window.requestAnimationFrame(() => positionPicker(picker));
     };
-    input.addEventListener("focus", () => { open(); input.select(); });
-    input.addEventListener("input", () => { clearStaleSelection(); open(); });
+    input.addEventListener("focus", () => { input.value = ""; open(); });
+    input.addEventListener("input", open);
     input.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -496,7 +482,7 @@
     if (finishOverride?.value !== "1") {
       finishInput.value = lastRace === null
         ? ""
-        : clock(Math.ceil(lastRace / 15) * 15 + numeric(packUpInput, 0) + numeric(returnTravelInput, 0));
+        : clock(Math.ceil((lastRace + 10) / 15) * 15 + numeric(packUpInput, 0) + numeric(returnTravelInput, 0));
     }
     const travelLabel = form.querySelector("[data-track-travel-label]");
     if (travelLabel) travelLabel.textContent = trackTravelInput?.value || "not configured";
@@ -554,7 +540,7 @@
     form.querySelectorAll("[data-racing-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
     form.querySelectorAll("[data-race-time]").forEach((field) => { field.hidden = category !== "RACE_DAY"; });
     form.querySelectorAll("[data-race-action]").forEach((button) => { button.hidden = category !== "RACE_DAY"; });
-    form.querySelectorAll("[data-trial-time]").forEach((field) => { field.hidden = category !== "TRIALS"; });
+    form.querySelectorAll("[data-trial-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
     const standardTravelAvailable = ["RACE_DAY", "TRIALS"].includes(category);
     const standardTravel = form.querySelector("[data-standard-plan]");
     form.querySelector("[data-standard-plan-control]")?.toggleAttribute("hidden", !standardTravelAvailable);

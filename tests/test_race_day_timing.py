@@ -45,7 +45,7 @@ def test_race_day_timing_handles_midnight_missing_and_zero_durations() -> None:
     assert (overnight.on_track, overnight.start, overnight.finish) == (
         time(23, 30),
         time(23, 30),
-        time(0, 15),
+        time(0, 30),
     )
     missing = derive_race_day_timing(
         work_date=date(2026, 9, 20),
@@ -57,6 +57,32 @@ def test_race_day_timing_handles_midnight_missing_and_zero_durations() -> None:
         return_travel_minutes=None,
     )
     assert (missing.on_track, missing.start, missing.finish) == (None, None, None)
+
+
+def test_last_race_start_adds_ten_minutes_before_quarter_ceiling() -> None:
+    expected = {
+        time(16, 27): time(16, 45),
+        time(17, 44): time(18),
+        time(17, 45): time(18),
+        time(18, 5): time(18, 15),
+    }
+    for last_race, race_clear in expected.items():
+        result = derive_race_day_timing(
+            work_date=date(2026, 10, 14), first_race_time=time(12, 12),
+            last_race_time=last_race, setup_lead_minutes=120,
+            track_travel_minutes=60, pack_up_minutes=60, return_travel_minutes=60,
+        )
+        assert result.race_clear == race_clear
+
+    te_aroha = derive_race_day_timing(
+        work_date=date(2026, 10, 14), first_race_time=time(12, 12),
+        last_race_time=time(16, 27), setup_lead_minutes=120,
+        track_travel_minutes=60, pack_up_minutes=60, return_travel_minutes=60,
+    )
+    assert (
+        te_aroha.first_race_floor, te_aroha.on_track, te_aroha.start,
+        te_aroha.race_clear, te_aroha.pack_up_complete, te_aroha.finish,
+    ) == (time(12), time(10), time(9), time(16, 45), time(17, 45), time(18, 45))
 
 
 def _details(**changes):  # type: ignore[no-untyped-def]
@@ -163,12 +189,19 @@ def test_server_derives_values_and_preserves_explicit_overrides(db) -> None:  # 
 
 def test_external_adoption_and_person_call_time_precedence(db) -> None:  # type: ignore[no-untyped-def]
     user = User(email="adopt-timing@example.test", display_name="Manager", credential_hash="unused")
-    region = Region(name="Adoption region", lead_minutes_race_day=120)
+    region = Region(
+        name="Adoption region", lead_minutes_race_day=120,
+        base_name="Auckland base", base_address="1 Base Road",
+    )
     db.add_all([user, region])
     db.flush()
-    track = Track(name="Te Rapa", region_id=region.id, palette_slot=1, default_travel_minutes=30)
-    vehicle = Vehicle(name="Unit 1")
-    db.add_all([track, vehicle])
+    track = Track(
+        name="Te Rapa", region_id=region.id, palette_slot=1,
+        default_travel_minutes=30, address="Track Road, Hamilton",
+    )
+    vehicle = Vehicle(name="Unit 1", is_truck=True)
+    van = Vehicle(name="Van", is_truck=False)
+    db.add_all([track, vehicle, van])
     db.flush()
     event = ExternalCalendarEvent(
         event_date=date(2026, 9, 20),
@@ -191,16 +224,21 @@ def test_external_adoption_and_person_call_time_precedence(db) -> None:  # type:
         draft.return_travel_minutes,
         draft.end_time,
     ) == (time(9, 45), time(10, 15), 30, time(18, 30))
+    assert draft.truck_start_offset_minutes == 15
+    assert draft.track_address_snapshot == "Track Road, Hamilton"
+    assert draft.start_address_snapshot == "1 Base Road"
 
     event.first_race_time = time(13)
     same, created = adopt_external_event(db, event.id, actor)
     assert not created and same.id == workday.id and draft.first_race_time == time(12, 24)
 
-    vehicle_row = Assignment(transport_mode="VEHICLE")
+    vehicle_row = Assignment(transport_mode="VEHICLE", vehicle=vehicle)
+    van_row = Assignment(transport_mode="VEHICLE", vehicle=van)
     self_row = Assignment(transport_mode="SELF_TRAVEL")
     not_required = Assignment(transport_mode="NOT_REQUIRED")
-    explicit = Assignment(transport_mode="VEHICLE", start_time=time(9, 30))
-    assert effective_person_travel(draft, vehicle_row).start == time(9, 45)
+    explicit = Assignment(transport_mode="VEHICLE", vehicle=vehicle, start_time=time(9, 30))
+    assert effective_person_travel(draft, vehicle_row).start == time(9, 30)
+    assert effective_person_travel(draft, van_row).start == time(9, 45)
     assert effective_person_travel(draft, self_row).start == time(10, 15)
     assert effective_person_travel(draft, not_required).start == time(10, 15)
     assert effective_person_travel(draft, explicit).start == time(9, 30)
@@ -211,7 +249,10 @@ def test_published_snapshot_survives_track_default_change(db) -> None:  # type: 
     region = Region(name="Snapshot region")
     db.add_all([user, region])
     db.flush()
-    track = Track(name="Snapshot Track", region_id=region.id, palette_slot=1, default_travel_minutes=30)
+    track = Track(
+        name="Snapshot Track", region_id=region.id, palette_slot=1,
+        default_travel_minutes=30, address="Original address",
+    )
     db.add(track)
     db.flush()
     workday = create_workday(
@@ -229,6 +270,9 @@ def test_published_snapshot_survives_track_default_change(db) -> None:  # type: 
     workday.current_published_revision_id = published.id
     workday.current_draft_revision_id = None
     track.default_travel_minutes = 35
+    track.address = "Changed address"
     clone = ensure_draft(db, workday, user.id, commit=False)
     assert published.track_travel_minutes == 30
     assert clone.track_travel_minutes == 30
+    assert published.track_address_snapshot == "Original address"
+    assert clone.track_address_snapshot == "Original address"

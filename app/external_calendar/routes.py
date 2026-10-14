@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.policy import (
-    can_administer_region,
     can_manage_region,
     external_calendar_region_ids,
     require_admin,
@@ -23,7 +22,6 @@ from app.catalog.service import allocate_palette_slot, normalized_track_match
 from app.core.database import get_db
 from app.core.enums import Role
 from app.core.time import local_today
-from app.external_calendar.detail_refresh import refresh_love_racing_programme
 from app.external_calendar.importer import apply_bundle, parse_bundle, preview_bundle
 from app.external_calendar.inventory import (
     confirmed_mapping_rows,
@@ -555,16 +553,6 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
     if track is None or (visible_regions is not None and track.region_id not in visible_regions):
         raise HTTPException(404, "External event not found")
     workday = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
-    has_programme_identity = bool(
-        db.scalar(
-            select(ExternalEventObservation.id).where(
-                ExternalEventObservation.event_id == event.id,
-                ExternalEventObservation.provider == "LOVE_RACING",
-                ExternalEventObservation.provider_event_id.is_not(None),
-                ExternalEventObservation.mapping_state == "MAPPED",
-            ).limit(1)
-        )
-    )
     return templates.TemplateResponse(
         "external_event.html",
         context(
@@ -574,63 +562,9 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
             workday=workday,
             evidence=event_evidence(db, event),
             can_build=bool(track and can_manage_region(request.state.actor, track.region_id)),
-            can_refresh_programme=bool(
-                track
-                and event.event_kind == "RACE"
-                and has_programme_identity
-                and can_administer_region(request.state.actor, track.region_id)
-            ),
-            programme_refresh=request.query_params.get("programme_refresh"),
             presentation=track_token(track.palette_slot if track else None),
         ),
     )
-
-
-@router.post("/external-events/{event_id}/refresh-programme")
-def refresh_event_programme(
-    event_id: uuid.UUID, request: Request, csrf_token: str = Form(...), db: Session = Depends(get_db)
-):
-    verify_csrf(request, csrf_token)
-    event = db.get(ExternalCalendarEvent, event_id)
-    track = db.get(Track, event.track_id) if event and event.track_id else None
-    if not event or not track:
-        raise HTTPException(404, "External event not found")
-    if event.event_kind != "RACE":
-        raise HTTPException(409, "Programme refresh is available only for race events.")
-    if not can_administer_region(request.state.actor, track.region_id):
-        raise HTTPException(403, "Manager access for this Track's Region is required")
-    try:
-        result = refresh_love_racing_programme(db, event)
-        record_audit(
-            db,
-            "external_programme.refreshed",
-            "external_calendar_event",
-            event.id,
-            request.state.user.id,
-            region_id=track.region_id,
-            detail={
-                "provider": "LOVE_RACING",
-                "outcome": result.outcome,
-                "programme_status": result.programme_status,
-            },
-        )
-        db.commit()
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(409, str(exc)) from exc
-    if result.outcome == "ERROR":
-        state = "failed"
-    elif result.programme_status == "AWAITING_SCHEDULE":
-        state = "awaiting"
-    elif result.programme_status == "PARTIAL":
-        state = "partial"
-    elif result.programme_status == "COMPLETE" and result.outcome == "DUPLICATE":
-        state = "unchanged"
-    elif result.programme_status == "COMPLETE":
-        state = "updated"
-    else:
-        state = "failed"
-    return RedirectResponse(f"/external-events/{event.id}?programme_refresh={state}", status_code=303)
 
 
 @router.post("/external-events/{event_id}/build")

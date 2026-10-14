@@ -21,8 +21,8 @@ from app.rostering.timing import derive_race_day_timing
 DISCIPLINES = {"THOROUGHBRED", "HARNESS"}
 EVENT_KINDS = {"RACE", "TRIAL"}
 CANONICAL_FIELDS = (
-    "meeting_name", "programme_status", "first_trial_time", "first_race_time",
-    "last_race_time", "race_count", "status",
+    "meeting_name", "programme_status", "first_trial_time", "last_trial_time",
+    "trial_count", "first_race_time", "last_race_time", "race_count", "status",
 )
 
 
@@ -42,6 +42,36 @@ class ProviderObservation:
 
 def normalized_key(value: str) -> str:
     return " ".join(value.strip().casefold().split())
+
+
+def related_trial_event(
+    db: Session, race_event: ExternalCalendarEvent
+) -> ExternalCalendarEvent | None:
+    if (
+        race_event.event_kind != "RACE"
+        or race_event.track_id is None
+        or race_event.first_race_time is None
+    ):
+        return None
+    candidates = db.scalars(
+        select(ExternalCalendarEvent).where(
+            ExternalCalendarEvent.event_date == race_event.event_date,
+            ExternalCalendarEvent.track_id == race_event.track_id,
+            ExternalCalendarEvent.discipline == race_event.discipline,
+            ExternalCalendarEvent.event_kind == "TRIAL",
+            ExternalCalendarEvent.first_trial_time.is_not(None),
+        )
+    )
+    race_at = datetime.combine(race_event.event_date, race_event.first_race_time)
+    return next(
+        (
+            trial for trial in candidates
+            if abs(
+                (datetime.combine(trial.event_date, trial.first_trial_time) - race_at).total_seconds()
+            ) <= 180 * 60
+        ),
+        None,
+    )
 
 
 def suggested_track(db: Session, source_name: str, *, tracks: list[Track] | None = None) -> Track | None:
@@ -222,7 +252,10 @@ def _sync_unpublished_linked_draft(
         draft.title in generic_titles or draft.title == previous.get("meeting_name")
     ):
         draft.title = event.meeting_name
-    for field in ("first_trial_time", "first_race_time", "last_race_time", "race_count"):
+    for field in (
+        "first_trial_time", "last_trial_time", "trial_count",
+        "first_race_time", "last_race_time", "race_count",
+    ):
         incoming = getattr(event, field)
         if incoming is not None and (
             getattr(draft, field) is None or getattr(draft, field) == previous.get(field)
@@ -265,6 +298,18 @@ def event_evidence(db: Session, event: ExternalCalendarEvent) -> dict[str, objec
                 "provider": row.provider,
                 "retrieved_at": row.retrieved_at,
                 "facts": row.parsed_facts,
+                "programme": [
+                    {
+                        "label": f"{('Race' if 'races' in (row.raw_payload or {}) else 'Heat')} {item.get('number')}",
+                        "time": item.get("scheduled_start"),
+                    }
+                    for item in (
+                        (row.raw_payload or {}).get("races")
+                        or (row.raw_payload or {}).get("trials")
+                        or []
+                    )
+                    if isinstance(item, dict)
+                ],
                 # Diagnostics expose structure, not arbitrary provider values that may contain
                 # credentials or unrelated personal data.
                 "raw_keys": sorted((row.raw_payload or {}).keys()),
@@ -406,9 +451,13 @@ def adopt_external_event(
     draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
     assert draft is not None
     draft.first_trial_time = event.first_trial_time
+    draft.last_trial_time = event.last_trial_time
     draft.first_race_time = event.first_race_time
     draft.last_race_time = event.last_race_time
     draft.race_count = event.race_count
+    if related := related_trial_event(db, event):
+        draft.first_trial_time = related.first_trial_time
+        draft.last_trial_time = related.last_trial_time
     if event.event_kind == "RACE":
         region = db.get(Region, track.region_id)
         if region is None:
@@ -446,6 +495,7 @@ def apply_latest_programme_to_draft(
     if not event:
         raise ValueError("The linked source event is unavailable.")
     draft = ensure_draft(db, workday, actor.user_id, commit=False)
+    related = related_trial_event(db, event)
     source_names = {
         str(row.parsed_facts.get("meeting_name") or "").strip()
         for row in db.scalars(
@@ -459,10 +509,15 @@ def apply_latest_programme_to_draft(
         or draft.title in source_names
     ):
         draft.title = event.meeting_name
-    for field in ("first_trial_time", "first_race_time", "last_race_time", "race_count"):
+    for field in (
+        "first_trial_time", "last_trial_time", "first_race_time", "last_race_time", "race_count",
+    ):
         value = getattr(event, field)
         if value is not None:
             setattr(draft, field, value)
+    if related:
+        draft.first_trial_time = related.first_trial_time
+        draft.last_trial_time = related.last_trial_time
     if workday.category == "RACE_DAY":
         region = db.get(Region, workday.region_id)
         if region:

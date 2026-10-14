@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -95,6 +95,7 @@ def external_calendar_items(
                 "id": str(event.id),
                 "date": event.event_date,
                 "track": track.name if track else event.external_track_name or "Track unresolved",
+                "track_id": event.track_id,
                 "discipline": event.discipline,
                 "kind": event.event_kind,
                 "time": event.first_trial_time or event.first_race_time,
@@ -103,4 +104,42 @@ def external_calendar_items(
                 "minimal": preference.minimal_external_detail,
             }
         )
-    return result
+    result.sort(
+        key=lambda item: (
+            item["date"], str(item["track_id"] or ""), str(item["discipline"]),
+            0 if item["kind"] == "RACE" else 1, str(item["id"]),
+        )
+    )
+    grouped: list[dict[str, object]] = []
+    consumed: set[str] = set()
+    for item in result:
+        item_id = str(item["id"])
+        if item_id in consumed:
+            continue
+        if item["kind"] == "RACE" and item["time"] is not None:
+            related = next(
+                (
+                    candidate
+                    for candidate in result
+                    if candidate["id"] not in consumed
+                    and candidate["kind"] == "TRIAL"
+                    and candidate["date"] == item["date"]
+                    and candidate["track_id"] == item["track_id"]
+                    and candidate["discipline"] == item["discipline"]
+                    and candidate["time"] is not None
+                    and abs(
+                        (
+                            datetime.combine(item["date"], candidate["time"])
+                            - datetime.combine(item["date"], item["time"])
+                        ).total_seconds()
+                    )
+                    <= 180 * 60
+                ),
+                None,
+            )
+            if related:
+                item["related"] = [related]
+                consumed.add(str(related["id"]))
+        grouped.append(item)
+        consumed.add(item_id)
+    return grouped

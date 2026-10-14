@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -21,6 +21,115 @@ class RosterConflict:
     work_date: date
     track_name: str
     positions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LeaveImportRow:
+    line: int
+    person: Person | None
+    person_name: str
+    start_date: date | None
+    end_date: date | None
+    state: str
+    message: str
+
+
+def _import_date(value: str) -> date:
+    clean = value.strip()
+    for pattern in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(clean, pattern).date()
+        except ValueError:
+            pass
+    raise ValueError("Use DD/MM/YYYY or YYYY-MM-DD.")
+
+
+def preview_leave_import(raw: str, people: list[Person]) -> list[LeaveImportRow]:
+    by_name: dict[str, list[Person]] = {}
+    for person in people:
+        by_name.setdefault(" ".join(person.display_name.casefold().split()), []).append(person)
+    result: list[LeaveImportRow] = []
+    seen: set[tuple[uuid.UUID, date, date]] = set()
+    for line_number, source in enumerate(raw.splitlines(), 1):
+        if not source.strip():
+            continue
+        if "\t" in source:
+            parts = source.split("\t")
+        elif source.count("|") == 2 and "," not in source:
+            parts = source.split("|")
+        elif source.count(",") == 2 and "|" not in source:
+            parts = source.split(",")
+        else:
+            parts = []
+        name = parts[0].strip() if parts else source.strip()
+        matches = by_name.get(" ".join(name.casefold().split()), [])
+        person = matches[0] if len(matches) == 1 else None
+        start = end = None
+        errors: list[str] = []
+        if len(parts) != 3:
+            errors.append("Expected Person Name, Start Date, End Date.")
+        else:
+            try:
+                start, end = _import_date(parts[1]), _import_date(parts[2])
+                if end < start:
+                    errors.append("End date is before start date.")
+            except ValueError as exc:
+                errors.append(str(exc))
+        if not matches:
+            errors.append("No active Person has this exact name.")
+        elif len(matches) > 1:
+            errors.append("More than one active Person has this exact name.")
+        key = (person.id, start, end) if person and start and end else None
+        if key and key in seen:
+            errors.append("Duplicate pasted row.")
+        if key:
+            seen.add(key)
+        result.append(
+            LeaveImportRow(
+                line_number, person, name, start, end,
+                "ERROR" if errors else "READY", " ".join(errors) or "Ready to apply.",
+            )
+        )
+    return result
+
+
+def apply_leave_import(
+    db: Session, *, rows: list[LeaveImportRow], actor_user_id: uuid.UUID
+) -> tuple[int, int]:
+    if not rows or any(row.state == "ERROR" for row in rows):
+        raise ValueError("Resolve every Preview error before applying leave.")
+    created = unchanged = 0
+    for item in rows:
+        assert item.person and item.start_date and item.end_date
+        existing = active_overlapping(
+            db, person_id=item.person.id, start_date=item.start_date, end_date=item.end_date
+        )
+        if any(
+            row.start_date == item.start_date and row.end_date == item.end_date
+            for row in existing
+        ):
+            unchanged += 1
+            continue
+        if existing:
+            raise ValueError(f"Line {item.line}: leave overlaps an existing active range.")
+        row = PersonUnavailability(
+            person_id=item.person.id,
+            start_date=item.start_date,
+            end_date=item.end_date,
+            note="Imported from pasted operational leave data",
+            created_by_user_id=actor_user_id,
+        )
+        db.add(row)
+        db.flush()
+        record_audit(
+            db, "person_unavailability.imported", "person_unavailability", row.id,
+            actor_user_id, region_id=item.person.home_region_id,
+            detail={"person_id": str(item.person.id), "start_date": item.start_date.isoformat(),
+                    "end_date": item.end_date.isoformat()},
+        )
+        created += 1
+    db.commit()
+    return created, unchanged
 
 
 def unavailability_label(start_date: date, end_date: date) -> str:
