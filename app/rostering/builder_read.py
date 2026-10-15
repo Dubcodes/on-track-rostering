@@ -20,6 +20,7 @@ from app.unavailability.service import active_for_people_on_date, unavailability
 class CrewPickerPerson:
     id: uuid.UUID
     display_name: str
+    eligible: bool
     hint: str
     context_label: str
     same_date: bool
@@ -130,6 +131,7 @@ def crew_picker_views(
             option = CrewPickerPerson(
                 id=person.id,
                 display_name=person.display_name,
+                eligible=eligible,
                 hint=hint,
                 context_label=context_label,
                 same_date=person.id in same_date_people,

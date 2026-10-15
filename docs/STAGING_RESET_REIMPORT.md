@@ -6,13 +6,15 @@ This is a destructive operator runbook for a future, deliberate reset of the **p
 
 Obtain explicit destructive authorization immediately before starting. Resolve and verify every target by its exact name:
 
-- stack: `on-track-rostering-staging`
+- Portainer stack display name: `on-track-rostering`
+- Compose project/resource prefix: `on-track-rostering-staging`
+- expected containers: `on-track-rostering-staging_app-1`, `on-track-rostering-staging_db-1`, `on-track-rostering-staging_scheduler-1`
 - services: `staging_app`, `staging_scheduler`, `staging_db`
 - network: `ontrack_staging_internal`
 - database volume: `ontrack_staging_postgres_data`
 - application-data volume: `ontrack_staging_app_data`
 
-Never touch production volumes `ontrack_postgres_data` or `ontrack_app_data`. Never touch any Re-Deputy database, container, network, volume, secret or file. Stop if a displayed project, service, network or volume name differs from the staging-only names above. Do not infer targets from partial names, globs or environment variables.
+Never touch production volumes `ontrack_postgres_data` or `ontrack_app_data`. Never touch any Re-Deputy database, container, network, volume, secret or file. Open the Portainer stack displayed as `on-track-rostering`, then stop if its Compose project, container, service, network or volume names differ from the staging-only names above. Do not infer targets from partial names, globs or environment variables.
 
 ## Select the qualified candidate
 
@@ -34,8 +36,6 @@ Before any destructive step, verify all of the following:
 
 Never use the mutable `:staging` tag for this destructive qualification cycle.
 
-**Upcoming-cycle context at the time of writing:** qualified candidate `f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5`, exact-head gate `38785163018`, image digest `sha256:3998fc94439cc239e1523378868107d218cacff87d8ab641e17d0ef9cf00d59e`. This note is not authority to use that candidate. Re-resolve the selection and complete every verification above immediately before execution.
-
 ## Before reset
 
 1. Obtain explicit authorization naming this staging-only destructive operation.
@@ -43,7 +43,7 @@ Never use the mutable `:staging` tag for this destructive qualification cycle.
 3. Take a logical PostgreSQL backup of `staging_db`, validate its manifest, checksum it, and store it outside all On Track volumes.
 4. Preserve or archive the contents of `ontrack_staging_app_data` before considering its deletion. This contains branding and Track-map files.
 5. Record only useful non-secret counts and evidence: migrations, Regions, Tracks, Base Positions, Crew Groups, Vehicles, People, Workdays, publications and map/cache status. Do not record credentials, tokens, private payloads or staff details.
-6. Verify again that every selected service and volume belongs to `on-track-rostering-staging`, not production or Re-Deputy.
+6. Verify again that the Portainer stack displayed as `on-track-rostering` contains only the intended `on-track-rostering-staging` Compose project resources, not production or Re-Deputy.
 7. Reconfirm that `STAGING_ONTRACK_IMAGE` is pinned to the recorded `SELECTED_QUALIFIED_IMAGE`, never to `:staging`.
 8. Confirm the staging-only database password, application secret, credential pepper, hostname, trusted-proxy configuration, WebAuthn identity and optional staging VAPID values remain available separately from the volumes being reset. Never copy production secrets.
 

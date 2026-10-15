@@ -907,8 +907,10 @@ def test_position_aware_crew_picker_and_duplicate_names_are_id_safe(db) -> None:
     head_other = {person.id: person for person in views[head_on.id].other}
     director_other = {person.id: person for person in views[director.id].other}
     assert head_other[remote.id].hint == "Preferred or approved"
+    assert head_other[remote.id].eligible is True
     assert head_other[remote.id].same_date is False
     assert director_other[remote.id].hint == "Manager marked unavailable for this position"
+    assert director_other[remote.id].eligible is False
 
     duplicate_options = [
         person

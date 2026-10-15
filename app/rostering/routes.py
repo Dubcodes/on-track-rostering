@@ -603,10 +603,12 @@ def workday_crew_picker(
             "groups": [
                 {
                     "label": label,
+                    "local": label == view.primary_label,
                     "people": [
                         {
                             "id": str(person.id),
                             "label": person.display_name,
+                            "eligible": person.eligible,
                             "hint": person.hint,
                             "context": person.context_label,
                             "same_date": person.same_date,
@@ -647,10 +649,12 @@ def new_workday_crew_picker(
             "groups": [
                 {
                     "label": label,
+                    "local": label == view.primary_label,
                     "people": [
                         {
                             "id": str(person.id),
                             "label": person.display_name,
+                            "eligible": person.eligible,
                             "hint": person.hint,
                             "context": person.context_label,
                             "same_date": person.same_date,

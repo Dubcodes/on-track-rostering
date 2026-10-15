@@ -2240,6 +2240,51 @@ def test_office_day_builder_uses_category_appropriate_fields_and_warnings(routed
     assert "Race Day timing is incomplete" not in preview.text
 
 
+def test_race_day_builder_keeps_trials_optional_until_data_exists(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "category": "RACE_DAY",
+            "work_date": "2026-10-21",
+            "track_id": str(track_id),
+            "title": "Optional trials",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    edit_url = created.headers["location"]
+    workday_id = uuid.UUID(edit_url.rsplit("/", 1)[1])
+
+    page = manager.get(edit_url).text
+    trial_options = re.search(r'<details class="builder-trial-options"[^>]*>', page)
+    assert trial_options and " open" not in trial_options.group(0)
+    assert 'data-primary="0"' in trial_options.group(0)
+    assert "Trials (optional)" in page
+    assert "Apply preset" in page and "Apply defaults" not in page
+    assert "Recommended positions" not in page
+    assert "Canonical positions and crew" not in page
+    assert "One atomic private-draft update" not in page
+    assert "Slot number" not in page
+    assert 'name="slot_index"' in page and 'type="hidden" name="slot_index"' in page
+    assert 'data-random-fill' in page
+    assert 'aria-label="Randomly fill unassigned Positions' in page
+
+    with factory() as db:
+        workday = db.get(Workday, workday_id)
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        draft.first_trial_time = time(9, 15)
+        db.commit()
+    page_with_trials = manager.get(edit_url).text
+    trial_options = re.search(
+        r'<details class="builder-trial-options"[^>]*>', page_with_trials
+    )
+    assert trial_options and " open" in trial_options.group(0)
+
+
 def test_trials_builder_renders_switchable_timing_fields_and_clears_race_fields(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, track_id, _position_id, _person_id) = routed_db
     manager = TestClient(app)
@@ -2269,6 +2314,9 @@ def test_trials_builder_renders_switchable_timing_fields_and_clears_race_fields(
         db.commit()
 
     builder = manager.get(edit_url)
+    trial_options = re.search(r'<details class="builder-trial-options"[^>]*>', builder.text)
+    assert trial_options and " open" in trial_options.group(0)
+    assert 'data-primary="1"' in trial_options.group(0)
     assert 'name="on_track_time" value="08:30"' in builder.text
     assert 'name="first_trial_time" value="09:15"' in builder.text
     assert 'name="first_race_time" value="12:45"' in builder.text
@@ -2403,6 +2451,15 @@ def test_position_aware_crew_picker_endpoint_keeps_duplicate_ids_distinct(routed
     assert len(johns) == 2
     assert len({person["id"] for person in johns}) == 2
     assert len({person["context"] for person in johns}) == 2
+    capable = next(person for person in johns if person["id"] == str(duplicate_a.id))
+    unknown = next(person for person in johns if person["id"] == str(duplicate_b.id))
+    assert capable["eligible"] is True
+    assert unknown["eligible"] is False
+    local_groups = [group for group in response.json()["groups"] if group["local"]]
+    assert len(local_groups) == 1
+    assert {person["id"] for person in local_groups[0]["people"]}.issuperset(
+        {str(duplicate_a.id), str(duplicate_b.id)}
+    )
 
     employee = TestClient(app)
     _login(employee, "amy@example.test", "654321")
@@ -2449,8 +2506,10 @@ def test_builder_groups_relevant_crew_before_other_active_people(routed_db) -> N
     )
     assert added.status_code == 303
     html = manager.get(edit_url).text
-    assert '<div class="search-picker-group"><span>Northern crew</span>' in html
-    assert '<div class="search-picker-group"><span>Other regions</span>' in html
+    assert '<div class="search-picker-group" data-local="1">' in html
+    assert "<span>Northern crew</span>" in html
+    assert '<div class="search-picker-group" data-local="0">' in html
+    assert "<span>Other regions</span>" in html
     assert html.index("Northern crew") < html.index("Amy Crew")
     assert html.index("Amy Crew") < html.index("Other regions")
     assert "No position history recorded" in html
@@ -3121,7 +3180,9 @@ def test_admin_catalog_archive_restore_and_remove_unused_guards(routed_db) -> No
         ("catalog", "Master data"),
         ("online-sources", "Online Sources"),
         ("data-import", "Data Import"),
-        ("unknown", "Help home"),
+        ("management", "Management"),
+        ("crew_management", "Manage Crew"),
+        ("unknown", "Help"),
     ],
 )
 def test_contextual_help_content_and_authorized_links(routed_db, context_key, heading) -> None:  # type: ignore[no-untyped-def]
@@ -3132,11 +3193,85 @@ def test_contextual_help_content_and_authorized_links(routed_db, context_key, he
 
     employee = TestClient(app)
     _login(employee, "amy@example.test", "654321")
-    help_home = employee.get("/help")
-    assert "Help home" in help_home.text
-    assert 'href="/admin"' not in help_home.text
-    assert 'href="/manage/catalog"' not in help_home.text
-    assert 'href="/manage/workdays/new"' not in help_home.text
+    help_home = employee.get("/help").text
+    assert "Check your published Month and Day roster" in help_home
+    assert "Apply for a suitable Open Position" in help_home
+    assert "Build rosters and manage" not in help_home
+    assert "Administration for global setup" not in help_home
+
+
+def test_help_home_content_is_role_aware_and_uses_real_symbols(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        contractor = User(
+            email="help-contractor@example.test",
+            display_name="Help Contractor",
+            credential_hash=hash_credential("246810"),
+            credential_kind="pin",
+            contractor_manual_extension_at=utcnow(),
+            contractor_access_expires_at=utcnow() + timedelta(days=30),
+        )
+        contractor_person = Person(
+            display_name="Help Contractor",
+            email=contractor.email,
+            home_region_id=region_id,
+        )
+        db.add_all([contractor, contractor_person])
+        db.flush()
+        db.add_all(
+            [
+                UserPersonLink(user_id=contractor.id, person_id=contractor_person.id),
+                RoleGrant(
+                    user_id=contractor.id,
+                    role=Role.CONTRACTOR.value,
+                    region_id=region_id,
+                ),
+            ]
+        )
+        db.commit()
+
+    expectations = (
+        (
+            "help-contractor@example.test",
+            "246810",
+            (),
+            ("Open Position", "regional Crew calendar", "Build rosters", "Administration"),
+        ),
+        (
+            "viewer@example.test",
+            "112233",
+            ("View the regional Crew calendar",),
+            ("Build rosters", "Administration", "Open Position"),
+        ),
+        (
+            "submanager@example.test",
+            "445566",
+            ("Build rosters and manage",),
+            ("Administration for global setup",),
+        ),
+        (
+            "manager@example.test",
+            "123456",
+            ("Build rosters and manage",),
+            ("Administration for global setup",),
+        ),
+        (
+            "admin@example.test",
+            "99887766",
+            ("Administration for global setup, online sources and imports",),
+            (),
+        ),
+    )
+    for email, credential, present, absent in expectations:
+        client = TestClient(app)
+        _login(client, email, credential)
+        page = client.get("/help").text
+        assert all(text in page for text in present)
+        assert all(text not in page for text in absent)
+        assert "Related workspaces" not in page
+        assert 'class="help-legend"' in page
+        assert "<svg" in page
+        assert 'class="track-dot help-external-dot"' in page
 
 
 def test_rollout_management_surfaces_are_compact_and_user_facing(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -3168,7 +3303,7 @@ def test_rollout_management_surfaces_are_compact_and_user_facing(routed_db) -> N
     ).text
 
     help_page = manager.get("/help").text
-    assert "Legend" in help_page
+    assert "What the symbols mean" in help_page
     assert "Add to Home Screen" in help_page
     assert "Report an error" in help_page
     assert "app-footer" not in help_page
@@ -4219,6 +4354,17 @@ def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:
 
     admin = TestClient(app)
     csrf = _login(admin, "admin@example.test", "99887766")
+    queue = admin.get("/manage/crew")
+    assert queue.status_code == 200
+    assert "Add a work email and Primary Region for each person." in queue.text
+    assert "Accounts are set up separately." in queue.text
+    assert "Person UUID is the exact machine key" not in queue.text
+    assert f"Person {first_id}" not in queue.text
+    assert f"Person {second_id}" not in queue.text
+    assert queue.text.count('class="onboarding-card onboarding-setup-card"') >= 2
+    assert "Needs email" in queue.text and "Needs Region" in queue.text
+    assert 'class="save-bar onboarding-save-bar"' in queue.text
+    assert "Save setup details" in queue.text
     invalid = admin.post(
         "/manage/crew/onboarding/metadata",
         data={

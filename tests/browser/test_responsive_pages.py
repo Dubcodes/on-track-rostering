@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -23,6 +24,7 @@ from app.branding.models import SystemBranding
 from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
 from app.core.database import Base, SessionLocal, engine
 from app.core.enums import CapabilitySignal, Role
+from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
 from app.external_calendar.models import (
     ExternalCalendarEvent,
@@ -985,7 +987,7 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
     assert person_input.input_value() == selected_person_label
     page.locator('select[name="day_type"]').select_option("OFFICE_DAY:")
     page.once("dialog", lambda dialog: dialog.accept())
-    page.get_by_role("button", name="Apply defaults").click()
+    page.get_by_role("button", name="Apply preset").click()
     assert page.locator("[data-assignment-row]").count() == 0
     page.locator('select[name="track_id"]').select_option(values["track_id"])
     page.locator('details:has(input[name="title"]) > summary').click()
@@ -1439,8 +1441,14 @@ def _contrast_ratio(locator: Locator) -> float:
                 return .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
               };
               const style = getComputedStyle(element);
+              let backgroundElement = element;
+              let backgroundValue = style.backgroundColor;
+              while (backgroundElement.parentElement && parseFloat(backgroundValue.match(/[\d.]+/g)?.[3] || "0") === 0) {
+                backgroundElement = backgroundElement.parentElement;
+                backgroundValue = getComputedStyle(backgroundElement).backgroundColor;
+              }
               const foreground = luminance(style.color);
-              const background = luminance(style.backgroundColor);
+              const background = luminance(backgroundValue);
               return (Math.max(foreground, background) + .05) /
                 (Math.min(foreground, background) + .05);
             }"""
@@ -1594,6 +1602,60 @@ def _select_theme(page: Page, base_url: str, theme: str) -> None:
     page.locator('form[action="/settings/theme"] button').click()
     page.wait_for_url("**/settings?theme=saved")
     assert page.locator("html").get_attribute("data-theme") == theme
+
+
+def test_management_surfaces_keep_readable_contrast_across_supported_themes(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["admin"])
+    surfaces = (
+        (
+            "/manage/crew",
+            (
+                ".onboarding-card strong",
+                ".onboarding-card label",
+                ".onboarding-card input[name='emails']",
+                ".onboarding-save-bar span",
+            ),
+        ),
+        (
+            f"/manage/crew/{values['browser_person_id']}",
+            (".panel label", ".panel input:not([type='hidden'])", ".save-bar [data-save-state]"),
+        ),
+        (
+            "/manage",
+            ("#notices label.wide-field", "#notices textarea", "#notices summary"),
+        ),
+        (
+            "/help",
+            (
+                ".help-legend > span:first-child strong",
+                ".help-legend > span:first-child small",
+            ),
+        ),
+        (
+            f"/manage/workdays/{values['workday_id']}",
+            (
+                ".builder-time-grid label",
+                ".builder-time-grid input[type='time']",
+                ".builder-save-bar button",
+            ),
+        ),
+    )
+    for index, theme in enumerate(THEME_VALUES):
+        _select_theme(page, base_url, theme)
+        path, selectors = surfaces[index % len(surfaces)]
+        page.goto(base_url + path)
+        assert page.locator("html").get_attribute("data-theme") == theme
+        for selector in selectors:
+            target = page.locator(selector).first
+            assert target.is_visible(), f"{theme}: missing representative {selector}"
+            assert _contrast_ratio(target) >= 4.5, f"{theme}: low contrast for {selector}"
+        _assert_no_horizontal_overflow(page)
+    assert not errors
+    context.close()
 
 
 @pytest.mark.parametrize("width", [1280, 430, 375, 320])
@@ -1961,6 +2023,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         "/admin/online-sources",
         "/manage/catalog",
         "/manage/hours",
+        "/help",
     ):
         _assert_page(page, base_url + path)
         if width in {1280, 320}:
@@ -2634,7 +2697,7 @@ def test_presets_fortnight_anchor_and_team_hours_are_responsive(
     page.locator('select[name="region_id"]').select_option(values["region_id"])
     if page.locator("[data-assignment-row]").count():
         page.once("dialog", lambda dialog: dialog.accept())
-    page.get_by_role("button", name="Apply defaults").click()
+    page.get_by_role("button", name="Apply preset").click()
     rows = page.locator("[data-assignment-row]")
     assert rows.count() == 1
     row = rows.first
@@ -2646,7 +2709,7 @@ def test_presets_fortnight_anchor_and_team_hours_are_responsive(
 
     page.locator('select[name="region_id"]').select_option(values["cross_region_id"])
     page.once("dialog", lambda dialog: dialog.accept())
-    page.get_by_role("button", name="Apply defaults").click()
+    page.get_by_role("button", name="Apply preset").click()
     assert rows.count() == 2
     assert all(
         value == "TBC"
@@ -2809,17 +2872,164 @@ def test_unpublished_builder_switches_timing_fields_without_reload(browser_site,
     assert page.locator('[data-standard-plan-unavailable]').is_visible()
     day_type.select_option("RACE_DAY:THOROUGHBRED")
     assert page.locator('input[name="on_track_time"]').is_visible()
+    trial_options = page.locator("[data-trial-options]")
+    assert trial_options.is_visible()
+    assert trial_options.get_attribute("open") is None
+    assert not page.locator('input[name="first_trial_time"]').is_visible()
+    trial_options.locator("summary").click()
     assert page.locator('input[name="first_trial_time"]').is_visible()
     assert page.locator('input[name="first_race_time"]').is_visible()
     assert page.locator('[data-standard-plan-control]').is_visible()
     assert page.locator('[data-standard-plan]').is_enabled()
     day_type.select_option("TRIALS:THOROUGHBRED")
+    assert trial_options.get_attribute("data-primary") == "1"
     assert page.locator('input[name="last_trial_time"]').is_visible()
     assert not page.locator('input[name="first_race_time"]').is_visible()
     day_type.select_option("RACE_DAY:HARNESS")
-    assert page.locator('input[name="last_trial_time"]').is_visible()
+    assert trial_options.get_attribute("data-primary") == "0"
+    assert trial_options.get_attribute("open") is None
+    assert not page.locator('input[name="last_trial_time"]').is_visible()
     assert page.locator('input[name="race_count"]').is_visible()
     _assert_no_horizontal_overflow(page)
+    assert not errors
+    context.close()
+
+
+def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 1280, "height": 1000})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/manage/workdays/new")
+    page.locator("[data-assignment-list]").evaluate("element => element.replaceChildren()")
+
+    people = {
+        "capable-a": str(uuid.uuid4()),
+        "capable-b": str(uuid.uuid4()),
+        "blocked": str(uuid.uuid4()),
+        "opted-out": str(uuid.uuid4()),
+        "one-workday": str(uuid.uuid4()),
+        "leave": str(uuid.uuid4()),
+        "same-date": str(uuid.uuid4()),
+        "cross-region": str(uuid.uuid4()),
+        "manual": str(uuid.uuid4()),
+    }
+    local_people = [
+        {"id": people["capable-a"], "label": "Capable A", "eligible": True},
+        {"id": people["capable-b"], "label": "Capable B", "eligible": True},
+        {"id": people["blocked"], "label": "Manager blocked", "eligible": False},
+        {"id": people["opted-out"], "label": "Employee opted out", "eligible": False},
+        {"id": people["one-workday"], "label": "One prior Workday", "eligible": False},
+        {
+            "id": people["leave"],
+            "label": "Crew on leave",
+            "eligible": True,
+            "on_leave": True,
+            "leave_label": "On leave",
+        },
+        {
+            "id": people["same-date"],
+            "label": "Crew with conflict",
+            "eligible": True,
+            "same_date": True,
+        },
+    ]
+    for person in local_people:
+        person.setdefault("context", "")
+        person.setdefault("hint", "")
+        person.setdefault("same_date", False)
+        person.setdefault("on_leave", False)
+        person.setdefault("leave_label", "")
+        person.setdefault("leave_start", None)
+        person.setdefault("leave_end", None)
+    payload = {
+        "groups": [
+            {"label": "Local crew", "local": True, "people": local_people},
+            {
+                "label": "Other regions",
+                "local": False,
+                "people": [
+                    {
+                        "id": people["cross-region"],
+                        "label": "Cross-region capable",
+                        "eligible": True,
+                        "context": "Other Region",
+                        "hint": "Preferred or approved",
+                        "same_date": False,
+                        "on_leave": False,
+                        "leave_label": "",
+                        "leave_start": None,
+                        "leave_end": None,
+                    }
+                ],
+            },
+        ]
+    }
+    page.route(
+        "**/manage/new-workday/crew-picker?**",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(payload),
+        ),
+    )
+
+    for _ in range(5):
+        page.get_by_role("button", name="Add position").click()
+        row = page.locator("[data-assignment-row]").last
+        position_picker = row.locator('[data-picker-kind="position"]')
+        position_picker.locator("[data-picker-input]").click()
+        position_picker.locator(
+            f'[data-picker-option][data-value="{values["head_on_position_id"]}"]'
+        ).click()
+
+    rows = page.locator("[data-assignment-row]")
+    assert rows.count() == 5
+    assert rows.locator("[data-slot-index]").evaluate_all(
+        "elements => elements.map(element => element.value)"
+    ) == ["1", "2", "3", "4", "5"]
+    assert page.get_by_text("Slot number", exact=True).count() == 0
+    assert rows.locator('input[name="slot_index"][type="hidden"]').count() == 5
+
+    rows.nth(0).evaluate(
+        "(row, personId) => { row.querySelector('[data-person-value]').value = personId; row.querySelector('[data-assignment-state]').value = 'ASSIGNED'; }",
+        people["manual"],
+    )
+    rows.nth(1).evaluate(
+        "row => { row.querySelector('[data-person-value]').value = ''; row.querySelector('[data-assignment-state]').value = 'OPEN'; }"
+    )
+    non_get_requests: list[str] = []
+    page.on(
+        "request",
+        lambda request: non_get_requests.append(request.method) if request.method != "GET" else None,
+    )
+    page.get_by_role("button", name=re.compile("Randomly fill unassigned Positions")).click()
+    page.get_by_text("Filled 2 of 3 unassigned positions · 1 still need crew", exact=True).wait_for()
+
+    assert rows.nth(0).locator("[data-person-value]").input_value() == people["manual"]
+    assert rows.nth(1).locator("[data-assignment-state]").input_value() == "OPEN"
+    assert rows.nth(1).locator("[data-person-value]").input_value() == ""
+    filled_values = [
+        rows.nth(index).locator("[data-person-value]").input_value() for index in range(2, 5)
+    ]
+    assert sorted(value for value in filled_values if value) == sorted(
+        [people["capable-a"], people["capable-b"]]
+    )
+    assert filled_values.count("") == 1
+    assert all(
+        excluded not in filled_values
+        for excluded in (
+            people["blocked"],
+            people["opted-out"],
+            people["one-workday"],
+            people["leave"],
+            people["same-date"],
+            people["cross-region"],
+        )
+    )
+    assert non_get_requests == []
+    assert page.url.endswith("/manage/workdays/new")
     assert not errors
     context.close()
 

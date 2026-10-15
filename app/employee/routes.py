@@ -51,7 +51,7 @@ from app.external_calendar.read_models import (
     personal_external_calendar_items,
 )
 from app.external_calendar.service import event_evidence
-from app.help.content import help_topic
+from app.help.content import help_access, help_topic
 from app.hours.service import format_minutes, fortnight_bounds, published_hours
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
 from app.notices.service import prominent_notice, relevant_notice_region_ids
@@ -1093,5 +1093,11 @@ def help_page(request: Request, context_key: str = "general"):
     resolved_key, topic, links = help_topic(context_key, request.state.actor)
     return templates.TemplateResponse(
         "help.html",
-        context(request, context_key=resolved_key, help_topic=topic, help_links=links),
+        context(
+            request,
+            context_key=resolved_key,
+            help_topic=topic,
+            help_links=links,
+            help_access=help_access(request.state.actor),
+        ),
     )

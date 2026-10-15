@@ -1,9 +1,40 @@
 {% extends "base.html" %}
+{% from "_icons.html" import ui_icon %}
 {% block title %}Help · {{ branding.product_name }}{% endblock %}
-{% block content %}<section class="page-head"><p class="eyebrow">Help{% if context_key != 'index' %} · {{ context_key|replace('-',' ')|title }}{% endif %}</p><h1>{{ help_topic.title }}</h1><p class="lede">{{ help_topic.introduction }}</p></section>
-<section class="panel"><h2>Legend</h2><div class="help-legend"><span><strong>Holiday icon</strong> Public holiday details</span><span><strong>Open Position</strong> Published vacancy accepting applications</span><span><strong>Race Day / Trials</strong> Racing programme type</span><span><strong>Draft changes</strong> A private update exists; the published roster remains current</span><span><strong>Leave</strong> Recorded unavailability on Team Hours</span></div></section>
-<div class="settings-grid help-grid"><section class="panel"><h2>Common tasks</h2><ul class="help-list">{% for item in help_topic.tasks %}<li>{{ item }}</li>{% endfor %}</ul></section><section class="panel"><h2>Important rules</h2><ul class="help-list">{% for item in help_topic.rules %}<li>{{ item }}</li>{% endfor %}</ul></section></div>
-<section class="panel"><h2>Notifications</h2><div class="help-notifications"><div><h3>Android</h3><ol><li>Allow notifications when your browser asks.</li><li>Open Settings in On Track and choose Enable on this device.</li><li>Keep the notification preferences you want enabled.</li></ol></div><div><h3>iPhone and iPad</h3><ol><li>Open On Track in Safari and use Share → Add to Home Screen.</li><li>Open the installed On Track app from the Home Screen.</li><li>In Settings, choose Enable on this device and allow notifications.</li></ol></div></div><p class="muted">Notifications are reminders. Always use the published Month and Day views as the authoritative roster.</p></section>
-<section class="panel"><h2>Report an error</h2><p>If roster information or a page looks wrong, open <a href="/settings#error-report">Settings → Report an error</a>. Include what you expected and what happened; On Track records only the safe page path with your report.</p></section>
-{% if help_links %}<section class="panel"><h2>Related workspaces</h2><div class="row-actions">{% for link in help_links %}<a class="button secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</div></section>{% endif %}{% endblock %}
-
+{% block content %}
+<section class="page-head">
+  <p class="eyebrow">Help{% if context_key != 'index' %} · {{ context_key|replace('-',' ')|title }}{% endif %}</p>
+  <h1>{{ help_topic.title }}</h1>
+  <p class="lede">{{ help_topic.introduction }}</p>
+</section>
+<section class="panel">
+  <h2>What the symbols mean</h2>
+  <div class="help-legend">
+    <span><span class="help-legend-symbol">{{ ui_icon("holiday") }}</span><span><strong>Public holiday</strong><small>Holiday details for that date</small></span></span>
+    <span><span class="help-legend-symbol">{{ ui_icon("calendar") }}</span><span><strong>Calendar</strong><small>Your roster calendar</small></span></span>
+    <span><span class="help-legend-symbol">{{ ui_icon("settings") }}</span><span><strong>Settings</strong><small>Preferences and account security</small></span></span>
+    <span><span class="help-legend-symbol">{{ ui_icon("help") }}</span><span><strong>Help</strong><small>Guidance for the current page</small></span></span>
+    {% if help_access.crew %}<span><span class="help-legend-symbol">{{ ui_icon("shared") }}</span><span><strong>Crew</strong><small>The regional published roster</small></span></span>{% endif %}
+    {% if help_access.person %}<span><span class="help-legend-symbol">{{ ui_icon("timesheet") }}</span><span><strong>Hours</strong><small>Your published rostered time</small></span></span>{% endif %}
+    <span><span class="help-legend-symbol"><i class="track-dot help-external-dot"></i></span><span><strong>Racing calendar</strong><small>Planning information from an external source</small></span></span>
+    {% if help_access.employee %}<span><span class="help-legend-symbol"><i class="badge">Open</i></span><span><strong>Open Position</strong><small>A published vacancy accepting applications</small></span></span>{% endif %}
+    {% if help_access.manage %}<span><span class="help-legend-symbol"><i class="badge">Draft</i></span><span><strong>Draft changes</strong><small>Private changes that are not published yet</small></span></span>{% endif %}
+  </div>
+</section>
+<div class="settings-grid help-grid">
+  <section class="panel"><h2>Common tasks</h2><ul class="help-list">{% for item in help_topic.tasks %}<li>{{ item }}</li>{% endfor %}</ul></section>
+  <section class="panel"><h2>Important rules</h2><ul class="help-list">{% for item in help_topic.rules %}<li>{{ item }}</li>{% endfor %}</ul></section>
+</div>
+<section class="panel">
+  <h2>Notifications</h2>
+  <div class="help-notifications">
+    <div><h3>Android</h3><ol><li>Allow notifications when your browser asks.</li><li>Open Settings in On Track and choose Enable on this device.</li><li>Keep the notification preferences you want enabled.</li></ol></div>
+    <div><h3>iPhone and iPad</h3><ol><li>Open On Track in Safari and use Share → Add to Home Screen.</li><li>Open the installed On Track app from the Home Screen.</li><li>In Settings, choose Enable on this device and allow notifications.</li></ol></div>
+  </div>
+  <p class="muted">Notifications are reminders. Always check your published Month and Day roster.</p>
+</section>
+<section class="panel">
+  <h2>Report an error</h2>
+  <p>If roster information or a page looks wrong, open <a href="/settings#error-report">Settings → Report an error</a>. Include what you expected and what happened; On Track records only the safe page path with your report.</p>
+</section>
+{% endblock %}

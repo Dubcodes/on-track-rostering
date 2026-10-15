@@ -2,16 +2,6 @@
   "use strict";
   const form = document.querySelector("[data-workday-form]");
   if (!form) return;
-  const truckControl = form.querySelector("[data-truck-control]");
-  const timingSection = Array.from(form.querySelectorAll("details.builder-section")).find(
-    (details) => details.querySelector(":scope > summary")?.textContent.trim() === "Timing",
-  );
-  if (truckControl && timingSection) {
-    const options = document.createElement("div");
-    options.className = "builder-timing-options";
-    options.append(truckControl);
-    timingSection.append(options);
-  }
   const conflictDialog = form.querySelector("[data-assignment-conflict-dialog]");
   let pendingConflict = null;
   const list = form.querySelector("[data-assignment-list]");
@@ -141,6 +131,7 @@
       if (!group.people.length) return;
       const wrapper = document.createElement("div");
       wrapper.className = "search-picker-group";
+      wrapper.dataset.local = group.local ? "1" : "0";
       const heading = document.createElement("span");
       heading.textContent = group.label;
       wrapper.append(heading);
@@ -154,6 +145,9 @@
         option.dataset.state = "ASSIGNED";
         option.dataset.label = person.label;
         option.dataset.search = `${person.label} ${person.context || ""} ${person.hint || ""}`;
+        option.dataset.eligible = person.eligible ? "1" : "0";
+        option.dataset.sameDate = person.same_date ? "1" : "0";
+        option.dataset.onLeave = person.on_leave ? "1" : "0";
         if (person.on_leave) {
           option.dataset.leaveStart = person.leave_start || "";
           option.dataset.leaveEnd = person.leave_end || "";
@@ -259,6 +253,32 @@
       }
     });
   };
+  const renumberRepeatedPositions = () => {
+    const byPosition = new Map();
+    list.querySelectorAll("[data-assignment-row]").forEach((row) => {
+      const positionId = row.querySelector("[data-position-value]").value;
+      if (!positionId) return;
+      if (!byPosition.has(positionId)) byPosition.set(positionId, []);
+      byPosition.get(positionId).push(row);
+    });
+    byPosition.forEach((rows) => {
+      if (rows.length < 2) return;
+      const used = new Set();
+      const unnumbered = [];
+      rows.forEach((row) => {
+        const input = row.querySelector("[data-slot-index]");
+        const value = Number(input.value);
+        if (Number.isInteger(value) && value > 0 && !used.has(value)) used.add(value);
+        else unnumbered.push(input);
+      });
+      unnumbered.forEach((input) => {
+        let value = 1;
+        while (used.has(value)) value += 1;
+        input.value = String(value);
+        used.add(value);
+      });
+    });
+  };
   const applyPersonChoice = (picker, option) => {
     const row = picker.closest("[data-assignment-row]");
     const input = picker.querySelector("[data-picker-input]");
@@ -267,6 +287,7 @@
     if (picker.dataset.pickerKind === "position") {
       row.querySelector("[data-position-value]").value = option.dataset.value || "";
       if (option.dataset.value) loadCrewPicker(row, option.dataset.value);
+      renumberRepeatedPositions();
     } else if (picker.dataset.pickerKind === "person") {
       row.querySelector("[data-person-value]").value = option.dataset.value || "";
       row.querySelector("[data-assignment-state]").value = option.dataset.state || "ASSIGNED";
@@ -408,7 +429,10 @@
     row.querySelectorAll("[data-search-picker]").forEach(wirePicker);
     row.querySelectorAll("[data-time-input]").forEach(wireTimeInput);
     row.querySelector("[data-toggle-advanced]")?.addEventListener("click", () => { row.querySelector("[data-assignment-advanced]").open = !row.querySelector("[data-assignment-advanced]").open; });
-    row.querySelector("[data-remove-row]")?.addEventListener("click", () => row.remove());
+    row.querySelector("[data-remove-row]")?.addEventListener("click", () => {
+      row.remove();
+      renumberRepeatedPositions();
+    });
     const privateCheck = row.querySelector("[data-private-check]");
     privateCheck?.addEventListener("change", () => { row.querySelector("[data-private-value]").value = privateCheck.checked ? "1" : "0"; });
     const standardTravel = row.querySelector("[data-standard-travel-check]");
@@ -449,6 +473,62 @@
     form.querySelector("[data-preset-warning]").textContent = "";
   };
   form.querySelector("[data-apply-preset]")?.addEventListener("click", () => applyPreset(true));
+  const shuffled = (items) => {
+    const result = [...items];
+    for (let index = result.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [result[index], result[swap]] = [result[swap], result[index]];
+    }
+    return result;
+  };
+  form.querySelector("[data-random-fill]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const feedback = form.querySelector("[data-dice-feedback]");
+    const targets = [...list.querySelectorAll("[data-assignment-row]")].filter((row) =>
+      row.querySelector("[data-assignment-state]").value === "TBC"
+      && !row.querySelector("[data-person-value]").value
+      && Boolean(row.querySelector("[data-position-value]").value)
+    );
+    if (!targets.length) {
+      feedback.textContent = "No unassigned Positions to fill";
+      return;
+    }
+    button.disabled = true;
+    try {
+      await Promise.all(targets.map((row) => loadCrewPicker(
+        row,
+        row.querySelector("[data-position-value]").value,
+      )));
+      const assigned = new Set(
+        [...list.querySelectorAll("[data-person-value]")]
+          .map((input) => input.value)
+          .filter(Boolean),
+      );
+      let filled = 0;
+      shuffled(targets).forEach((row) => {
+        const picker = row.querySelector('[data-picker-kind="person"]');
+        const localGroup = picker.querySelector('.search-picker-group[data-local="1"]');
+        const candidates = shuffled(
+          [...(localGroup?.querySelectorAll('[data-picker-option][data-state="ASSIGNED"]') || [])]
+            .filter((option) =>
+              option.dataset.eligible === "1"
+              && option.dataset.sameDate !== "1"
+              && option.dataset.onLeave !== "1"
+              && !assigned.has(option.dataset.value)
+            ),
+        );
+        const chosen = candidates[0];
+        if (!chosen) return;
+        applyPersonChoice(picker, chosen);
+        assigned.add(chosen.dataset.value);
+        filled += 1;
+      });
+      const remaining = targets.length - filled;
+      feedback.textContent = `Filled ${filled} of ${targets.length} unassigned positions · ${remaining} still need crew`;
+    } finally {
+      button.disabled = false;
+    }
+  });
   const dayType = form.querySelector("[data-day-type]");
   const startInput = form.querySelector("[data-start-input]");
   const onTrackInput = form.querySelector("[data-on-track-input]");
@@ -550,7 +630,15 @@
     form.querySelectorAll("[data-racing-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
     form.querySelectorAll("[data-race-time]").forEach((field) => { field.hidden = category !== "RACE_DAY"; });
     form.querySelectorAll("[data-race-action]").forEach((button) => { button.hidden = category !== "RACE_DAY"; });
-    form.querySelectorAll("[data-trial-time]").forEach((field) => { field.hidden = !["RACE_DAY", "TRIALS"].includes(category); });
+    const trialOptions = form.querySelector("[data-trial-options]");
+    if (trialOptions) {
+      const hasTrialData = [...trialOptions.querySelectorAll('input[type="time"]')]
+        .some((input) => Boolean(input.value)) || trialOptions.dataset.sourceTrials === "1";
+      trialOptions.hidden = !["RACE_DAY", "TRIALS"].includes(category);
+      trialOptions.dataset.primary = category === "TRIALS" ? "1" : "0";
+      if (category === "TRIALS") trialOptions.open = true;
+      else if (category === "RACE_DAY") trialOptions.open = hasTrialData;
+    }
     const standardTravelAvailable = ["RACE_DAY", "TRIALS"].includes(category);
     const standardTravel = form.querySelector("[data-standard-plan]");
     form.querySelector("[data-standard-plan-control]")?.toggleAttribute("hidden", !standardTravelAvailable);
