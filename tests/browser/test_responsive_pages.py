@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import socket
@@ -957,7 +956,7 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
     page.wait_for_url("**/manage/workdays/new")
     assert page.locator(".builder-form").count() == 1
     assert page.get_by_text("Unsaved Builder", exact=True).count() == 1
-    assert page.get_by_role("button", name="Save & Preview").count() == 1
+    assert page.get_by_role("button", name="Save & Preview", exact=True).count() == 1
     assert page.get_by_text("Step 1", exact=False).count() == 0
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"build-new-{width}.png")
@@ -1000,7 +999,7 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
         lambda response: response.request.method == "POST"
         and response.url.endswith("/manage/workdays")
     ) as save_response:
-        page.get_by_role("button", name="Save & Preview").click()
+        page.get_by_role("button", name="Save & Preview", exact=True).click()
     response = save_response.value
     if response.status >= 400:
         pytest.fail(f"New Workday save returned {response.status}: {response.text()}")
@@ -1070,7 +1069,7 @@ def test_recovery_codes_and_readiness_are_responsive(browser_site, width: int) -
     employee_page = employee_context.new_page()
     _login(employee_page, base_url, values["employee"])
     employee_page.goto(base_url + "/help")
-    assert employee_page.get_by_role("heading", name="Help home").count() == 1
+    assert employee_page.get_by_role("heading", name="Help", exact=True).count() == 1
     assert employee_page.locator('a[href="/admin"]').count() == 0
     assert employee_page.locator('a[href="/manage/catalog"]').count() == 0
     assert employee_page.locator('a[href="/manage/workdays/new"]').count() == 0
@@ -1434,6 +1433,10 @@ def _contrast_ratio(locator: Locator) -> float:
         locator.evaluate(
             r"""element => {
               const parse = value => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+              const alpha = value => {
+                const channels = value.match(/[\d.]+/g) || [];
+                return channels.length > 3 ? Number(channels[3]) : 1;
+              };
               const luminance = value => {
                 const rgb = parse(value).map(channel => channel / 255).map(
                   channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4
@@ -1443,7 +1446,7 @@ def _contrast_ratio(locator: Locator) -> float:
               const style = getComputedStyle(element);
               let backgroundElement = element;
               let backgroundValue = style.backgroundColor;
-              while (backgroundElement.parentElement && parseFloat(backgroundValue.match(/[\d.]+/g)?.[3] || "0") === 0) {
+              while (backgroundElement.parentElement && alpha(backgroundValue) === 0) {
                 backgroundElement = backgroundElement.parentElement;
                 backgroundValue = getComputedStyle(backgroundElement).backgroundColor;
               }
@@ -2076,7 +2079,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
     _capture_page(page, f"builder-{width}.png")
     assert page.locator('script[src*="/static/builder.js?v="]').count() == 1
-    assert page.get_by_role("button", name="Save & Preview").is_visible()
+    assert page.get_by_role("button", name="Save & Preview", exact=True).is_visible()
     timing = page.locator("details.builder-section", has=page.get_by_text("Timing", exact=True))
     assert timing.locator('input[name="truck_leaves_early"]').count() == 1
     rows = page.locator("[data-assignment-row]")
@@ -2346,7 +2349,7 @@ def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: 
         lambda response: response.request.method == "POST"
         and response.url.endswith(f"/manage/workdays/{values['trial_workday_id']}/draft")
     ) as save_response:
-        page.get_by_role("button", name="Save & Preview").click()
+        page.get_by_role("button", name="Save & Preview", exact=True).click()
     response = save_response.value
     if response.status >= 400:
         pytest.fail(f"Trials draft save returned {response.status}: {response.text()}")
@@ -2966,13 +2969,20 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
             },
         ]
     }
-    page.route(
-        "**/manage/new-workday/crew-picker?**",
-        lambda route: route.fulfill(
-            status=200,
-            content_type="application/json",
-            body=json.dumps(payload),
-        ),
+    page.evaluate(
+        r"""payload => {
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            if (String(input).includes("/manage/new-workday/crew-picker?")) {
+              return new Response(JSON.stringify(payload), {
+                status: 200,
+                headers: {"Content-Type": "application/json"},
+              });
+            }
+            return originalFetch(input, init);
+          };
+        }""",
+        payload,
     )
 
     for _ in range(5):
@@ -3004,8 +3014,16 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
         "request",
         lambda request: non_get_requests.append(request.method) if request.method != "GET" else None,
     )
-    page.get_by_role("button", name=re.compile("Randomly fill unassigned Positions")).click()
-    page.get_by_text("Filled 2 of 3 unassigned positions · 1 still need crew", exact=True).wait_for()
+    random_fill = page.get_by_role(
+        "button", name=re.compile("Randomly fill unassigned Positions")
+    )
+    random_fill.click()
+    page.wait_for_function(
+        "() => !document.querySelector('[data-random-fill]').disabled"
+    )
+    assert page.locator("[data-dice-feedback]").inner_text() == (
+        "Filled 2 of 3 unassigned positions · 1 still need crew"
+    )
 
     assert rows.nth(0).locator("[data-person-value]").input_value() == people["manual"]
     assert rows.nth(1).locator("[data-assignment-state]").input_value() == "OPEN"
