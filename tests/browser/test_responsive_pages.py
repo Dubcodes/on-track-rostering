@@ -1978,6 +1978,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page.wait_for_url("**/manage/crew/*")
     assert page.get_by_role("heading", name="Browser Roster Manager").is_visible()
     assert page.locator("[data-person-editor]").count() == 1
+    page.get_by_text("Add capability decision", exact=True).click()
     capability_input = page.locator("[data-capability-input]")
     assert capability_input.count() == 1
     capability_input.focus()
