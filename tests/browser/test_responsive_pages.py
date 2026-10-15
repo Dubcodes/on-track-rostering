@@ -99,6 +99,10 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             contractor_access_expires_at=utcnow() + timedelta(days=60),
         )
         person = Person(display_name="Browser Crew Member")
+        admin_person = Person(
+            display_name="Browser Admin",
+            email=admin.email,
+        )
         contractor_person = Person(
             display_name="Browser Contractor",
             email=contractor.email,
@@ -121,6 +125,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
                 viewer,
                 contractor,
                 person,
+                admin_person,
                 contractor_person,
                 manager_person,
                 other_person,
@@ -153,6 +158,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
         duplicate_a = Person(display_name="John Smith", home_region_id=cross_region.id)
         duplicate_b = Person(display_name="John Smith", home_region_id=cross_region.id)
         person.home_region_id = region.id
+        admin_person.home_region_id = region.id
         contractor_person.home_region_id = region.id
         manager_person.home_region_id = region.id
         leave_managed_person.home_region_id = region.id
@@ -174,6 +180,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
         db.add_all(
             [
                 UserPersonLink(user_id=employee.id, person_id=person.id),
+                UserPersonLink(user_id=admin.id, person_id=admin_person.id),
                 UserPersonLink(user_id=contractor.id, person_id=contractor_person.id),
                 UserPersonLink(user_id=manager.id, person_id=manager_person.id),
                 RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
@@ -182,6 +189,12 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
                 RoleGrant(user_id=contractor.id, role=Role.CONTRACTOR.value, region_id=region.id),
                 NotificationPreference(user_id=employee.id, weekly_digest=True),
+                PositionCapability(
+                    person_id=person.id,
+                    base_position_id=position.id,
+                    signal=CapabilitySignal.EMPLOYEE_ALLOW.value,
+                    changed_by_user_id=manager.id,
+                ),
                 PositionCapability(
                     person_id=other_person.id,
                     base_position_id=head_on.id,
@@ -554,8 +567,9 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
                 ),
             ]
         )
+        external_event_date = local_today() + timedelta(days=45)
         external_event = ExternalCalendarEvent(
-            event_date=local_today(),
+            event_date=external_event_date,
             track_id=track.id,
             external_track_name=track.name,
             discipline="THOROUGHBRED",
@@ -789,6 +803,9 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             "active_notice_text": active_notice_text,
             "expired_notice_text": expired_notice_text,
             "external_event_id": str(external_event.id),
+            "external_event_month_url": (
+                f"/month?year={external_event_date.year}&month={external_event_date.month}"
+            ),
             "trial_workday_id": str(trial_workday.id),
             "head_on_position_id": str(head_on.id),
             "director_position_id": str(director.id),
@@ -1094,7 +1111,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
         minimal.uncheck()
         page.locator('form[action="/settings/calendar"] button').click()
         page.wait_for_url("**/settings?calendar=saved#calendar")
-    page.goto(base_url + "/month")
+    page.goto(base_url + values["external_event_month_url"])
     event_card = page.locator(f'a[href="/external-events/{values["external_event_id"]}"]')
     assert event_card.count() == 1
     _capture_page(page, f"external-event-normal-{width}.png")
@@ -1239,7 +1256,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     minimal.check()
     page.locator('form[action="/settings/calendar"] button').click()
     page.wait_for_url("**/settings?calendar=saved#calendar")
-    page.goto(base_url + "/month")
+    page.goto(base_url + values["external_event_month_url"])
     event_href = f'/external-events/{values["external_event_id"]}'
     marker = page.locator(f'.external-marker:has(a[href="{event_href}"])')
     assert marker.count() == 1
@@ -1771,6 +1788,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert page.locator(".shift-card.cross-region").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
     )
+    assert page.locator(".available-shift-dot", has_text="Open").count() == 1
     assert page.locator(".site-header.has-month-nav").is_visible()
     assert page.locator(".month-nav").is_visible()
     assert page.locator(".calendar-grid").is_visible()
@@ -1982,7 +2000,6 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert travel_card.count() == 1
     assert travel_card.locator(".shift-track", has_text="Operations Transit").count() == 1
     assert travel_card.get_by_text("Travel lead", exact=True).count() == 1
-    assert page.locator(".available-shift-dot", has_text="Open").count() == 1
     _capture_page(page, f"month-{width}.png")
     if width == 1280:
         page.goto(base_url + "/month")
