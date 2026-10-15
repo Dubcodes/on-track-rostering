@@ -9,6 +9,7 @@ from app.auth.policy import can_administer_region, can_manage_region
 from app.catalog.models import Region
 from app.core.database import get_db
 from app.core.enums import Role
+from app.identity.models import Person
 from app.notices.service import (
     permitted_notice_region_ids,
     recent_notices,
@@ -37,6 +38,19 @@ def management_hub(request: Request, db: Session = Depends(get_db)):
     if not (can_build or can_manage_people or can_team_hours or notice_region_ids or actor.is_admin):
         raise HTTPException(403, "Management access is not available.")
     notice_regions = [region for region in regions if region.id in notice_region_ids]
+    primary_region_id = (
+        db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
+        if actor.person_id
+        else None
+    )
+    notice_default_region_id = (
+        primary_region_id
+        if primary_region_id in notice_region_ids
+        else (notice_regions[0].id if notice_regions else None)
+    )
+    notice_default_region = next(
+        (region for region in notice_regions if region.id == notice_default_region_id), None
+    )
     return templates.TemplateResponse(
         "management.html",
         context(
@@ -45,6 +59,8 @@ def management_hub(request: Request, db: Session = Depends(get_db)):
             can_manage_people=can_manage_people,
             can_team_hours=can_team_hours,
             notice_regions=notice_regions,
+            notice_default_region_id=notice_default_region_id,
+            notice_default_region=notice_default_region,
             notice_history=recent_notices(
                 db, relevant_notice_region_ids(db, actor), actor.is_admin
             ),

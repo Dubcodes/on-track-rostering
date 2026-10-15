@@ -207,6 +207,10 @@ def create_invitation(
             raise ValueError("The selected crew identity is archived.")
         if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person_id)):
             raise ValueError("The selected crew identity is already linked to an account.")
+        if not person.email or validated_email(person.email) != email:
+            raise ValueError(
+                "Invitation email must match the selected Person's normalized work email."
+            )
     elif role == Role.CONTRACTOR.value:
         raise ValueError("Contractor invitations must link the intended crew identity.")
     now = utcnow()

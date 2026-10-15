@@ -30,6 +30,7 @@ from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
 from app.branding.service import MAX_FAVICON_BYTES
 from app.catalog.models import BasePosition, CrewGroup, PositionPreset, Region, Track, Vehicle
+from app.core.config import get_settings
 from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
@@ -58,6 +59,7 @@ from app.identity.models import (
 from app.main import app
 from app.notices.models import OperationalNotice, OperationalNoticeRegion
 from app.notifications.models import NotificationEvent
+from app.notifications.service import audience_user_ids
 from app.rostering.models import (
     Assignment,
     OpenPositionApplication,
@@ -531,7 +533,8 @@ def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -
     )
     assert created.status_code == 200
     assert "location" not in created.headers
-    match = re.search(r'value="/invite#token=([A-Za-z0-9_-]+)"', created.text)
+    origin = re.escape(get_settings().webauthn_origin.rstrip("/"))
+    match = re.search(rf'value="{origin}/invite#token=([A-Za-z0-9_-]+)"', created.text)
     assert match
     raw = match.group(1)
     assert raw not in str(created.request.url)
@@ -604,7 +607,8 @@ def test_manager_contractor_invitation_scope_activation_and_limited_surface(rout
         follow_redirects=False,
     )
     assert created.status_code == 200
-    match = re.search(r'value="/invite#token=([A-Za-z0-9_-]+)"', created.text)
+    origin = re.escape(get_settings().webauthn_origin.rstrip("/"))
+    match = re.search(rf'value="{origin}/invite#token=([A-Za-z0-9_-]+)"', created.text)
     assert match
     raw = match.group(1)
 
@@ -769,7 +773,8 @@ def test_public_signup_is_persisted_admin_only_operational_setting(routed_db) ->
     )
     assert approved.status_code == 200
     assert "location" not in approved.headers
-    assert re.search(r'value="/invite#token=[A-Za-z0-9_-]+"', approved.text)
+    origin = re.escape(get_settings().webauthn_origin.rstrip("/"))
+    assert re.search(rf'value="{origin}/invite#token=[A-Za-z0-9_-]+"', approved.text)
 
 
 def test_fortnight_anchor_is_admin_only_and_changes_hours_grouping(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -1068,7 +1073,10 @@ def test_admin_credential_reset_route_and_public_completion_are_bounded(routed_d
     )
     assert issued.status_code == 200
     assert issued.headers["cache-control"] == "no-store"
-    match = re.search(r'value="(/credential-reset#token=([^"&]+))"', issued.text)
+    origin = re.escape(get_settings().webauthn_origin.rstrip("/"))
+    match = re.search(
+        rf'value="({origin}/credential-reset#token=([^"&]+))"', issued.text
+    )
     assert match
     raw = match.group(2)
     assert issued.text.count(raw) == 1
@@ -3928,6 +3936,138 @@ def test_notice_scope_defaults_reject_forgery_and_multi_region_push_dedupes(rout
         ) == {region_id}
         event_row = db.get(NotificationEvent, f"operational-notice:{notice.id}")
         assert event_row and event_row.payload["region_ids"] == [str(region_id)]
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    management_page = admin.get("/manage")
+    assert management_page.status_code == 200
+    assert len(re.findall(r'name="region_ids"[^>]*checked', management_page.text)) == 1
+    with factory() as db:
+        employee = db.scalar(select(User).where(User.email == "amy@example.test"))
+        db.add(
+            RoleGrant(
+                user_id=employee.id,
+                role=Role.EMPLOYEE.value,
+                region_id=other_region_id,
+            )
+        )
+        db.commit()
+        employee_id = employee.id
+    multi = admin.post(
+        "/manage/notices",
+        data={
+            "message": "Both Regions operational notice",
+            "duration_hours": "12",
+            "region_ids": [str(region_id), str(other_region_id)],
+            "also_push": "on",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert multi.status_code == 303
+    with factory() as db:
+        notice = db.scalar(
+            select(OperationalNotice).where(
+                OperationalNotice.message == "Both Regions operational notice"
+            )
+        )
+        event_row = db.get(NotificationEvent, f"operational-notice:{notice.id}")
+        assert event_row
+        assert set(event_row.payload["region_ids"]) == {
+            str(region_id),
+            str(other_region_id),
+        }
+        audience = audience_user_ids(db, event_row)
+        assert employee_id in audience
+        assert list(audience).count(employee_id) == 1
+
+
+def test_account_linking_requires_matching_email_and_flags_legacy_mismatch(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        person = Person(
+            display_name="Link Mismatch Person",
+            email="person-link@example.com",
+            home_region_id=region_id,
+        )
+        direct_person = Person(
+            display_name="Direct Mismatch Person",
+            email="direct-person@example.com",
+            home_region_id=region_id,
+        )
+        legacy_person = Person(
+            display_name="Legacy Mismatch Person",
+            email="legacy-person@example.com",
+            home_region_id=region_id,
+        )
+        link_user = User(
+            email="account-link@example.com",
+            display_name="Link Mismatch Account",
+            credential_hash=hash_credential("246810"),
+            credential_kind="pin",
+        )
+        legacy_user = User(
+            email="legacy-login@example.com",
+            display_name="Legacy Mismatch Account",
+            credential_hash=hash_credential("246810"),
+            credential_kind="pin",
+        )
+        db.add_all([person, direct_person, legacy_person, link_user, legacy_user])
+        db.flush()
+        db.add_all(
+            [
+                RoleGrant(
+                    user_id=link_user.id,
+                    role=Role.EMPLOYEE.value,
+                    region_id=region_id,
+                ),
+                UserPersonLink(user_id=legacy_user.id, person_id=legacy_person.id),
+                RoleGrant(
+                    user_id=legacy_user.id,
+                    role=Role.EMPLOYEE.value,
+                    region_id=region_id,
+                ),
+            ]
+        )
+        db.commit()
+        person_id = person.id
+        direct_person_id = direct_person.id
+        legacy_person_id = legacy_person.id
+        link_user_id = link_user.id
+
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    linked = admin.post(
+        "/manage/accounts/link-person",
+        data={
+            "user_id": str(link_user_id),
+            "person_id": str(person_id),
+            "region_id": str(region_id),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert linked.status_code == 409
+    direct = admin.post(
+        "/admin/users",
+        data={
+            "display_name": "Direct Mismatch Account",
+            "email": "direct-login@example.com",
+            "credential": "246810",
+            "role": Role.EMPLOYEE.value,
+            "region_id": str(region_id),
+            "person_id": str(direct_person_id),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert direct.status_code == 409
+    directory = admin.get("/manage/crew?q=Legacy+Mismatch")
+    assert directory.status_code == 200
+    assert "Work/login email mismatch" in directory.text
+    detail = admin.get(f"/manage/crew/{legacy_person_id}")
+    assert detail.status_code == 200
+    assert "Work/login email mismatch" in detail.text
 
 
 def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db) -> None:  # type: ignore[no-untyped-def]

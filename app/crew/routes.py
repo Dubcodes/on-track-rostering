@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.accounts.onboarding import onboarding_state
 from app.audit.models import AuditEvent
 from app.audit.service import record_audit
+from app.auth.links import credential_reset_url, invitation_url
 from app.auth.policy import can_administer_region, can_administer_user
 from app.auth.security import require_fresh_auth, verify_csrf
 from app.auth.service import (
@@ -98,8 +100,7 @@ def crew_management(
     visible_people = [*people, *needs_setup_people]
     person_ids = [person.id for person in visible_people]
     memberships: dict[uuid.UUID, set[uuid.UUID]] = {person.id: set() for person in visible_people}
-    linked: set[uuid.UUID] = set()
-    contractor_accounts: dict[uuid.UUID, User] = {}
+    directory_summaries: dict[uuid.UUID, dict[str, object]] = {}
     if person_ids:
         for person_id, group_id in db.execute(
             select(PersonCrewGroup.person_id, PersonCrewGroup.crew_group_id).where(
@@ -107,22 +108,77 @@ def crew_management(
             )
         ):
             memberships[person_id].add(group_id)
-        linked = set(
-            db.scalars(select(UserPersonLink.person_id).where(UserPersonLink.person_id.in_(person_ids)))
-        )
-        contractor_accounts = {
+        accounts = {
             person_id: account
             for person_id, account in db.execute(
                 select(UserPersonLink.person_id, User)
                 .join(User, User.id == UserPersonLink.user_id)
-                .join(RoleGrant, RoleGrant.user_id == User.id)
-                .where(
-                    UserPersonLink.person_id.in_(person_ids),
-                    RoleGrant.role == Role.CONTRACTOR.value,
-                    RoleGrant.status == "ACTIVE",
-                )
+                .where(UserPersonLink.person_id.in_(person_ids))
             )
         }
+        account_ids = [account.id for account in accounts.values()]
+        roles_by_user: dict[uuid.UUID, set[str]] = {account_id: set() for account_id in account_ids}
+        last_seen_by_user: dict[uuid.UUID, object] = {}
+        if account_ids:
+            for user_id, role in db.execute(
+                select(RoleGrant.user_id, RoleGrant.role).where(
+                    RoleGrant.user_id.in_(account_ids), RoleGrant.status == "ACTIVE"
+                )
+            ):
+                roles_by_user[user_id].add(role)
+            last_seen_by_user = dict(
+                db.execute(
+                    select(TrustedDevice.user_id, func.max(TrustedDevice.last_seen_at))
+                    .where(
+                        TrustedDevice.user_id.in_(account_ids),
+                        TrustedDevice.revoked_at.is_(None),
+                    )
+                    .group_by(TrustedDevice.user_id)
+                ).all()
+            )
+        latest_invitation: dict[uuid.UUID, Invitation] = {}
+        for invitation in db.scalars(
+            select(Invitation)
+            .where(
+                Invitation.person_id.in_(person_ids),
+                Invitation.consumed_at.is_(None),
+                Invitation.revoked_at.is_(None),
+            )
+            .order_by(Invitation.created_at)
+        ):
+            if invitation.person_id:
+                latest_invitation[invitation.person_id] = invitation
+        now = utcnow()
+        for person in visible_people:
+            account = accounts.get(person.id)
+            roles = roles_by_user.get(account.id, set()) if account else set()
+            if account:
+                setup = f"{account.status.title()} account"
+            elif person.home_region_id is None:
+                setup = "Needs Primary Region"
+            elif not person.email:
+                setup = "Needs work email"
+            elif invitation := latest_invitation.get(person.id):
+                expires_at = invitation.expires_at
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=UTC)
+                setup = "Invitation pending" if expires_at > now else "Invitation expired"
+            else:
+                setup = "Ready for setup"
+            directory_summaries[person.id] = {
+                "setup": setup,
+                "roles": ", ".join(
+                    sorted(role.replace("_", " ").title() for role in roles)
+                ),
+                "last_seen": last_seen_by_user.get(account.id) if account else None,
+                "contractor": Role.CONTRACTOR.value in roles,
+                "contractor_expires_at": (
+                    account.contractor_access_expires_at if account else None
+                ),
+                "email_mismatch": bool(
+                    account and (person.email or "").casefold() != account.email.casefold()
+                ),
+            }
     return templates.TemplateResponse(
         "crew_management.html",
         context(
@@ -132,8 +188,7 @@ def crew_management(
             people=people,
             needs_setup_people=needs_setup_people,
             memberships=memberships,
-            linked=linked,
-            contractor_accounts=contractor_accounts,
+            directory_summaries=directory_summaries,
             region_names={region.id: region.name for region in regions},
             query=q,
             show_archived=show_archived,
@@ -221,6 +276,8 @@ def crew_person_detail(
         ),
         "ARCHIVED": "Archived",
     }[setup_state]
+    if account and (person.email or "").casefold() != account.email.casefold():
+        setup_label += " · Work/login email mismatch"
     return templates.TemplateResponse(
         "crew_person.html",
         context(
@@ -432,7 +489,7 @@ def create_person_setup_link(
         "invitation_created.html",
         context(
             request,
-            invitation_url=f"/invite#token={raw}",
+            invitation_url=invitation_url(raw),
             destination=f"/manage/crew/{person.id}",
         ),
         headers={"Cache-Control": "no-store"},
@@ -538,7 +595,7 @@ def reset_person_credential(
         "credential_reset_created.html",
         context(
             request,
-            credential_reset_url=f"/credential-reset#token={raw}",
+            credential_reset_url=credential_reset_url(raw),
             target_name=account.display_name,
         ),
         headers={"Cache-Control": "no-store"},

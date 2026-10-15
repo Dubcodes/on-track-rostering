@@ -801,15 +801,16 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    base_url = f"http://127.0.0.1:{port}"
     server_env = os.environ.copy()
     server_env["ONTRACK_DATA_DIR"] = str(tmp_path_factory.mktemp("browser-data"))
+    server_env["ONTRACK_WEBAUTHN_ORIGIN"] = base_url
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
         env=server_env,
     )
-    base_url = f"http://127.0.0.1:{port}"
     try:
         for _ in range(50):
             try:
@@ -848,8 +849,8 @@ def test_credential_reset_surfaces_are_responsive(browser_site, width: int) -> N
     account.get_by_role("button", name="Reset credential").click()
     page.wait_for_url("**/admin/users/*/credential-reset")
     assert page.get_by_role("heading", name="Credential reset created").is_visible()
-    reset_path = page.locator("[data-credential-reset-link]").input_value()
-    assert reset_path.startswith("/credential-reset#token=")
+    reset_url = page.locator("[data-credential-reset-link]").input_value()
+    assert reset_url.startswith(base_url + "/credential-reset#token=")
     _assert_no_horizontal_overflow(page)
     assert not errors
     admin_context.close()
@@ -857,7 +858,7 @@ def test_credential_reset_surfaces_are_responsive(browser_site, width: int) -> N
     public_context = browser.new_context(viewport={"width": width, "height": 900})
     page = public_context.new_page()
     errors = _watch_browser_errors(page)
-    page.goto(base_url + reset_path)
+    page.goto(reset_url)
     page.wait_for_url(base_url + "/credential-reset")
     assert page.get_by_role("heading", name="Choose a new PIN or password").is_visible()
     assert page.locator('input[name="credential"]').is_visible()

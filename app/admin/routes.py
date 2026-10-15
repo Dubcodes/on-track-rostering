@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.admin.data_export import safe_data_export
 from app.audit.service import record_audit
+from app.auth.links import credential_reset_url, invitation_url
 from app.auth.policy import require_admin
 from app.auth.security import (
     credential_error,
@@ -339,6 +340,19 @@ def create_user(
     person = _active_reference(db, Person, person_id, "crew identity") if person_id else None
     if role == Role.CONTRACTOR.value and person is None:
         raise HTTPException(400, "Contractor access must be linked to a crew identity.")
+    if person:
+        try:
+            person_email = validated_email(person.email or "")
+        except ValueError as exc:
+            raise HTTPException(
+                409,
+                "That crew identity needs a valid work email before an account can be linked.",
+            ) from exc
+        if person_email != user_email:
+            raise HTTPException(
+                409,
+                "The account email must match the crew identity's normalized work email.",
+            )
     if person and db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
         raise HTTPException(409, "That crew identity is already linked to an account.")
     user = User(
@@ -411,7 +425,7 @@ def invite_user(
         "invitation_created.html",
         context(
             request,
-            invitation_url=f"/invite#token={raw}",
+            invitation_url=invitation_url(raw),
             destination="/manage/accounts#invitations",
         ),
         headers={"Cache-Control": "no-store"},
@@ -516,7 +530,7 @@ def issue_credential_reset(
         "credential_reset_created.html",
         context(
             request,
-            credential_reset_url=f"/credential-reset#token={raw}",
+            credential_reset_url=credential_reset_url(raw),
             target_name=user.display_name,
         ),
         headers={"Cache-Control": "no-store"},

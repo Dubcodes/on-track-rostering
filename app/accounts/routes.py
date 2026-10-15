@@ -15,6 +15,7 @@ from app.accounts.onboarding import (
     parse_metadata_csv,
 )
 from app.audit.service import record_audit
+from app.auth.links import invitation_url
 from app.auth.policy import can_administer_person, can_administer_user, require_admin
 from app.auth.security import active_device_count, require_fresh_auth, verify_csrf
 from app.auth.service import (
@@ -25,7 +26,6 @@ from app.auth.service import (
     validated_email,
 )
 from app.catalog.models import Region
-from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.enums import Role
 from app.core.forms import optional_uuid
@@ -266,7 +266,6 @@ def batch_people_invitations(
         raise HTTPException(400, "Confirm setup-link creation before continuing.")
     allowed = _metadata_scope(request, db)
     links: list[dict[str, str]] = []
-    origin = get_settings().webauthn_origin.rstrip("/")
     for person_id in dict.fromkeys(person_ids):
         person = db.get(Person, person_id)
         if (
@@ -297,8 +296,13 @@ def batch_people_invitations(
             role=Role.EMPLOYEE.value, region_id=person.home_region_id,
             actor_user_id=request.state.user.id, commit=False,
         )
-        links.append({"person": person.display_name, "email": person.email,
-                      "url": f"{origin}/invite#token={raw}"})
+        links.append(
+            {
+                "person": person.display_name,
+                "email": person.email,
+                "url": invitation_url(raw),
+            }
+        )
     db.commit()
     return templates.TemplateResponse(
         "people_invitation_links.html", context(request, links=links),
@@ -332,6 +336,19 @@ def link_existing_person(
         raise HTTPException(403, "The crew identity is outside this regional scope.")
     if not can_administer_user(db, request.state.actor, user, region_id):
         raise HTTPException(403, "The account is outside this regional scope.")
+    try:
+        person_email = validated_email(person.email or "")
+        user_email = validated_email(user.email)
+    except ValueError as exc:
+        raise HTTPException(
+            409,
+            "Both the account and crew identity need valid email addresses before linking.",
+        ) from exc
+    if person_email != user_email:
+        raise HTTPException(
+            409,
+            "The account email must match the crew identity's normalized work email.",
+        )
     db.add(UserPersonLink(user_id=user.id, person_id=person.id))
     record_audit(
         db,
@@ -383,7 +400,7 @@ def create_regional_invitation(
         raise HTTPException(409, str(exc)) from exc
     return templates.TemplateResponse(
         "invitation_created.html",
-        context(request, invitation_url=f"/invite#token={raw}", destination="/manage/accounts"),
+        context(request, invitation_url=invitation_url(raw), destination="/manage/accounts"),
         headers={"Cache-Control": "no-store"},
     )
 
@@ -424,7 +441,7 @@ def invite_contractor(
         "invitation_created.html",
         context(
             request,
-            invitation_url=f"/invite#token={raw}",
+            invitation_url=invitation_url(raw),
             destination="/manage/accounts#contractor-access",
         ),
         headers={"Cache-Control": "no-store"},
@@ -546,7 +563,7 @@ def approve_signup_request(
         "invitation_created.html",
         context(
             request,
-            invitation_url=f"/invite#token={raw}",
+            invitation_url=invitation_url(raw),
             destination="/manage/accounts",
         ),
         headers={"Cache-Control": "no-store"},
