@@ -369,3 +369,9 @@ overnight travel projects the existing Operation/TravelLeg domain into a linked
 previous-day Travel Day, while per-person no-standard-travel, hotel, timing and
 vehicle exceptions remain explicit publication snapshots. No Deputy runtime or
 source state is involved.
+
+## Current status / superseding note — 2026-10-15
+
+The historical checkpoints above are retained as chronology. Current source now prevents new active Base Position canonical duplicates across Crew Groups through the shared canonical create, rename and import paths. Position convergence remains an explicit cleanup tool for old dirty datasets only; a clean transition import should not require it. Immediately after a fresh clean import, run convergence **Preview**. If it reports new canonical duplicates, stop and treat that as a current importer/canonical-write defect rather than automatically converging the data or calling the import successful.
+
+Love Racing currently supplies the required Race and Trial programme evidence, so TAB NZ is deliberately not the next provider. Trusted persistent Track maps with last-good retention and scoped manual override/reset are implemented rather than deferred. The next planned validation is the deliberate clean isolated-staging reset/re-import documented in `STAGING_RESET_REIMPORT.md`.

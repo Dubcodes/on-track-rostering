@@ -13,7 +13,9 @@ On Track is authoritative for rostering. Racing sources provide planning evidenc
 7. Refresh the sources again so pending observations reconcile through the canonical external-event service.
 8. Verify mapped external events appear on Month with the intended Region, Track, discipline, and event kind.
 9. Import People, Crew Group memberships, and capabilities only from explicitly prepared company data.
-10. Create or invite accounts separately. A Person is rosterable master data; an account is an authentication identity.
+10. Complete Person metadata and create setup links primarily through **Management → Crew**. A Person is rosterable master data; an account is a separate authentication identity. **Accounts** remains an advanced recovery/reconciliation surface.
+
+For the deliberate blank-environment rehearsal, follow [STAGING_RESET_REIMPORT.md](STAGING_RESET_REIMPORT.md) before executing the qualification matrix.
 
 ## Portable files
 
@@ -33,7 +35,7 @@ The source mapping template is a dedicated review format with observation metada
 - No source refresh creates a canonical Track.
 - Confirmed mapping import is idempotent. A mapping that already targets another Track is a blocking conflict and is never silently repointed.
 - Mapping changes do not rewrite published Workday snapshots.
-- Real staff data must not be committed to the repository. Prepare it as an external neutral bundle for controlled preview and import.
+- Real staff transition data may be used only in the isolated private staging rehearsal when deliberately approved. It remains an external operator input and must not be committed. Credentials, PINs, tokens and authentication data are never imported, and production data, volumes or secrets are never copied merely to test the importer.
 
 ## CLI inventory
 
@@ -51,9 +53,11 @@ Preview every import in the Admin UI before applying it. Preview performs zero w
 
 The neutral master-data bundle accepts Region `base_name`/`base_address` and Track `address`, configured default travel minutes, and a safe Love Racing catalogue `map_reference`. Travel time is never calculated from an address. Cambridge Harness and Cambridge Synthetic must remain separate canonical Tracks.
 
-Accounts → People onboarding exports `person_id,display_name,email,primary_region,account_state`. `person_id` is the exact On Track Person UUID; Deputy employee IDs are neither required nor exported. Preview validates the complete worksheet without writes. Apply updates only Person email and Primary region in one transaction and creates no User, PIN, password, or invitation.
+**Management → Crew** is the primary onboarding/setup workflow. Its UUID worksheet/batch metadata flow exports `person_id,display_name,email,primary_region,account_state`. `person_id` is the exact On Track Person UUID; Deputy employee IDs are neither required nor exported. Preview validates the complete worksheet without writes. Apply updates only Person email and Primary Region in one transaction and creates no User, PIN, password, or invitation. The advanced Accounts surface retains compatible recovery/reconciliation tooling where needed.
 
 Ready People may then receive fresh-auth, CSRF-protected batch Employee invitations bound to those exact People. Setup URLs use the configured trusted origin and place the raw token only in the fragment. The no-store result can create a CSV entirely in the browser; raw links are never posted back or persisted as a CSV. On Track sends no onboarding email.
+
+When verifying Personal Month, distinguish roster horizon from source evidence: if the Person's Primary Region has no current published scheduled horizon, future mapped source events may appear from today; once published roster data exists, source-only events on or before that horizon are intentionally suppressed for that Person.
 
 Operational leave accepts `Person Name<TAB>Start Date<TAB>End Date`, with DD/MM/YYYY or YYYY-MM-DD dates. Exact normalized active-Person names are required. Preview performs no writes; Apply is atomic and an exact existing active range is idempotent.
 

@@ -19,4 +19,5 @@ Read this before changing the repository.
 - Employee Month/Day APIs must stay purpose-built and small. Offline v1 is read-only and user-namespaced.
 - People may work across regions and disciplines. Base positions own capability history; numbered event slots do not become separate qualifications.
 - Prefer archive lifecycles over hard deletion of referenced master data.
+- Normal user-facing pages must use operational language and must not expose development notes, migration/convergence instructions, raw debug diagnostics, internal implementation terminology, or a global build SHA/version footer. Technical detail belongs only on intentional Administration, Audit, Data Import, or diagnostic surfaces.
 - Run `python scripts/release_gate.py` from the project virtual environment and document exactly which PostgreSQL checks ran. Do not include Docker execution in local qualification.

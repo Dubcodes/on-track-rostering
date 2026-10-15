@@ -2,7 +2,7 @@
 
 ## Current source and deployment boundary
 
-The current qualified `main` is exact SHA `9c4dcbd83f9ef98e3eb3eafa3ce6ee87062ad915` (release-gate run `38624389672`): **300 PostgreSQL-backed tests** and **68 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified production image was built and published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-9c4dcbd83f9ef98e3eb3eafa3ce6ee87062ad915` with digest `sha256:262d5ec2dcc742922a7e2ec47d301a3d07d1e6d3311ad111481a727571eee21d`. The registry `:staging` tag points to that same digest, but this does **not** establish that the private staging stack has been redeployed to it.
+The current qualified `main` is exact SHA `8180be5fcfcc28e01c4da04ca210fbb93cb84832` (release-gate run `38697891867`): **307 PostgreSQL-backed tests** and **68 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified production image was built and published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832` with digest `sha256:5989096bfadb2604d4cc311541d9a1ccac63f867abd33d604d8e2ebac548fc73`. The registry `:staging` tag was published at that same digest, but this does **not** establish that the private staging stack has been redeployed to it. The sole Alembic head is `e8b5d1f2a740`.
 
 CI qualification is neither a staging deployment nor a production deployment. No deployment is implied by this checkpoint.
 
@@ -16,16 +16,17 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 - Unified Builder with Day identity, native time controls, Notes before collapsed Travel, live Position/Person/Vehicle search, standard Travel/hotel planning, assignment details, and HTML validation recovery.
 - A Person may hold multiple Positions on one Workday, including through Open Position selection. The Builder presents Move, Keep both, or Cancel immediately; Position timing and notes remain independent while one authoritative person-level travel plan is shared across the Person's rows.
 - Person/day Hours, reminder timing, personal timing, and generated Travel aggregate multiple Position rows once using earliest effective start and latest effective finish.
-- Persisted system-wide fortnight anchor, personal and Team Hours fortnight totals, and a 14-day per-Person workload distribution with defined intensity bands. Detailed roster rows remain available.
+- Persisted system-wide fortnight anchor, personal and Team Hours fortnight totals, and a compact 14-day per-Person matrix with name, Crew-group and Region filters, Track colour, leave state, no weekend-specific treatment, and mobile duration-label hiding. Detailed roster rows remain available.
 - Regional editable Position presets for Thoroughbred, Harness, and Trials. Presets contain active Base Positions only; they never carry people, travel, or notes. Removing an override restores the built-in fallback.
 - Persistent Base Position display order with deterministic legacy backfill/fallback and configured operational picker order.
-- Region-owned reusable Vehicle management for Admin and authorized Managers, including rental-style records, lifecycle, audit, and immutable assignment name snapshots.
+- Region-owned reusable Vehicle management for Admin and authorized Managers, including rental-style records, lifecycle, audit, immutable assignment name snapshots, and Builder selection of active borrowed Vehicles without changing ownership.
 - Admin-global and Manager-region-scoped Audit workspace with Region/date/actor/action/text filtering and redacted structured detail. Sub-Manager and read-only roles have no audit access.
 - Inclusive whole-date Person leave/unavailability with scoped Manager/Admin administration, preserved cancellation history, existing-roster conflict links, advisory Builder/Open-application warnings, deliberate roster override, Preview warnings, and management-only notes.
-- Passkeys, optional TOTP, single-display SHA-256 recovery codes for TOTP, trusted-device/fresh-auth protections, and bounded administrator-assisted primary credential reset. Primary reset revokes sessions and challenges while preserving authenticators, recovery codes, roles, Person linkage, and pending grants.
+- Passkeys, optional TOTP, single-display SHA-256 recovery codes for TOTP, trusted-device/fresh-auth protections, and bounded policy-scoped primary credential reset: Admin globally, or scoped Manager for an ordinary controllable Employee/Contractor/Sub-manager account. Primary reset revokes sessions and challenges while preserving authenticators, recovery codes, roles, Person linkage, and pending grants; active Manager/Admin security remains Admin-controlled.
 - Consolidated Master Data, Crew, Accounts, Hours, Audit, Settings, external calendar/import/source management, configurable branding, provider-neutral racing evidence, Operations, TravelLegs, accommodation, notification delivery, and personal offline read models.
-- The management/identity consolidation source makes Settings personal, introduces `/manage`, makes Crew a Person-centric directory with scoped account/security controls and bounded batch onboarding metadata, and retains Accounts as an advanced recovery surface. Exact-head qualification is recorded by CI and the delivery report.
+- The management/identity consolidation makes Settings personal, `/manage` the operational hub, and Crew a compact Person-centric directory/detail with continuous save, one searchable capability Position picker, scoped account/security controls, and bounded batch onboarding metadata. Accounts remains an advanced recovery surface.
 - Personal Month shows own authoritative work through the Primary Region's published roster horizon, plus applicable Open Positions; source-calendar potential work is shown only after that Region horizon. Crew view remains the authorized regional all-crew published calendar.
+- Published assigned work records raw `WORKED` history. Automatically sourced history establishes inferred eligibility only after two distinct current-published scheduled Workdays for the canonical Base Position; aliases combine and multiple slots on one day count once. Explicit Manager/Employee decisions retain precedence, and trusted legacy/imported `WORKED` history remains preserved.
 - Durable user error reports store only description, User/Person IDs, build, safe path and timestamps. Operational notices support relational multi-Region targets and an explicit Admin override distinct from default Manager/Sub-manager grant scope.
 - Stable racing programme detail parsing and correction, private-draft synchronization/application, trusted persistent Track maps with scoped manual overrides, regional account linking/invitations, and an atomic allowlisted Deputy capture transition importer.
 - Love Racing Race/Start and Trial Heat/Time programme detail, bounded refresh and last-good evidence; same-day Race/Trial presentation association keeps source records independent and leaves manual rostering authoritative.
@@ -34,6 +35,7 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 - Paste-based operational leave Preview/atomic Apply, exact-range idempotency, Team Hours leave state, Track-colour fourteen-day presentation, and contained mobile behavior without weekend-specific treatment.
 - Nationwide imported-People onboarding through Person UUID worksheets, metadata-only Preview/Apply, fresh-auth batch setup links, absolute trusted-origin fragment URLs, and client-side one-time CSV creation without automatic email.
 - Shared searchable-picker behavior that opens the complete valid list on focus and restores the authoritative selected label/ID on cancellation, plus built-in and optional Admin PNG favicon/manifest branding.
+- Builder Timing now keeps the truck control aligned inside Timing, with new Race Days defaulting it on. Help includes roster legends, Android/iOS notification setup, and Report error guidance. Normal pages no longer expose build/version footer diagnostics; Administration owns build/version/SHA information. Current theme/readability cleanup is included in responsive qualification.
 - The same application image supplies a PostgreSQL-advisory-locked scheduler for racing discovery/programme/map refresh, Contractor expiry, and notification generation/delivery. Durable scheduler heartbeat plus live, ready, and scheduler health endpoints provide an operations foundation; readiness remains database-only.
 
 ## Qualification history
@@ -46,13 +48,15 @@ These are historical checkpoints, not the current qualification baseline.
 
 ## Outstanding product and operational backlog
 
+- **Next immediate milestone:** deliberate clean isolated-staging reset → migrate from a blank database → bootstrap → clean master/transition import → inspect resulting canonical data → execute the staging qualification matrix. Follow `STAGING_RESET_REIMPORT.md`; it requires separate explicit destructive authorization and is not performed by this checkpoint.
 - Physical-device and operator staging qualification, including real passkey ceremonies, TOTP, and Web Push with deployment-owned VAPID configuration.
 - Complete role/direct-request/privacy/offline/restart/log qualification matrix.
 - Monitoring and alerting above the durable scheduler-heartbeat and health-endpoint foundation.
 - Backup and restore rehearsal for PostgreSQL and the application-data volume.
 - Immutable production image promotion, production secrets and WebAuthn RP identity freeze/rotation, and operational governance.
-- Optional historical Position suggestions beyond the implemented simple regional presets.
+- More advanced historical/predictive Position suggestions beyond the implemented two-published-Workday eligibility rule and simple regional presets.
 - Configurable Open Position auto-accept; current applications remain Manager-approved.
+- IV configuration / IV setup domain; the original operational design expected it, but no current implementation exists.
 
 ## Known architecture constraint
 

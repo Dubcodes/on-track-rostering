@@ -4,6 +4,8 @@ Deployment under test: `https://ontrackrostering.dubcodesmedia.com`
 
 This is an operator record for the real isolated staging system. Automated tests show implementation behavior; they do not replace interaction with the deployed application. Never enter credentials, raw invitation tokens, session values, MFA secrets, passkey challenges, push keys, or private staff data into this document.
 
+For the separately authorized destructive blank-database rehearsal, complete [STAGING_RESET_REIMPORT.md](STAGING_RESET_REIMPORT.md) first, then execute this matrix against the resulting isolated staging state.
+
 ## Status rules
 
 - **PASS** — observed against the real deployment, with non-sensitive evidence recorded.
@@ -11,7 +13,7 @@ This is an operator record for the real isolated staging system. Automated tests
 - **PENDING** — not yet exercised against the real deployment, or evidence is incomplete.
 - **NOT IN CURRENT SCOPE** — deliberately deferred and not a blocker for active staging development.
 
-When executing a row, record date/time, deployed footer SHA, role/browser/device, outcome, and a redacted screenshot or log reference where useful. Change a status only from direct staging evidence.
+When executing a row, record date/time, the build SHA shown in Administration, role/browser/device, outcome, and a redacted screenshot or log reference where useful. Change a status only from direct staging evidence.
 
 ## Known deployment evidence
 
@@ -19,7 +21,7 @@ When executing a row, record date/time, deployed footer SHA, role/browser/device
 |---|---|---|
 | HTTPS staging is reachable | PASS | User observed the real private HTTPS deployment. |
 | Public hostname is `ontrackrostering.dubcodesmedia.com` | PASS | User observed the public URL. |
-| Footer visibly reports `ee8af0d5dcd215c6df02f113ef8c8bf43ee936f2` | PASS | User observed the deployed footer. |
+| Historical footer visibly reported `ee8af0d5dcd215c6df02f113ef8c8bf43ee936f2` | PASS | Historical user observation from before the global footer was removed; it is not evidence for the current candidate. |
 | PostgreSQL initialized | PASS | Real staging database initialization completed. |
 | Bootstrap Admin creation | PASS | `python -m app.cli create-admin` completed once in staging. Do not recreate it. |
 | Admin password/PIN login through Cloudflare Tunnel | PASS | User successfully authenticated after `ee8af0d`. |
@@ -30,7 +32,7 @@ When executing a row, record date/time, deployed footer SHA, role/browser/device
 
 No other row is pre-qualified.
 
-The next release candidate is qualified source `d3e0d0a4f15629e93829f86bfabaff7155daf832`, image `ghcr.io/dubcodes/on-track-rostering:sha-d3e0d0a4f15629e93829f86bfabaff7155daf832`, digest `sha256:8b0a356a26894045c6d015c5f935532b718c8ff3d0f6a1a62e20ffc0d1c5e7e1`. These are CI facts only. Every candidate-specific row below remains **PENDING** until the private staging stack is deliberately redeployed and observed.
+The current release candidate is qualified source `8180be5fcfcc28e01c4da04ca210fbb93cb84832`, release-gate run `38697891867`: **307 PostgreSQL-backed tests** and **68 Playwright tests** passed. Its immutable image is `ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832`, digest `sha256:5989096bfadb2604d4cc311541d9a1ccac63f867abd33d604d8e2ebac548fc73`, with Alembic head `e8b5d1f2a740`. These are CI facts only. Every candidate-specific row below remains **PENDING** until the private staging stack is deliberately reset/redeployed and observed.
 
 ## Infrastructure and persistence
 
@@ -42,11 +44,11 @@ The next release candidate is qualified source `d3e0d0a4f15629e93829f86bfabaff71
 | Admin deployment-readiness panel and `production-check` agree | PENDING | Record statuses only; never record configured values. |
 | App container reports healthy | PENDING | Record Portainer health only; do not expose secrets. |
 | PostgreSQL container reports healthy | PENDING | Record health only. |
-| Startup migration reaches Alembic head | PENDING | Confirm startup reaches release-candidate head `d7a4c9e2f610`. |
+| Startup migration reaches Alembic head | PENDING | Confirm startup reaches release-candidate head `e8b5d1f2a740`. |
 | Repeated app restart keeps Alembic idempotent | PENDING | Restart only the app safely; confirm no migration error. |
 | Session and database state survive app restart | PENDING | Create demo state, restart app, re-check it. |
 | Scheduler state survives/restarts correctly | PENDING | Record heartbeat before and after a safe scheduler restart; confirm due-state resumes without a duplicate concurrent owner. |
-| Correct new build SHA appears after redeploy | PENDING | Footer must equal the deliberately selected qualified commit, currently `d3e0d0a4f15629e93829f86bfabaff7155daf832`. |
+| Correct new build SHA appears after redeploy | PENDING | Administration build/version information must report the deliberately selected exact SHA, currently `8180be5fcfcc28e01c4da04ca210fbb93cb84832`. |
 | Startup/runtime logs have no unexpected errors | PENDING | Review app logs after redeploy and smoke flow. |
 | Scheduler logs have no unexpected errors | PENDING | Review one complete tick; source, notification and Contractor maintenance failures remain isolated and intelligible. |
 | Source refresh logs are clean | PENDING | Confirm no unexpected Love Racing programme/map refresh errors; retain evidence without private payloads. |
@@ -67,7 +69,8 @@ The next release candidate is qualified source `d3e0d0a4f15629e93829f86bfabaff71
 | Fresh reauthentication gates sensitive actions | PENDING | Allow the fresh window to expire, then test a sensitive action. |
 | Trusted-device lifetime/label behavior | PENDING | Check Settings and subsequent use. |
 | Credential change succeeds | PENDING | Demo account only. |
-| Admin-issued credential reset link | PENDING | Issue for another active demo account; privately copy the one-time fragment link and never record it as evidence. |
+| Policy-scoped credential reset link | PENDING | Admin may issue globally; a scoped Manager may assist only an ordinary Employee/Contractor/Sub-manager account allowed by policy. Privately copy the trusted-origin fragment link and never record it as evidence. |
+| Higher-privilege security boundary | PENDING | Manager cannot reset, disable or revoke devices for an active Manager/Admin account. |
 | Credential reset is single-use and expires | PENDING | Complete one reset, confirm reuse fails generically, and allow a separate demo reset to pass 60 minutes. |
 | Credential reset invalidates old login state | PENDING | Confirm the old primary credential and existing trusted devices fail while the new credential works and configured MFA is still required. |
 | Local reset CLI | PENDING | Use a disposable demo account; enter the secret only through the two getpass prompts and confirm terminal/audit output contains no secret. |
@@ -166,6 +169,18 @@ Use demo-only People and never record raw setup tokens.
 | One-time no-store result and client CSV | PENDING | Confirm response is no-store, copy/download occurs locally, and no raw-link POST follows. |
 | Recipient chooses credential | PENDING | Complete one demo activation and verify Employee grant plus intended Person linkage; no automatic email is sent. |
 
+## Crew management
+
+| Check | Status | Operator evidence / procedure |
+|---|---|---|
+| Compact Crew directory | PENDING | Verify dense directory readability, search, Region context and setup/account summaries at desktop and mobile widths. |
+| Person detail | PENDING | Verify separate Person/User identity, profile, Crew groups, capability history, account status, devices and lifecycle without exposing internal diagnostics. |
+| Continuous edits | PENDING | Change profile/group metadata and confirm save/discard behavior does not relocate the page or scroll unexpectedly. |
+| One capability picker | PENDING | Open Add capability decision; verify one searchable Position control, complete list on focus, keyboard/touch choice, Escape and authoritative hidden ID. |
+| Setup/reissue/reset | PENDING | Verify exact-Person UUID-bound setup, reissue/revoke, and policy-scoped credential reset with trusted-origin fragment URLs. |
+| Trusted devices | PENDING | Verify scoped revoke behavior and that Manager cannot control active Manager/Admin security. |
+| Manager privilege boundary | PENDING | Manager can administer ordinary Employee/Contractor/Sub-manager accounts only in administered Regions and cannot grant Manager/Admin. |
+
 ## Roles and authorization
 
 Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer accounts. For every role, test normal UI visibility and direct crafted requests; hidden controls alone are not authorization proof.
@@ -180,6 +195,17 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Viewer authority | PENDING | Broad scoped read-only access; every mutation denied. |
 | Cross-region direct requests | PENDING | Authority remains independently scoped. |
 
+## Operational notices
+
+| Check | Status | Expected result |
+|---|---|---|
+| Composer visibility | PENDING | Composer is expanded by default in Management. |
+| Scope presentation | PENDING | Admin global/all-crew choice is inside Scope; a new regional notice selects one sensible default Region, not every allowed Region. |
+| Authorized multi-Region target | PENDING | Manager/Sub-manager may deliberately select additional Regions only within their configured publishing scope. |
+| Explicit empty override | PENDING | Admin-configured empty publishing scope remains distinct from role-derived defaults and prevents regional publishing. |
+| Forged out-of-scope target | PENDING | Server rejects an unauthorized Region even when crafted directly. |
+| Deduplicated audience | PENDING | One User relevant through multiple selected Regions receives one notice event/delivery. |
+
 ## Master data and input validation
 
 | Check | Status | Operator evidence / procedure |
@@ -187,7 +213,8 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Regions create/update/archive | PENDING | Include invalid and duplicate names. |
 | Tracks create/update/archive and colours | PENDING | Include duplicate within region and invalid colour. |
 | Crew groups create/update/archive | PENDING | Include duplicate name. |
-| Base positions create/update/archive | PENDING | Include duplicate within group. |
+| Base positions create/update/archive | PENDING | Canonical active Base Position identity is global across Crew Groups; include alias and numbered-label conflicts. |
+| Clean-import canonical assertion | PENDING | Immediately after fresh import, run Position convergence Preview. It must report no new canonical duplicates. If it reports any, stop and investigate the importer; do not apply convergence. |
 | Position presets persist and remain region-scoped | PENDING | Create, edit, apply, and reload a demo preset. |
 | People create/update/archive | PENDING | Include invalid region and linked lifecycle behavior. |
 | Invalid UUID/reference inputs are controlled | PENDING | Crafted Person/Region/Track/Position values must not yield 500. |
@@ -209,6 +236,7 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Vehicle picker interaction | PENDING | Repeat complete-list, filter, Escape, hidden-ID, keyboard and touch checks with normal and truck Vehicles. |
 | Race Day workflow | PENDING | Edit → Preview → Publish. |
 | Race Day automatic timing | PENDING | With demo values prove first-race floor, Region setup lead, snapshotted Track travel, `last race start + 10m`, race-clear quarter ceiling, Pack-up, Return travel and Finish. |
+| Timing layout and truck control | PENDING | Timing controls align; the truck checkbox is inside Timing and defaults checked for a new Race Day. |
 | Timing explanation consistency | PENDING | Builder, Preview, published Day calculation detail and Team Hours must agree for the same demo Race Day. |
 | Known timing examples | PENDING | Verify `12:12 → 12:00`, `12:35 → 12:30`, `16:27 + 10 → 16:45`, and `17:44 + 10 → 18:00` without private roster data. |
 | Track default travel snapshot | PENDING | Confirm Track travel derives the default crew call and published timing does not change after master-data edit. |
@@ -221,7 +249,7 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Add position slots | PENDING | Exercise base position plus numbered slots. |
 | Multiple Positions and Move/Keep/Cancel | PENDING | Assign one Person twice and verify each explicit conflict choice, independent row timing/notes, and shared travel. |
 | Person-level synchronized travel | PENDING | Change travel on one of a Person's rows and confirm the shared plan and combined span. |
-| Regional Vehicles | PENDING | Confirm scoped create/edit/archive and Builder selection for company and rental-style records. |
+| Regional and borrowed Vehicles | PENDING | Confirm Manager own-region create/edit/archive, Builder selection of another Region's active borrowed Vehicle, and unchanged Vehicle ownership after save/publish. |
 | Base Position ordering | PENDING | Confirm configured catalogue order is used operationally. |
 | Audit scope and redaction | PENDING | Confirm Admin global/Manager regional reads and redacted detail; Sub-Manager/read-only denial. |
 | Leave management and warning override | PENDING | Create inclusive leave, observe Builder/Preview warning, and deliberately save an authorized override. |
@@ -277,6 +305,16 @@ Use two independent browser profiles or sessions on the same Workday.
 | Manager selection changes draft only | PENDING | Employee publication remains unchanged. |
 | Publish accepts selected applicant | PENDING | Competing applications close correctly. |
 
+## Position capability history
+
+| Check | Status | Expected result |
+|---|---|---|
+| First published Workday | PENDING | Assigned publication records raw `WORKED` history but does not create history-only eligibility. |
+| Second distinct published Workday | PENDING | A second current-published scheduled Workday for the canonical Base Position creates qualified inferred eligibility. |
+| Duplicate slots on one Workday | PENDING | Multiple assignments for the canonical Position on one Workday count as one worked day. |
+| Canonical aliases | PENDING | Historical aliases contribute to the same canonical two-day threshold. |
+| Explicit block precedence | PENDING | Manager block remains blocking even when worked-history qualification exists; Employee opt-out and explicit allow precedence follow the documented rule. |
+
 ## Decline
 
 | Check | Status | Expected result |
@@ -324,6 +362,7 @@ Use demo-only People and the documented conservative three-column format.
 | Multiple assignments combine | PENDING | Earliest start, latest finish, no duplicated time. |
 | Overnight work | PENDING | Correct cross-midnight duration. |
 | Fortnight totals/boundaries | PENDING | Correct anchor and grouping. |
+| Team Hours filters | PENDING | Name search, Crew-group filter and Region filter narrow displayed People without changing authoritative totals. |
 | Persisted fortnight anchor | PENDING | Change the Admin setting and confirm Hours uses it after reload. |
 | Public/regional holiday marker | PENDING | Person geography drives empty-cell marker. |
 | Break deduction | PENDING | No automatic deduction. |
@@ -360,13 +399,15 @@ Use demo-only People and the documented conservative three-column format.
 
 ## Responsive and real devices
 
-Test desktop plus 430px, 375px, and 320px. On each applicable width inspect Login, Month, Day, Crew, Build, Preview, Manage, Masters, Team hours, Accounts, Admin, and Settings.
+Before physical-device work, verify Help shows the roster legend, Android notification guidance, iOS installed-web-app guidance and Report error guidance. Normal pages must not expose development/migration diagnostics or a global build footer; Administration must show build/version/SHA.
+
+Test desktop plus 430px, 375px, and 320px. On each applicable width inspect Login, Month, Day, Help, Crew calendar, Crew directory, Crew Person detail and capability picker, Build, Preview, Management and notice Scope, Master Data and scoped Vehicle management, Team Hours filters, Accounts, Administration, and Settings.
 
 | Check | Status | Expected result |
 |---|---|---|
 | No unintended horizontal overflow | PENDING | Include realistically long names across Builder, Team Hours, Accounts onboarding, Leave, Month/Day and maps at 1280/430/375/320. |
 | Navigation remains usable | PENDING | No inaccessible destinations or controls. |
-| Forms and selectors remain usable | PENDING | Timing controls align; Position/Person/Vehicle menus remain attached and usable with keyboard/touch. |
+| Forms and selectors remain usable | PENDING | Timing controls align; Position/Person/Vehicle and Crew capability menus remain attached and usable with keyboard/touch. |
 | Calendar/list controls remain usable | PENDING | Include swipe/keyboard where supported. |
 
 ## Logs and security
@@ -407,4 +448,3 @@ These items do not block active staging development unless they reveal a structu
 | Production monitoring/alerting | NOT IN CURRENT SCOPE | Operations design. |
 | Branch protection/release controls | NOT IN CURRENT SCOPE | Production release governance. |
 | Immutable release tag/image | NOT IN CURRENT SCOPE | Required at Foundation freeze/promotion, not each active staging change. |
-| Logo upload and major recovery redesign | NOT IN CURRENT SCOPE | Future product phase. |

@@ -52,9 +52,9 @@ Manager-created Sub-Manager grants remain `PENDING` until the account owner comp
 
 Passkeys use the maintained `webauthn` library, discoverable credentials, required user verification, one-use server challenges, and deployment-bound RP ID/origin verification. Public-key credentials remain server-readable by design; TOTP secrets and push endpoint payloads are encrypted at rest with a key derived from the application secret and a domain separator. TOTP is optional unless the deployment enables the Admin or Manager requirement flags. Accepted TOTP counters are stored so a valid code cannot be replayed inside its time window. TOTP confirmation issues ten recovery codes exactly once in plaintext. Only SHA-256 hashes are stored; consumption is user-scoped, row-locked, atomic, and single-use. Regeneration invalidates every older unused code, and disabling TOTP removes its recovery codes. These codes recover the optional TOTP factor only; they are not primary-credential reset tokens.
 
-## Primary credential recovery is administrator-assisted and bounded
+## Primary credential recovery is policy-scoped and bounded
 
-On Track deliberately has no public emailed “forgot password” flow. After fresh authentication, an Admin may create a dedicated reset for another active user. The random token is stored only as a hash, expires after 60 minutes, invalidates an earlier unused reset, is handed off in the URL fragment, and is consumed once under a row lock. The replacement credential must satisfy the target account's current policy, including the stricter Admin rule whether that role is pending or active.
+On Track deliberately has no public emailed “forgot password” flow. After fresh authentication, an Admin may create a dedicated reset globally. A scoped Manager may do so only for an ordinary Employee, Contractor, or Sub-manager account that the existing account-administration policy allows them to control; active Manager/Admin security contexts remain Admin-only. The random token is stored only as a hash, expires after 60 minutes, invalidates an earlier unused reset, is handed off in an absolute configured-trusted-origin URL fragment, and is consumed once under a row lock. The replacement credential must satisfy the target account's current policy, including the stricter Admin rule whether that role is pending or active.
 
 Successful reset increments `auth_epoch`, revokes trusted devices, and invalidates user-bound authentication challenges. It does not remove passkeys, TOTP, TOTP recovery codes, roles, Person linkage, or pending grants, and it does not activate a pending grant. The local `python -m app.cli reset-credential --email user@example.com` path uses `getpass` and follows the same boundary.
 
@@ -108,9 +108,11 @@ Operational place addresses are stored without routing or geocoding. Track/base 
 
 External HR leave remains a paste-driven operational intake, not payroll. People rollout uses Person UUID worksheets, metadata-only Preview/Apply, and separately generated one-time Employee setup links. There is no automatic onboarding email and no Deputy identity dependency.
 
-## Release-candidate UX changes wait for staging evidence
+## Management UX boundaries are settled
 
 Settings is a personal account/preferences surface. A permission-driven `/manage` hub owns everyday operational navigation and notices; Administration remains system configuration/recovery. Crew is the Person-centric directory/detail UI over the intentionally separate Person and User models, while Accounts remains available as an advanced repair/reconciliation surface. The conservative leave-paste grammar remains fixed until a real copied source sample exists; it must not grow through guessed or fuzzy parsing.
+
+Normal pages do not expose a global build footer or development/migration diagnostics. Build identity belongs in Administration, and Help is practical, contextual and authority-aware.
 
 Personal Month is independent of role authority: it contains the linked Person's own current publication assignments and applicable Open Positions. Primary-Region source events appear only after the Region-wide latest current published SCHEDULED horizon (or today when no horizon exists). Crew is the distinct authorized regional all-crew calendar.
 

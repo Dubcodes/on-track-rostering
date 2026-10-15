@@ -11,7 +11,7 @@ Reference examined read-only at local commit `20d65d9` (`Re-Deputy 0.5.5`) on 20
 | Same-origin/security headers/redirect safety | Conceptually reuse/rewrite | Central middleware/policy implementation replaces Re-Deputy route-specific checks. |
 | PWA shell/service worker | Conceptually reuse/rewrite | New user-namespaced read-only roster cache and sequential prefetch; Re-Deputy's notification click behavior is not copied. |
 | Push identity/notifications | Conceptually reuse/rewrite | Database events remain independently auditable, while the browser tag is stable per User + Workday so each device retains one current visible notification for that roster day. Production VAPID/browser delivery still needs deployment validation. |
-| Track maps | Deferred investigation | Track has a non-blocking future map reference. Retrieval/upload/catalog mechanics were not transplanted. |
+| Track maps | Implemented safely in On Track | Trusted Love Racing discovery feeds an exact-Track persistent cache with last-good retention. Scoped manual override wins until reset. Retrieval validates host, content and dimensions; no Re-Deputy map runtime or data is used. |
 | Backup philosophy | Conceptually reuse/rewrite | Documented validated `pg_dump`/restore workflow; SQLite backup code is intentionally not copied. |
 | Release-gate philosophy | Copy then adapt | The Windows-native runner compiles, lints, tests, checks JS, and conditionally runs real PostgreSQL migration idempotence. Docker is excluded from local qualification; Compose is retained for the separate production server. |
 | `main.py` / `database.py` | Behavioral study only | Their behavior informed boundaries; their monolithic architecture was rejected. |
@@ -31,7 +31,7 @@ The current application deliberately reuses Re-Deputy's interaction language, no
 - Settings and notifications: compact progressive sections, built-in CSP-safe theme previews, per-device push state, persisted preferences and outbox-backed test notifications.
 - Builder: private-draft status, searchable people/positions, advisory capability and same-date hints, explicit On Track assignment states, human preview summary and atomic publish.
 - Builder people pickers: selected, position-capable, matching crew-group, and home-region people appear in a labelled relevant group before other active crew. The server remains the authorization layer. Arbitrary row reordering is intentionally omitted: `slot_index` identifies numbered position slots and is not a presentation-order field, so reorder controls require a deliberate future domain field and optimistic-lock mutation rather than client-only arrows.
-- Operational notices: the small calendar-banner location is reused for persisted On Track global/regional notices. Regional notices outrank global notices; within a scope the latest start/create/id wins deterministically.
+- Operational notices: the small calendar-banner location is reused for persisted On Track notices with relational multi-Region targets, an Admin global option, and an explicit Admin-configured publishing scope distinct from role-derived defaults. Audience unioning produces one deduplicated notification event/delivery per relevant User. Regional notices outrank global notices; within a scope the latest start/create/id wins deterministically.
 
 ## Notification truth table
 

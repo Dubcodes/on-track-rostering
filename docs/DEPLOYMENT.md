@@ -44,7 +44,11 @@ Copy the required variable names from `.env.staging.example` into Portainer and 
 
 `STAGING_ONTRACK_ALLOWED_HOSTS` and `STAGING_ONTRACK_TRUSTED_PROXY_CIDRS` use comma-separated values, including when only one value is configured. Trust only the narrow proxy network that can connect directly to the app. A trusted proxy must send one valid `X-Forwarded-For` and `X-Forwarded-Proto`; it may send one `X-Forwarded-Host`, otherwise the app uses the single public `Host` header preserved by the proxy. Duplicate, comma-joined, malformed, or port-conflicting forwarding values are rejected. Never expose the app directly through a network included in the proxy allowlist.
 
-On first deployment, confirm the app startup migration reaches Alembic head, restart/redeploy once to prove the second upgrade is clean, then check `/health/live` and `/health/ready`. Create demo-only accounts with `python -m app.cli create-admin`; do not import staff data. Complete the documented role, invitation, branding, roster publish/republish, stale-write, decline, offline, authentication-throttle, and log-review smoke matrix before any production promotion request.
+For the first infrastructure smoke, use demo-only data. A separate, explicitly approved one-time clean transition rehearsal may use external real staff transition data in the isolated private staging instance, but never credentials/secrets and never committed artifacts. Production data, volumes and secrets are not rehearsal inputs. Follow [STAGING_RESET_REIMPORT.md](STAGING_RESET_REIMPORT.md) for the destructive staging-only procedure.
+
+During one clean qualification cycle, pin both staging services with `STAGING_ONTRACK_IMAGE=ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832` so the candidate cannot move underneath the evidence. After qualification, staging may return to `:staging` tracking if desired.
+
+On first deployment or after the deliberate clean reset, confirm the app startup migration reaches Alembic head, restart/redeploy once to prove the second upgrade is clean, then check `/health/live` and `/health/ready`. Create the bootstrap staging Admin once. Complete the documented role, invitation, branding, roster publish/republish, stale-write, decline, offline, authentication-throttle, and log-review matrix before any production promotion request.
 
 ## Production promotion
 
