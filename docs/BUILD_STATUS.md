@@ -1,8 +1,16 @@
 # Build status — 2026-10-15
 
-## Current source and deployment boundary
+## Application-behavior qualification baseline and deployment boundary
 
-The current qualified `main` is exact SHA `8180be5fcfcc28e01c4da04ca210fbb93cb84832` (release-gate run `38697891867`): **307 PostgreSQL-backed tests** and **68 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified production image was built and published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832` with digest `sha256:5989096bfadb2604d4cc311541d9a1ccac63f867abd33d604d8e2ebac548fc73`. The registry `:staging` tag was published at that same digest, but this does **not** establish that the private staging stack has been redeployed to it. The sole Alembic head is `e8b5d1f2a740`.
+The latest checkpoint that changed application behavior is exact SHA `8180be5fcfcc28e01c4da04ca210fbb93cb84832` (release-gate run `38697891867`): **307 PostgreSQL-backed tests** and **68 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified production image was built and published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832` with digest `sha256:5989096bfadb2604d4cc311541d9a1ccac63f867abd33d604d8e2ebac548fc73`. The sole Alembic head is `e8b5d1f2a740`.
+
+The immediately subsequent documentation-only SHA `f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5` also passed exact-head release-gate run `38785163018` with **307 PostgreSQL-backed tests** and **68 Playwright tests**. Its immutable image `ghcr.io/dubcodes/on-track-rostering:sha-f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5` was published at digest `sha256:3998fc94439cc239e1523378868107d218cacff87d8ab641e17d0ef9cf00d59e`. This documentation qualification does not change the application-behavior baseline, and neither recorded SHA is asserted to remain `origin/main`.
+
+An operational deployment candidate is identified by all three of the following, resolved when the candidate is deliberately selected:
+
+- the exact selected commit SHA;
+- a successful exact-head GitHub release gate for that SHA; and
+- the immutable `ghcr.io/dubcodes/on-track-rostering:sha-<commit>` image published by that gate.
 
 CI qualification is neither a staging deployment nor a production deployment. No deployment is implied by this checkpoint.
 

@@ -32,7 +32,19 @@ When executing a row, record date/time, the build SHA shown in Administration, r
 
 No other row is pre-qualified.
 
-The current release candidate is qualified source `8180be5fcfcc28e01c4da04ca210fbb93cb84832`, release-gate run `38697891867`: **307 PostgreSQL-backed tests** and **68 Playwright tests** passed. Its immutable image is `ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832`, digest `sha256:5989096bfadb2604d4cc311541d9a1ccac63f867abd33d604d8e2ebac548fc73`, with Alembic head `e8b5d1f2a740`. These are CI facts only. Every candidate-specific row below remains **PENDING** until the private staging stack is deliberately reset/redeployed and observed.
+## Qualification-cycle candidate record
+
+At the start of each staging qualification cycle, select a qualified candidate deliberately and record:
+
+- `SELECTED_SHA` — the exact commit chosen for this cycle;
+- `SELECTED_RELEASE_GATE` — a successful exact-head GitHub release-gate run whose `head_sha` is `SELECTED_SHA`;
+- `SELECTED_IMAGE` — the immutable `ghcr.io/dubcodes/on-track-rostering:sha-<SELECTED_SHA>` image;
+- `SELECTED_DIGEST` — the digest published for `SELECTED_IMAGE`; and
+- `ALEMBIC_HEAD` — the migration head expected from that selected source.
+
+All candidate-specific checks below refer to that selected qualified SHA and remain **PENDING** until the private staging stack is deliberately reset/redeployed and observed.
+
+**Current operator context at the time of writing:** `f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5` passed exact-head release-gate run `38785163018` with **307 PostgreSQL-backed tests** and **68 Playwright tests**. Its immutable image is `ghcr.io/dubcodes/on-track-rostering:sha-f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5`, digest `sha256:3998fc94439cc239e1523378868107d218cacff87d8ab641e17d0ef9cf00d59e`, with Alembic head `e8b5d1f2a740`. This is an example of an available qualified candidate, not a permanent invariant; re-resolve and record every field immediately before the cycle begins.
 
 ## Infrastructure and persistence
 
@@ -44,11 +56,11 @@ The current release candidate is qualified source `8180be5fcfcc28e01c4da04ca210f
 | Admin deployment-readiness panel and `production-check` agree | PENDING | Record statuses only; never record configured values. |
 | App container reports healthy | PENDING | Record Portainer health only; do not expose secrets. |
 | PostgreSQL container reports healthy | PENDING | Record health only. |
-| Startup migration reaches Alembic head | PENDING | Confirm startup reaches release-candidate head `e8b5d1f2a740`. |
+| Startup migration reaches Alembic head | PENDING | Confirm startup reaches the recorded `ALEMBIC_HEAD` for the selected qualified SHA. |
 | Repeated app restart keeps Alembic idempotent | PENDING | Restart only the app safely; confirm no migration error. |
 | Session and database state survive app restart | PENDING | Create demo state, restart app, re-check it. |
 | Scheduler state survives/restarts correctly | PENDING | Record heartbeat before and after a safe scheduler restart; confirm due-state resumes without a duplicate concurrent owner. |
-| Correct new build SHA appears after redeploy | PENDING | Administration build/version information must report the deliberately selected exact SHA, currently `8180be5fcfcc28e01c4da04ca210fbb93cb84832`. |
+| Correct new build SHA appears after redeploy | PENDING | Administration build/version information must report the exact `SELECTED_SHA` recorded for this qualification cycle. |
 | Startup/runtime logs have no unexpected errors | PENDING | Review app logs after redeploy and smoke flow. |
 | Scheduler logs have no unexpected errors | PENDING | Review one complete tick; source, notification and Contractor maintenance failures remain isolated and intelligible. |
 | Source refresh logs are clean | PENDING | Confirm no unexpected Love Racing programme/map refresh errors; retain evidence without private payloads. |

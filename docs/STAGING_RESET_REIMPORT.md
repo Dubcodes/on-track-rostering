@@ -14,6 +14,28 @@ Obtain explicit destructive authorization immediately before starting. Resolve a
 
 Never touch production volumes `ontrack_postgres_data` or `ontrack_app_data`. Never touch any Re-Deputy database, container, network, volume, secret or file. Stop if a displayed project, service, network or volume name differs from the staging-only names above. Do not infer targets from partial names, globs or environment variables.
 
+## Select the qualified candidate
+
+Resolve the candidate immediately before this destructive workflow. Record:
+
+- `SELECTED_QUALIFIED_SHA=<exact commit chosen immediately before reset>`
+- `SELECTED_RELEASE_GATE=<successful exact-head release-gate run>`
+- `SELECTED_QUALIFIED_IMAGE=ghcr.io/dubcodes/on-track-rostering:sha-<SELECTED_QUALIFIED_SHA>`
+- `SELECTED_DIGEST=sha256:<published digest>`
+- `ALEMBIC_HEAD=<migration head from the selected source>`
+
+Before any destructive step, verify all of the following:
+
+1. `SELECTED_QUALIFIED_SHA` is still the intended candidate.
+2. A successful exact-head release-gate exists whose `head_sha` is exactly `SELECTED_QUALIFIED_SHA`.
+3. That gate successfully published the immutable `sha-<SELECTED_QUALIFIED_SHA>` GHCR image.
+4. `SELECTED_DIGEST` records the digest published for that immutable image.
+5. `STAGING_ONTRACK_IMAGE` is pinned to `SELECTED_QUALIFIED_IMAGE`.
+
+Never use the mutable `:staging` tag for this destructive qualification cycle.
+
+**Upcoming-cycle context at the time of writing:** qualified candidate `f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5`, exact-head gate `38785163018`, image digest `sha256:3998fc94439cc239e1523378868107d218cacff87d8ab641e17d0ef9cf00d59e`. This note is not authority to use that candidate. Re-resolve the selection and complete every verification above immediately before execution.
+
 ## Before reset
 
 1. Obtain explicit authorization naming this staging-only destructive operation.
@@ -22,7 +44,7 @@ Never touch production volumes `ontrack_postgres_data` or `ontrack_app_data`. Ne
 4. Preserve or archive the contents of `ontrack_staging_app_data` before considering its deletion. This contains branding and Track-map files.
 5. Record only useful non-secret counts and evidence: migrations, Regions, Tracks, Base Positions, Crew Groups, Vehicles, People, Workdays, publications and map/cache status. Do not record credentials, tokens, private payloads or staff details.
 6. Verify again that every selected service and volume belongs to `on-track-rostering-staging`, not production or Re-Deputy.
-7. Pin `STAGING_ONTRACK_IMAGE` to the deliberately selected immutable image. For the current candidate that is `ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832`.
+7. Reconfirm that `STAGING_ONTRACK_IMAGE` is pinned to the recorded `SELECTED_QUALIFIED_IMAGE`, never to `:staging`.
 8. Confirm the staging-only database password, application secret, credential pepper, hostname, trusted-proxy configuration, WebAuthn identity and optional staging VAPID values remain available separately from the volumes being reset. Never copy production secrets.
 
 ## Reset phase
