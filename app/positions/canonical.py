@@ -108,6 +108,23 @@ def resolve_active_position(
     return matches[0] if matches else None
 
 
+def validate_position_identity(
+    db: Session,
+    value: str,
+    *,
+    exclude_id: uuid.UUID | None = None,
+) -> CanonicalPositionIdentity:
+    """Validate one global active Position identity for ordinary writes."""
+    identity = canonical_position_identity(value)
+    matches = [row for row in active_position_matches(db, value) if row.id != exclude_id]
+    if matches:
+        conflict = ", ".join(sorted({row.name for row in matches}))
+        raise ValueError(
+            f"Canonical Position {identity.canonical_name!r} already exists as {conflict}."
+        )
+    return identity
+
+
 def resolve_or_create_position(
     db: Session,
     value: str,

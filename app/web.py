@@ -84,6 +84,11 @@ def context(request: Request, **values: object) -> dict[str, object]:
             )
         )
     )
+    show_management_hub = bool(
+        actor
+        and not actor.is_contractor
+        and (show_manage or show_regional_admin or show_hours_management or actor.is_admin)
+    )
     user = getattr(request.state, "user", None)
     current_theme = normalize_theme(user.theme if user else "jade")
     return {
@@ -98,6 +103,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
         "show_accounts": show_accounts,
         "show_regional_admin": show_regional_admin,
         "show_hours_management": show_hours_management,
+        "show_management_hub": show_management_hub,
         "csrf_token": request.cookies.get(CSRF_COOKIE, ""),
         "csp_nonce": getattr(request.state, "csp_nonce", ""),
         "app_version": settings.app_version,

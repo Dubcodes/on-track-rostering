@@ -6,13 +6,14 @@ from datetime import date, time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.policy import Actor, can_crew_view, can_manage_region, can_view_management_detail
-from app.catalog.models import Region, Track
+from app.auth.policy import Actor, can_apply_for_open_position, can_view_management_detail
+from app.catalog.models import BasePosition, Region, Track
 from app.catalog.presentation import track_token
-from app.core.enums import Role, WorkdayStatus
+from app.core.enums import WorkdayStatus
 from app.core.holidays import holiday_for_date
 from app.identity.models import Person
 from app.positions.ordering import position_order
+from app.positions.service import eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.participation import active_published_assignments, person_day_participation
 from app.rostering.travel import effective_person_travel, transport_display
@@ -72,10 +73,9 @@ def adjacent_published_workdays(
 
 
 def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[str, object]]:
-    broad_roles = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
-    broad_month = not actor.is_contractor and (actor.is_admin or any(
-        bool(set(roles) & broad_roles) for roles in actor.regional_roles.values()
-    ))
+    """Personal published roster plus open work the linked Person may act on."""
+    if actor.person_id is None:
+        return []
     statement = (
         select(Workday, WorkdayRevision, Region, Track.palette_slot)
         .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
@@ -84,18 +84,14 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         .where(WorkdayRevision.work_date >= start, WorkdayRevision.work_date < end)
         .order_by(WorkdayRevision.work_date)
     )
-    if not broad_month:
-        if actor.person_id is None:
-            return []
-        statement = (
-            statement.join(Assignment, Assignment.revision_id == WorkdayRevision.id)
-            .where(Assignment.person_id == actor.person_id)
-            .distinct()
-        )
+    statement = (
+        statement.join(Assignment, Assignment.revision_id == WorkdayRevision.id)
+        .where(Assignment.person_id == actor.person_id)
+        .distinct()
+    )
     rows = db.execute(statement).all()
     own_by_revision: dict[uuid.UUID, list[Assignment]] = {}
-    all_by_revision: dict[uuid.UUID, list[Assignment]] = {}
-    if actor.person_id and rows:
+    if rows:
         revision_ids = [revision.id for _workday, revision, _region, _slot in rows]
         for assignment in db.scalars(
             select(Assignment).where(
@@ -103,38 +99,20 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
             )
         ):
             own_by_revision.setdefault(assignment.revision_id, []).append(assignment)
-    if broad_month and rows:
-        revision_ids = [revision.id for _workday, revision, _region, _slot in rows]
-        for assignment in db.scalars(
-            select(Assignment).where(Assignment.revision_id.in_(revision_ids))
-        ):
-            all_by_revision.setdefault(assignment.revision_id, []).append(assignment)
     home_region_id = (
         db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
         if actor.person_id
         else None
     )
     result: list[dict[str, object]] = []
-    draft_ids = {
-        workday.id
-        for workday, _revision, _region, _slot in rows
-        if workday.current_draft_revision_id and can_manage_region(actor, workday.region_id)
-    }
     for workday, revision, region, palette_slot in rows:
         own = own_by_revision.get(revision.id, [])
         if workday.generated_from_workday_id:
             own = active_published_assignments(db, workday, revision, own)
-        if not own and not broad_month:
-            continue
-        if not own and not can_crew_view(actor, workday.region_id):
+        if not own:
             continue
         participation = person_day_participation(revision, own) if own else None
-        visible_rows = all_by_revision.get(revision.id, [])
-        if workday.generated_from_workday_id:
-            visible_rows = active_published_assignments(db, workday, revision, visible_rows)
-        visible_statuses = (
-            set(participation.statuses) if participation else {row.status for row in visible_rows}
-        )
+        visible_statuses = set(participation.statuses) if participation else set()
         display_statuses = ["UNASSIGNED" if value == "TBC" else value for value in (
             participation.statuses if participation else ("PUBLISHED",)
         )]
@@ -157,7 +135,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                     if participation and workday.status == WorkdayStatus.SCHEDULED.value
                     else 0
                 ),
-                "role": participation.role_summary if participation else "Crew view",
+                "role": participation.role_summary if participation else "",
                 "status": (
                     workday.status
                     if workday.status != WorkdayStatus.SCHEDULED.value
@@ -170,26 +148,38 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
                 "own": bool(own),
                 "published_at": revision.published_at,
-                "has_draft": workday.id in draft_ids,
+                "has_draft": False,
                 "draft_only": False,
                 "url": f"/day/{workday.id}",
                 "workday_status": workday.status,
             }
         )
-    draft_rows = db.execute(
-        select(Workday, WorkdayRevision, Region, Track.palette_slot)
-        .join(WorkdayRevision, Workday.current_draft_revision_id == WorkdayRevision.id)
+    own_workday_ids = {uuid.UUID(str(item["id"])) for item in result}
+    open_workday_ids: set[uuid.UUID] = set()
+    open_rows = db.execute(
+        select(Workday, WorkdayRevision, Region, Track.palette_slot, Assignment, BasePosition)
+        .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
         .join(Region, Region.id == Workday.region_id)
         .outerjoin(Track, Track.id == WorkdayRevision.track_id)
+        .join(Assignment, Assignment.revision_id == WorkdayRevision.id)
+        .join(BasePosition, BasePosition.id == Assignment.base_position_id)
         .where(
-            Workday.current_published_revision_id.is_(None),
+            Workday.status == WorkdayStatus.SCHEDULED.value,
             WorkdayRevision.work_date >= start,
             WorkdayRevision.work_date < end,
+            Assignment.status == "OPEN",
         )
         .order_by(WorkdayRevision.work_date)
     ).all()
-    for workday, revision, region, palette_slot in draft_rows:
-        if not can_manage_region(actor, workday.region_id):
+    for workday, revision, region, palette_slot, _assignment, position in open_rows:
+        if (
+            workday.id in own_workday_ids
+            or workday.id in open_workday_ids
+            or not can_apply_for_open_position(actor, workday.region_id)
+        ):
+            continue
+        eligible, _reason = eligibility(db, actor.person_id, position.id)
+        if not eligible:
             continue
         result.append(
             {
@@ -199,23 +189,27 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
                 "category": workday.category,
                 "title": revision.title,
                 "track": revision.track_name_snapshot,
+                "track_id": revision.track_id,
+                "racing_discipline": workday.racing_discipline,
+                "first_race_time": revision.first_race_time,
                 "presentation": track_token(palette_slot, workday.category),
                 "start": revision.start_time,
                 "end": revision.end_time,
                 "minutes": 0,
-                "role": "Private management draft",
-                "status": "DRAFT",
-                "has_open": False,
+                "role": f"Open position · {position.name}",
+                "status": "OPEN",
+                "has_open": True,
                 "cross_region": False,
                 "holiday": holiday_for_date(revision.work_date, region.statutory_holiday_region or ""),
                 "own": False,
-                "published_at": None,
-                "has_draft": True,
-                "draft_only": True,
-                "url": f"/manage/workdays/{workday.id}",
+                "published_at": revision.published_at,
+                "has_draft": False,
+                "draft_only": False,
+                "url": f"/day/{workday.id}",
                 "workday_status": workday.status,
             }
         )
+        open_workday_ids.add(workday.id)
     result.sort(key=lambda item: (item["date"], str(item["id"])))
     return result
 

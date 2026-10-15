@@ -212,9 +212,7 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
     manager_rows = month_items(
         db, actor(manager, None, region, Role.MANAGER), date(2026, 9, 1), date(2026, 10, 1)
     )
-    assert manager_rows[0]["track"] == "Ellerslie"
-    assert manager_rows[0]["has_draft"] is True
-    assert manager_rows[0]["url"] == f"/day/{workday.id}"
+    assert manager_rows == [], "an unlinked Manager has no invented personal calendar"
     private_draft = create_workday(
         db,
         region_id=region.id,
@@ -228,7 +226,7 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
     manager_rows = month_items(
         db, actor(manager, None, region, Role.MANAGER), date(2026, 9, 1), date(2026, 10, 1)
     )
-    assert any(row["id"] == str(private_draft.id) and row["draft_only"] for row in manager_rows)
+    assert manager_rows == []
     assert all(
         row["id"] != str(private_draft.id)
         for row in month_items(db, employee_actor, date(2026, 9, 1), date(2026, 10, 1))
@@ -248,6 +246,64 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
     db.commit()
     personal_month = month_items(db, employee_actor, date(2026, 9, 1), date(2026, 10, 1))
     assert [row["title"] for row in personal_month] == ["Ellerslie Race Day"]
+
+    blocked_position = BasePosition(name="Blocked personal month role")
+    db.add(blocked_position)
+    db.flush()
+    set_signal(
+        db,
+        person.id,
+        blocked_position.id,
+        CapabilitySignal.MANAGER_BLOCK.value,
+        manager.id,
+    )
+    for day, title, open_position in (
+        (17, "Eligible open day", position),
+        (18, "Blocked open day", blocked_position),
+    ):
+        open_day = create_workday(
+            db,
+            region_id=region.id,
+            category=WorkdayCategory.RACE_DAY.value,
+            work_date=date(2026, 9, day),
+            track_id=track.id,
+            title=title,
+            actor_user_id=manager.id,
+        )
+        open_draft = db.get(WorkdayRevision, open_day.current_draft_revision_id)
+        add_current(
+            db,
+            open_day,
+            open_draft,
+            AssignmentInput(
+                base_position_id=open_position.id,
+                slot_index=1,
+                person_id=None,
+                status=AssignmentStatus.OPEN.value,
+            ),
+        )
+        publish_current(db, open_day, open_draft, manager.id)
+    db.commit()
+
+    for role in (Role.EMPLOYEE, Role.SUB_MANAGER, Role.MANAGER, Role.VIEWER):
+        personal_actor = Actor(
+            user_id=employee.id,
+            person_id=person.id,
+            global_roles=frozenset(),
+            regional_roles={
+                region.id: frozenset({Role.EMPLOYEE.value, role.value})
+            },
+        )
+        role_rows = month_items(
+            db,
+            personal_actor,
+            date(2026, 9, 1),
+            date(2026, 10, 1),
+        )
+        assert [row["title"] for row in role_rows] == [
+            "Ellerslie Race Day",
+            "Eligible open day",
+        ]
 
 
 def test_private_assignment_note_not_leaked_to_viewer(db) -> None:  # type: ignore[no-untyped-def]

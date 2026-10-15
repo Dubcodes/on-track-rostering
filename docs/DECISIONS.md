@@ -74,7 +74,7 @@ Roster publication and decline record deterministic event keys in the same datab
 
 ## Regional administration boundary
 
-Manager and Admin may administer regional tracks and scoped accounts. Region policy/lifecycle and the current global Crew Group/Base Position catalogues require Admin. Sub-Manager retains practical roster mutation but has no broad account or catalogue administration. Historical workday snapshots are never rewritten by catalogue rename, colour, or lifecycle changes.
+Manager and Admin may administer regional tracks and scoped accounts. Region policy/lifecycle and the current global Crew Group/Base Position catalogues require Admin. Sub-Manager retains practical roster mutation but has no broad account or catalogue administration. Managers may administer ordinary linked Employee, Contractor and Sub-manager access in their Regions after fresh authentication, but active Manager/Admin security remains Admin-controlled. Historical workday snapshots are never rewritten by catalogue rename, colour, or lifecycle changes.
 
 ## Hours are derived from publication snapshots
 
@@ -110,4 +110,8 @@ External HR leave remains a paste-driven operational intake, not payroll. People
 
 ## Release-candidate UX changes wait for staging evidence
 
-Builder and Team Hours received bounded responsive and interaction corrections before this release candidate. Broader decluttering, control removal, section reorganisation, or another Team Hours visual redesign is deferred until the qualified build is observed on real staging desktop/mobile devices. The conservative leave-paste grammar likewise remains fixed until a real copied source sample exists; it must not grow through guessed or fuzzy parsing.
+Settings is a personal account/preferences surface. A permission-driven `/manage` hub owns everyday operational navigation and notices; Administration remains system configuration/recovery. Crew is the Person-centric directory/detail UI over the intentionally separate Person and User models, while Accounts remains available as an advanced repair/reconciliation surface. The conservative leave-paste grammar remains fixed until a real copied source sample exists; it must not grow through guessed or fuzzy parsing.
+
+Personal Month is independent of role authority: it contains the linked Person's own current publication assignments and applicable Open Positions. Primary-Region source events appear only after the Region-wide latest current published SCHEDULED horizon (or today when no horizon exists). Crew is the distinct authorized regional all-crew calendar.
+
+Active Base Position identity is global and canonical across Crew Groups. Ordinary create, rename and import paths share the alias/numbered-position resolver; known historical duplicates are not constrained or silently converged. Notice targets and Admin notice-publisher overrides use append-only relational tables, with override-row presence distinguishing default derivation from explicit empty. Error reports are deliberately small first-party records rather than tickets or arbitrary request captures.

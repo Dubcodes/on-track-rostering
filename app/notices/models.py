@@ -29,3 +29,30 @@ class OperationalNotice(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OperationalNoticeRegion(Base):
+    __tablename__ = "operational_notice_regions"
+    notice_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("operational_notices.id", ondelete="CASCADE"), primary_key=True
+    )
+    region_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regions.id"), primary_key=True)
+
+
+class NoticePublishingScope(Base):
+    """Presence means an explicit Admin override, including an empty scope."""
+
+    __tablename__ = "notice_publishing_scopes"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    configured_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    configured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NoticePublishingScopeRegion(Base):
+    __tablename__ = "notice_publishing_scope_regions"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("notice_publishing_scopes.user_id", ondelete="CASCADE"), primary_key=True
+    )
+    region_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regions.id"), primary_key=True)

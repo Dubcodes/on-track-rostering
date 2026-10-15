@@ -209,4 +209,69 @@
     };
     window.setTimeout(prefetch, 400);
   }
+  const personEditor = document.querySelector("[data-person-editor]");
+  if (personEditor) {
+    const state = personEditor.querySelector("[data-save-state]");
+    const save = personEditor.querySelector("[data-save]");
+    const discard = personEditor.querySelector("[data-discard]");
+    let changed = 0;
+    const clean = () => {
+      changed = 0;
+      state.textContent = "Saved";
+      save.hidden = true;
+      discard.hidden = true;
+    };
+    personEditor.addEventListener("change", () => {
+      changed += 1;
+      state.textContent = `${changed} unsaved change${changed === 1 ? "" : "s"}`;
+      save.hidden = false;
+      discard.hidden = false;
+    });
+    personEditor.addEventListener("reset", () => window.setTimeout(clean));
+    personEditor.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      state.textContent = "Saving…";
+      save.disabled = true;
+      try {
+        const response = await fetch(personEditor.action, {
+          method: "POST",
+          body: new FormData(personEditor),
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) throw new Error(await response.text());
+        personEditor.querySelectorAll("input, textarea").forEach((control) => {
+          if (control.type === "checkbox" || control.type === "radio") {
+            control.defaultChecked = control.checked;
+          } else {
+            control.defaultValue = control.value;
+          }
+        });
+        personEditor.querySelectorAll("option").forEach((option) => {
+          option.defaultSelected = option.selected;
+        });
+        clean();
+      } catch (_) {
+        state.textContent = "Could not save — review and try again";
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
+  const positionSearch = document.querySelector("[data-position-search]");
+  const positionSelect = document.querySelector("[data-position-select]");
+  if (positionSearch && positionSelect) {
+    positionSearch.addEventListener("change", () => {
+      const match = Array.from(positionSelect.options).find(
+        (option) => option.text.trim().toLowerCase() === positionSearch.value.trim().toLowerCase(),
+      );
+      if (match) positionSelect.value = match.value;
+    });
+  }
+  document.querySelectorAll("[data-capability-form]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      const position = form.querySelector('[name="position_id"]');
+      if (!position.value) return;
+      form.action = `${form.dataset.actionBase}${position.value}`;
+    });
+  });
 })();

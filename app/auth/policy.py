@@ -96,6 +96,14 @@ def can_administer_user(db: Session, actor: Actor, user: User, region_id: uuid.U
         return True
     if not can_administer_region(actor, region_id):
         return False
+    if db.scalar(
+        select(RoleGrant.id).where(
+            RoleGrant.user_id == user.id,
+            RoleGrant.status == "ACTIVE",
+            RoleGrant.role.in_([Role.ADMIN.value, Role.MANAGER.value]),
+        ).limit(1)
+    ):
+        return False
     link = db.get(UserPersonLink, user.id)
     person = db.get(Person, link.person_id) if link else None
     if person and can_administer_person(actor, person, region_id):

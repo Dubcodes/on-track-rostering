@@ -17,7 +17,7 @@ from app.external_calendar.models import (
     ExternalProviderState,
     ExternalTrackMapping,
 )
-from app.external_calendar.read_models import external_calendar_items
+from app.external_calendar.read_models import external_calendar_items, personal_external_calendar_items
 from app.external_calendar.refresh import refresh_provider
 from app.external_calendar.service import (
     ProviderObservation,
@@ -276,6 +276,73 @@ def test_external_items_are_region_scoped_and_contractors_get_no_planning_feed(d
     assert [row["track"] for row in rows] == ["Te Rapa"]
     contractor = actor(user, northern, "CONTRACTOR")
     assert external_calendar_items(db, contractor, date(2026, 9, 1), date(2026, 10, 1)) == []
+
+
+def test_personal_external_planning_uses_primary_region_scheduled_horizon(db) -> None:  # type: ignore[no-untyped-def]
+    user, northern, track = foundation(db)
+    central = Region(name="Central")
+    person = Person(display_name="Linked Manager", home_region_id=northern.id)
+    db.add_all([central, person])
+    db.flush()
+    central_track = Track(name="Awapuni", region_id=central.id, palette_slot=2)
+    db.add(central_track)
+    db.flush()
+
+    def workday(day: int, status: str = "SCHEDULED", *, published: bool = True) -> None:
+        row = Workday(
+            region_id=northern.id,
+            status=status,
+            created_by_user_id=user.id,
+        )
+        db.add(row)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=row.id,
+            revision_number=1,
+            state="PUBLISHED" if published else "DRAFT",
+            work_date=date(2027, 1, day),
+            created_by_user_id=user.id,
+        )
+        db.add(revision)
+        db.flush()
+        if published:
+            row.current_published_revision_id = revision.id
+        else:
+            row.current_draft_revision_id = revision.id
+
+    workday(16)
+    workday(25, published=False)
+    workday(27, status="CANCELLED")
+    db.add_all(
+        [
+            ExternalCalendarEvent(
+                event_date=date(2027, 1, day),
+                track_id=track.id,
+                discipline="THOROUGHBRED",
+                event_kind="RACE",
+            )
+            for day in (13, 16, 18, 21)
+        ]
+        + [
+            ExternalCalendarEvent(
+                event_date=date(2027, 1, 19),
+                track_id=central_track.id,
+                discipline="THOROUGHBRED",
+                event_kind="RACE",
+            )
+        ]
+    )
+    db.flush()
+    linked_manager = actor(user, northern, "MANAGER", person.id)
+
+    items = personal_external_calendar_items(
+        db, linked_manager, date(2027, 1, 1), date(2027, 2, 1)
+    )
+
+    assert [item["date"] for item in items] == [date(2027, 1, 18), date(2027, 1, 21)]
+    assert personal_external_calendar_items(
+        db, actor(user, northern, "CONTRACTOR", person.id), date(2027, 1, 1), date(2027, 2, 1)
+    ) == []
 
 
 def test_private_adoption_remains_visible_then_published_link_suppresses(db):  # type: ignore[no-untyped-def]

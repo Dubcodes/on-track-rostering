@@ -1,12 +1,14 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.policy import Actor, can_view_published, external_calendar_region_ids
 from app.catalog.models import Track
 from app.catalog.presentation import track_token
+from app.core.time import local_today
 from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
+from app.identity.models import Person
 from app.rostering.models import Workday, WorkdayRevision
 
 
@@ -35,10 +37,19 @@ def calendar_preference(db: Session, user_id) -> CalendarDisplayPreference:  # t
 
 
 def external_calendar_items(
-    db: Session, actor: Actor, start: date, end: date
+    db: Session,
+    actor: Actor,
+    start: date,
+    end: date,
+    *,
+    region_ids_override: set[object] | None = None,
 ) -> list[dict[str, object]]:
     preference = calendar_preference(db, actor.user_id)
-    region_ids = external_calendar_region_ids(db, actor)
+    region_ids = (
+        region_ids_override
+        if region_ids_override is not None
+        else external_calendar_region_ids(db, actor)
+    )
     if region_ids == set():
         return []
     statement = (
@@ -143,3 +154,34 @@ def external_calendar_items(
         grouped.append(item)
         consumed.add(item_id)
     return grouped
+
+
+def personal_external_calendar_items(
+    db: Session, actor: Actor, start: date, end: date
+) -> list[dict[str, object]]:
+    """Return source-only planning after the Primary Region roster horizon."""
+    if actor.person_id is None or actor.is_contractor:
+        return []
+    home_region_id = db.scalar(
+        select(Person.home_region_id).where(Person.id == actor.person_id)
+    )
+    if home_region_id is None:
+        return []
+    horizon = db.scalar(
+        select(func.max(WorkdayRevision.work_date))
+        .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
+        .where(
+            Workday.region_id == home_region_id,
+            Workday.status == "SCHEDULED",
+        )
+    )
+    planning_start = max(start, horizon + timedelta(days=1) if horizon else local_today())
+    if planning_start >= end:
+        return []
+    return external_calendar_items(
+        db,
+        actor,
+        planning_start,
+        end,
+        region_ids_override={home_region_id},
+    )

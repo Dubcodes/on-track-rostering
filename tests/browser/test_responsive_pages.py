@@ -930,6 +930,9 @@ def test_live_staging_management_build_entry_and_contextual_help(browser_site, w
         _capture_page(page, "master-data-1280.png")
 
     page.goto(base_url + "/settings")
+    assert page.get_by_text("Workspaces", exact=True).count() == 0
+    page.get_by_role("link", name="Management", exact=True).click()
+    page.wait_for_url("**/manage")
     page.get_by_role("link", name="Build", exact=True).click()
     page.wait_for_url("**/manage/workdays/new")
     assert page.locator(".builder-form").count() == 1
@@ -1303,11 +1306,9 @@ def test_transition_preview_and_regionless_onboarding_are_readable(browser_site,
         _capture_page(page, f"transition-onboarding-{width}.png")
 
     page.goto(base_url + "/manage/crew?q=Needs+Setup")
-    queue = page.locator("#needs-setup")
+    queue = page.locator(".record-list", has_text="Browser Needs Setup Crew")
     assert queue.get_by_text("Browser Needs Setup Crew", exact=True).is_visible()
-    assert queue.get_by_text("No primary region", exact=True).count() >= 1
-    assert queue.locator("small", has_text="Needs setup").count() >= 1
-    assert queue.locator(f'form[action="/manage/crew/{values["regionless_person_id"]}/profile"]').count() == 1
+    assert queue.locator(f'a[href="/manage/crew/{values["regionless_person_id"]}"]').count() == 1
     _assert_no_horizontal_overflow(page)
     assert errors == []
     context.close()
@@ -1933,6 +1934,7 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         "/month",
         "/crew",
         "/manage/workdays/new",
+        "/manage",
         f"/manage/workdays/{values['workday_id']}",
         f"/manage/workdays/{values['workday_id']}/preview",
         "/manage/crew",
@@ -1948,12 +1950,21 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         if width <= 760:
             assert page.locator(".brand > strong:first-child").is_visible()
     page.goto(base_url + "/manage/crew")
-    crew_search = page.locator("[data-live-search-input]")
+    crew_search = page.locator('input[name="q"]')
     crew_search.fill("Browser Roster Manager")
-    assert page.locator("[data-live-search-item]:visible").count() == 1
+    page.get_by_role("button", name="Filter").click()
+    assert page.get_by_text("Browser Roster Manager", exact=True).is_visible()
+    person_link = page.get_by_role("link", name=re.compile("Browser Roster Manager"))
+    person_link.click()
+    page.wait_for_url("**/manage/crew/*")
     assert page.get_by_role("heading", name="Browser Roster Manager").is_visible()
+    assert page.locator("[data-person-editor]").count() == 1
+    _assert_no_horizontal_overflow(page)
+    page.goto(base_url + "/manage/crew")
+    crew_search = page.locator('input[name="q"]')
     crew_search.fill("")
-    assert page.locator("[data-live-search-item]:visible").count() >= 2
+    page.get_by_role("button", name="Filter").click()
+    assert page.locator('.record-list a[href^="/manage/crew/"]').count() >= 2
     icon_offsets = page.locator(".site-nav .icon-button:has(svg)").evaluate_all(
         "elements => elements.map(element => { const button = element.getBoundingClientRect(); const icon = element.querySelector('svg').getBoundingClientRect(); return [Math.abs((icon.left + icon.width / 2) - (button.left + button.width / 2)), Math.abs((icon.top + icon.height / 2) - (button.top + button.height / 2))]; })"
     )
@@ -2409,16 +2420,15 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
         branding.product_name = "Demo it"
         db.commit()
 
-    page.goto(base_url + "/settings#notices")
+    page.goto(base_url + "/manage#notices")
     assert page.get_by_text(values["active_notice_text"], exact=True).count() == 1
     assert page.get_by_text(values["expired_notice_text"], exact=True).count() == 1
     page.locator("#notices > details > summary").click()
-    page.locator('#notices select[name="scope"]').select_option("REGION")
-    page.locator('#notices select[name="region_id"]').select_option(values["region_id"])
+    assert page.locator(f'#notices input[name="region_ids"][value="{values["region_id"]}"]').is_checked()
     notice_text = f"Call time moved for browser review {width}"
     page.locator('#notices textarea[name="message"]').fill(notice_text)
     page.locator('#notices button', has_text="Create notice").click()
-    page.wait_for_url("**/settings?notice=created*", wait_until="domcontentloaded")
+    page.wait_for_url("**/manage?notice=created*", wait_until="domcontentloaded")
     _select_theme(page, base_url, "race-night")
     page.goto(base_url + "/month")
     notice = page.locator(".crew-notice-strip", has_text=notice_text)

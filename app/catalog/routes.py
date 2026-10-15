@@ -34,6 +34,7 @@ from app.catalog.service import (
 from app.core.database import get_db
 from app.core.enums import DeclinePolicy, Lifecycle
 from app.core.forms import controlled_integrity, optional_uuid
+from app.positions.canonical import validate_position_identity
 from app.positions.ordering import catalog_position_order
 from app.web import context, templates
 
@@ -491,15 +492,12 @@ def update_position(position_id: uuid.UUID, request: Request, name: str = Form(.
     clean_name = _name(name, 100)
     clean_lifecycle = _lifecycle(lifecycle)
     group_id = group.id if group else None
-    duplicate = db.scalar(
-        select(BasePosition.id).where(
-            BasePosition.id != row.id,
-            BasePosition.name == clean_name,
-            BasePosition.crew_group_id == group_id,
-        )
-    )
-    if duplicate:
-        raise HTTPException(409, "A base position in that crew group already uses that name.")
+    if clean_lifecycle == Lifecycle.ACTIVE.value:
+        try:
+            identity = validate_position_identity(db, clean_name, exclude_id=row.id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        clean_name = identity.canonical_name
     if display_order is not None and display_order < 0:
         raise HTTPException(400, "Position order must be zero or greater.")
     previous = {"name": row.name, "display_order": row.display_order, "lifecycle": row.lifecycle}
@@ -527,19 +525,16 @@ def create_position(
     if display_order is not None and display_order < 0:
         raise HTTPException(400, "Position order must be zero or greater.")
     group = _active_group(db, crew_group_id)
+    clean_name = _name(name, 100)
+    try:
+        identity = validate_position_identity(db, clean_name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     row = BasePosition(
-        name=_name(name, 100),
+        name=identity.canonical_name,
         crew_group_id=group.id if group else None,
         display_order=display_order,
     )
-    duplicate = db.scalar(
-        select(BasePosition.id).where(
-            BasePosition.name == row.name,
-            BasePosition.crew_group_id == row.crew_group_id,
-        )
-    )
-    if duplicate:
-        raise HTTPException(409, "A base position in that crew group already uses that name.")
     with controlled_integrity(db, "A base position in that crew group already uses that name."):
         db.add(row)
         db.flush()

@@ -44,6 +44,7 @@ from app.identity.models import (
 )
 from app.operations.heartbeat import scheduler_health
 from app.operations.readiness import evaluate_readiness
+from app.positions.canonical import validate_position_identity
 from app.system_settings.service import update_operational_settings
 from app.web import context, templates
 
@@ -248,18 +249,15 @@ def create_position(
     _admin(request)
     verify_csrf(request, csrf_token)
     group = _active_reference(db, CrewGroup, crew_group_id, "crew group") if crew_group_id else None
+    clean_name = _name_or_400(name, "Position name", 100)
+    try:
+        identity = validate_position_identity(db, clean_name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     position = BasePosition(
-        name=_name_or_400(name, "Position name", 100),
+        name=identity.canonical_name,
         crew_group_id=group.id if group else None,
     )
-    duplicate = db.scalar(
-        select(BasePosition.id).where(
-            BasePosition.name == position.name,
-            BasePosition.crew_group_id == position.crew_group_id,
-        )
-    )
-    if duplicate:
-        raise HTTPException(409, "A base position in that crew group already uses that name.")
     with controlled_integrity(db, "A base position in that crew group already uses that name."):
         db.add(position)
         db.flush()

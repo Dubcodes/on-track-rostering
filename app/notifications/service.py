@@ -204,7 +204,15 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
             if _preference_allows(db, user_id, event.event_type)
         }
     if event.event_type == "OPERATIONAL_NOTICE":
-        if event.region_id:
+        region_values = event.payload.get("region_ids")
+        if isinstance(region_values, list) and region_values:
+            candidate_ids: set[uuid.UUID] = set()
+            for value in region_values:
+                try:
+                    candidate_ids.update(relevant_notice_user_ids(db, uuid.UUID(str(value))))
+                except ValueError:
+                    return set()
+        elif event.region_id:
             candidate_ids = relevant_notice_user_ids(db, event.region_id)
         else:
             candidate_ids = db.scalars(select(User.id).where(User.status == "ACTIVE"))

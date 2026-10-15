@@ -46,12 +46,15 @@ from app.employee.read_models import (
     shows_time_exception,
 )
 from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
-from app.external_calendar.read_models import calendar_preference, external_calendar_items
+from app.external_calendar.read_models import (
+    calendar_preference,
+    personal_external_calendar_items,
+)
 from app.external_calendar.service import event_evidence
 from app.help.content import help_topic
 from app.hours.service import format_minutes, fortnight_bounds, published_hours
 from app.identity.models import PasskeyCredential, Person, RoleGrant, TotpFactor, TrustedDevice, User
-from app.notices.service import prominent_notice, recent_notices, relevant_notice_region_ids
+from app.notices.service import prominent_notice, relevant_notice_region_ids
 from app.notifications.models import NotificationPreference, PushSubscription
 from app.notifications.service import record_event
 from app.positions.ordering import catalog_position_order
@@ -121,7 +124,7 @@ def month_view(
     year, month = year or today.year, month or today.month
     start, end = _month_bounds(year, month)
     items = month_items(db, request.state.actor, start, end)
-    external_items = external_calendar_items(db, request.state.actor, start, end)
+    external_items = personal_external_calendar_items(db, request.state.actor, start, end)
     for item in items:
         if item["category"] != "RACE_DAY":
             continue
@@ -909,13 +912,14 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
                 )
             )
         }
-    manageable_regions = list(
-        db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name))
+    current_person = (
+        db.get(Person, request.state.actor.person_id) if request.state.actor.person_id else None
     )
-    manageable_regions = [
-        region for region in manageable_regions if can_manage_region(request.state.actor, region.id)
-    ]
-    history_regions = relevant_notice_region_ids(db, request.state.actor)
+    current_region = (
+        db.get(Region, current_person.home_region_id)
+        if current_person and current_person.home_region_id
+        else None
+    )
     return templates.TemplateResponse(
         "settings.html",
         context(
@@ -941,8 +945,8 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
                     )
                 )
             ),
-            manageable_notice_regions=manageable_regions,
-            notice_history=recent_notices(db, history_regions, request.state.actor.is_admin),
+            current_person=current_person,
+            current_region=current_region,
         ),
     )
 

@@ -1,19 +1,56 @@
-{% extends "base.html" %}{% from "_help_tip.html" import help_tip %}{% set help_context = 'crew_management' %}
-{% block title %}Crew management · {{ branding.product_name }}{% endblock %}
+{% extends "base.html" %}
+{% set help_context = 'crew_management' %}
+{% block title %}Crew · {{ branding.product_name }}{% endblock %}
 {% block content %}
-<section class="page-head"><p class="eyebrow">Regional management</p><h1>Crew</h1><p class="lede">People, group membership, and base-position capability are managed here. Account access is managed separately.</p></section>
-<section class="panel"><form method="get" class="form-grid"><label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label><label>Search<input type="search" name="q" value="{{ query }}" placeholder="Name, email, or region" data-live-search-input></label><label class="check"><input type="checkbox" name="show_archived" value="true" {% if show_archived %}checked{% endif %}> Show archived</label><button>Filter</button></form></section>
-<section class="panel"><details><summary>Add crew member</summary><form method="post" action="/manage/crew" class="form-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="display_name" required maxlength="120"></label><label>Email<input name="email" type="email"></label><label>Primary region {{ help_tip('Determines where this crew member appears first when building a roster. Account permissions are managed separately.') }}<select name="region_id" required>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label><button>Add crew member</button></form></details></section>
-{% if actor.is_admin %}<section class="panel needs-setup" id="needs-setup"><div class="section-head"><div><p class="eyebrow">Admin onboarding queue</p><h2>No primary region</h2><p class="muted">Active imported People remain neutral until an Admin deliberately assigns a Primary region. No account is created here.</p></div><span class="badge">{{ needs_setup_people|length }} needs setup</span></div><div class="card-list" data-live-search>{% for person in needs_setup_people %}<article class="onboarding-card" id="{{ person.id }}" data-live-search-item data-search="{{ person.display_name }} {{ person.email or '' }} no primary region needs setup"><div><strong>{{ person.display_name }}</strong><small>No primary region · Needs setup · {% if person.id in linked %}Account linked{% else %}No linked account{% endif %}</small></div><form method="post" action="/manage/crew/{{ person.id }}/profile" class="form-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="display_name" value="{{ person.display_name }}" required maxlength="120"></label><label>Email<input name="email" type="email" value="{{ person.email or '' }}"></label><label>Primary region<select name="home_region_id" required><option value="">Choose region</option>{% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}</select></label><button>Save and move to regional Crew</button></form></article>{% else %}<p class="muted" data-live-search-empty>No active People need a Primary region.</p>{% endfor %}</div></section>{% endif %}
-<div class="card-list" data-live-search>
-{% for person in people %}<article class="panel" id="{{ person.id }}" data-live-search-item data-search="{{ person.display_name }} {{ person.email or '' }} {{ region_names.get(person.home_region_id, '') }}">
-  <div class="section-head"><div><h2>{{ person.display_name }}{% if person.id in contractor_accounts %} <span class="badge">Contractor</span>{% endif %}</h2><p>{{ region_names.get(person.home_region_id, 'No primary region') }} · {{ person.lifecycle.title() }} · {% if person.id in linked %}Account linked{% else %}No linked account{% endif %}{% if person.id in contractor_accounts %} · {{ contractor_accounts[person.id].status.title() }}{% if contractor_accounts[person.id].contractor_access_expires_at %} · Access until {{ contractor_accounts[person.id].contractor_access_expires_at|display_datetime }}{% endif %}{% endif %}</p></div></div>
-  <details><summary>Profile</summary><form method="post" action="/manage/crew/{{ person.id }}/profile" class="form-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="display_name" value="{{ person.display_name }}" required maxlength="120"></label><label>Email<input name="email" type="email" value="{{ person.email or '' }}"></label><label>Primary region {{ help_tip('Moving a person changes their home base only. Their roles and account permissions are unchanged.') }}<select name="home_region_id" required>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == person.home_region_id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label><button>Save profile</button></form></details>
-  {% if person.id not in linked %}<div class="account-onboarding"><strong>No linked account</strong>{% if person.email %}<p class="muted">Create a one-time invitation for this exact Person. Employee is the normal onboarding role; credentials are chosen by the recipient.</p><form method="post" action="/manage/accounts/invitations" class="inline-action"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="email" value="{{ person.email }}"><input type="hidden" name="display_name" value="{{ person.display_name }}"><input type="hidden" name="person_id" value="{{ person.id }}"><input type="hidden" name="role" value="EMPLOYEE"><input type="hidden" name="region_id" value="{{ person.home_region_id }}"><button>Invite as Employee</button></form>{% else %}<p class="muted">Add an email in Profile before creating an invitation. On Track will not guess an address.</p>{% endif %}</div>{% endif %}
-  <details><summary>Crew groups {{ help_tip('Used to organise crew and help suggest people for Positions. They do not grant application permissions.') }}</summary><form method="post" action="/manage/crew/{{ person.id }}/groups" class="choice-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% for group in groups %}<label class="check"><input type="checkbox" name="group_ids" value="{{ group.id }}" {% if group.id in memberships[person.id] %}checked{% endif %}> {{ group.name }}</label>{% endfor %}<button>Save groups</button></form></details>
-  <details><summary>Position capabilities {{ help_tip('Manager guidance about whether this person should normally be suggested for this Position. Worked history remains separate.') }}</summary><div class="capability-table" role="table"><div class="capability-heading" role="row"><span>Position</span><span>Current</span><span>Decision</span><span></span></div>{% for position in positions %}<form method="post" action="/manage/crew/{{ person.id }}/capabilities/{{ position.id }}" class="capability-row" role="row"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><strong>{{ position.name }}</strong><small>{% set state = capabilities[person.id].get(position.id, []) %}{% if 'MANAGER_BLOCK' in state %}Restricted{% elif 'EMPLOYEE_OPT_OUT' in state %}Opted out{% elif 'WORKED' in state %}Worked before{% elif 'MANAGER_ALLOW' in state or 'EMPLOYEE_ALLOW' in state %}Approved{% else %}No decision{% endif %}</small><select name="signal" aria-label="Capability decision for {{ position.name }}"><option value="CLEAR" {% if 'MANAGER_ALLOW' not in state and 'MANAGER_BLOCK' not in state %}selected{% endif %}>Clear decision</option><option value="MANAGER_ALLOW" {% if 'MANAGER_ALLOW' in state %}selected{% endif %}>Approved</option><option value="MANAGER_BLOCK" {% if 'MANAGER_BLOCK' in state %}selected{% endif %}>Restricted</option></select><button>Set</button></form>{% endfor %}</div></details>
-  <div class="lifecycle-action"><span>Lifecycle {{ help_tip('Archive to hide this person from normal use while retaining historical roster references.') }}</span><form method="post" action="/manage/crew/{{ person.id }}/lifecycle" class="inline-action"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="{% if person.lifecycle == 'ACTIVE' %}ARCHIVED{% else %}ACTIVE{% endif %}"><button class="secondary">{% if person.lifecycle == 'ACTIVE' %}Archive{% else %}Restore{% endif %}</button></form></div>
-</article>{% endfor %}
-<section class="empty-state panel" data-live-search-empty {% if people %}hidden{% endif %}><h2>No crew found</h2><p>Adjust the search or add a crew member.</p></section>
-</div>
+<section class="page-head">
+  <p class="eyebrow">Staff directory</p>
+  <h1>Crew</h1>
+  <p class="lede">Choose a Person to manage their roster identity, account access and history.</p>
+</section>
+<section class="panel">
+  <form method="get" class="form-grid">
+    <label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+    <label>Search<input type="search" name="q" value="{{ query }}" placeholder="Name or work email"></label>
+    <label class="check"><input type="checkbox" name="show_archived" value="true" {% if show_archived %}checked{% endif %}> Show archived</label>
+    <button>Filter</button>
+  </form>
+</section>
+<section class="panel">
+  <details><summary>Add Person</summary>
+    <form method="post" action="/manage/crew" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Name<input name="display_name" required maxlength="120"></label>
+      <label>Work email<input name="email" type="email"></label>
+      <label>Primary Region<select name="region_id" required>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+      <button>Add Person</button>
+    </form>
+  </details>
+</section>
+{% if actor.is_admin and needs_setup_people %}
+<section class="panel" id="needs-setup">
+  <div class="section-head"><div><p class="eyebrow">Onboarding queue</p><h2>Needs setup</h2></div><span class="badge">{{ needs_setup_people|length }}</span></div>
+  <p class="muted">Person UUID is the exact machine key. This bounded save updates work email and Primary Region only; it never creates an account.</p>
+  <form method="post" action="/manage/crew/onboarding/metadata" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="record-list">
+      {% for person in needs_setup_people %}
+      <article>
+        <div><a href="/manage/crew/{{ person.id }}"><strong>{{ person.display_name }}</strong></a><small>Person {{ person.id }}</small></div>
+        <input type="hidden" name="person_ids" value="{{ person.id }}">
+        <label>Work email<input name="emails" type="email" value="{{ person.email or '' }}" required></label>
+        <label>Primary Region<select name="region_ids" required><option value="">Select Region</option>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == person.home_region_id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+      </article>
+      {% endfor %}
+    </div>
+    <button>Validate and save setup metadata</button>
+  </form>
+</section>
+{% endif %}
+<section class="panel">
+  <div class="record-list">
+    {% for person in people %}
+    <a href="/manage/crew/{{ person.id }}" class="preference-row"><span><strong>{{ person.display_name }}{% if person.id in contractor_accounts %} <span class="badge">Contractor</span>{% endif %}</strong><small>{{ region_names.get(person.home_region_id, 'No Primary Region') }} · {{ person.email or 'No work email' }} · {% if person.id in linked %}Account linked{% else %}Setup required{% endif %} · {{ person.lifecycle|title }}{% if person.id in contractor_accounts and contractor_accounts[person.id].contractor_access_expires_at %} · Access until {{ contractor_accounts[person.id].contractor_access_expires_at|display_datetime }}{% endif %}</small><small>{{ memberships[person.id]|length }} Crew group{{ '' if memberships[person.id]|length == 1 else 's' }}</small></span><span aria-hidden="true">→</span></a>
+    {% else %}<p class="muted">No People match this filter.</p>{% endfor %}
+  </div>
+</section>
 {% endblock %}

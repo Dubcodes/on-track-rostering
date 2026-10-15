@@ -34,6 +34,7 @@ from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
+from app.error_reports.models import ErrorReport
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
@@ -55,6 +56,7 @@ from app.identity.models import (
     UserPersonLink,
 )
 from app.main import app
+from app.notices.models import OperationalNotice, OperationalNoticeRegion
 from app.notifications.models import NotificationEvent
 from app.rostering.models import (
     Assignment,
@@ -3715,7 +3717,6 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
 
     admin_html = admin.get("/admin").text
     assert 'href="/manage/catalog"' in admin_html
-    assert 'href="/manage/crew"' in admin_html
     assert 'href="/manage/accounts"' in admin_html
     assert 'action="/admin/users"' not in admin_html
     assert 'action="/manage/catalog/positions"' not in admin_html
@@ -3736,6 +3737,22 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
         data={"name": "Vision Operator", "crew_group_id": "", "csrf_token": admin_csrf},
     )
     assert duplicate.status_code == 409
+    alias_created = admin.post(
+        "/manage/catalog/positions",
+        data={"name": "Dir", "crew_group_id": "", "csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert alias_created.status_code == 303
+    alias_conflict = admin.post(
+        "/manage/catalog/positions",
+        data={"name": "Director", "crew_group_id": "", "csrf_token": admin_csrf},
+    )
+    assert alias_conflict.status_code == 409
+    numbered_ccu_conflict = admin.post(
+        "/manage/catalog/positions",
+        data={"name": "CCU1", "crew_group_id": "", "csrf_token": admin_csrf},
+    )
+    assert numbered_ccu_conflict.status_code == 409
 
     manager = TestClient(app)
     manager_csrf = _login(manager, "manager@example.test", "123456")
@@ -3744,12 +3761,22 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
     assert 'action="/admin/invitations"' not in manager_accounts
     manager_settings = manager.get("/settings").text
     assert 'href="/crew"' not in manager_settings
-    assert 'href="/manage/crew"' in manager_settings
-    assert 'href="/manage/catalog"' in manager_settings
+    assert 'href="/manage"' in manager_settings
+    assert 'href="/manage/crew"' not in manager_settings
+    assert 'href="/manage/catalog"' not in manager_settings
+    management_hub = manager.get("/manage").text
+    assert 'href="/manage/crew"' in management_hub
+    assert 'href="/manage/catalog"' in management_hub
     crew_html = manager.get(f"/manage/crew?region_id={region_id}").text
-    assert "Primary region" in crew_html
-    assert "data-live-search" in crew_html
-    assert "capability-table" in crew_html
+    assert "Staff directory" in crew_html
+    assert f'href="/manage/crew/{person_id}"' in crew_html
+    assert "capability-table" not in crew_html
+    person_detail = manager.get(f"/manage/crew/{person_id}")
+    assert person_detail.status_code == 200
+    assert f"Person {person_id}" in person_detail.text
+    assert "Account " in person_detail.text
+    assert "data-person-editor" in person_detail.text
+    assert "Reset PIN/password" in person_detail.text
     with factory() as db:
         southern_id = db.scalar(select(Region.id).where(Region.id != region_id))
         grant_count = len(list(db.scalars(select(RoleGrant).where(RoleGrant.user_id.is_not(None)))))
@@ -3823,6 +3850,86 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
         )
 
 
+def test_personal_settings_error_report_is_safe_and_admin_reviewable(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ids = routed_db
+    employee = TestClient(app)
+    csrf = _login(employee, "amy@example.test", "654321")
+    settings = employee.get("/settings")
+    assert "Workspaces" not in settings.text
+    assert "Operational crew notices" not in settings.text
+    submitted = employee.post(
+        "/settings/error-reports",
+        data={
+            "description": "The call time looks wrong.",
+            "page_path": "/month?token=must-not-persist",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert submitted.status_code == 303
+    with factory() as db:
+        report = db.scalar(select(ErrorReport))
+        assert report and report.page_path == "/month"
+        assert report.reporting_person_id is not None
+        assert "token" not in report.description and "must-not-persist" not in report.page_path
+        report_id = report.id
+    assert employee.get("/admin/error-reports").status_code == 403
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    page = admin.get("/admin/error-reports")
+    assert "The call time looks wrong." in page.text
+    reviewed = admin.post(
+        f"/admin/error-reports/{report_id}/review",
+        data={"csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert reviewed.status_code == 303
+    with factory() as db:
+        assert db.get(ErrorReport, report_id).status == "REVIEWED"
+
+
+def test_notice_scope_defaults_reject_forgery_and_multi_region_push_dedupes(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        other_region_id = db.scalar(select(Region.id).where(Region.id != region_id))
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    denied = manager.post(
+        "/manage/notices",
+        data={
+            "message": "Forged Southern notice",
+            "duration_hours": "12",
+            "region_ids": str(other_region_id),
+            "csrf_token": csrf,
+        },
+    )
+    assert denied.status_code == 403
+    created = manager.post(
+        "/manage/notices",
+        data={
+            "message": "Northern operational notice",
+            "duration_hours": "12",
+            "region_ids": str(region_id),
+            "also_push": "on",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+    with factory() as db:
+        notice = db.scalar(select(OperationalNotice))
+        assert notice
+        assert set(
+            db.scalars(
+                select(OperationalNoticeRegion.region_id).where(
+                    OperationalNoticeRegion.notice_id == notice.id
+                )
+            )
+        ) == {region_id}
+        event_row = db.get(NotificationEvent, f"operational-notice:{notice.id}")
+        assert event_row and event_row.payload["region_ids"] == [str(region_id)]
+
+
 def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, _position_id, _person_id) = routed_db
     with factory() as db:
@@ -3855,7 +3962,6 @@ def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db)
     admin_csrf = _login(admin, "admin@example.test", "99887766")
     queue = admin.get("/manage/crew?q=Regionless")
     assert queue.status_code == 200
-    assert "No primary region" in queue.text
     assert "Needs setup" in queue.text
     assert "Imported Regionless Crew" in queue.text
     assigned = admin.post(
@@ -3871,25 +3977,41 @@ def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db)
     assert assigned.status_code == 303
     regional_page = admin.get(f"/manage/crew?region_id={region_id}&q=Regionless")
     assert "Imported Regionless Crew" in regional_page.text
-    assert "No linked account" in regional_page.text
-    assert "Invite as Employee" in regional_page.text
+    detail_page = admin.get(f"/manage/crew/{person_id}")
+    assert "Ready for setup" in detail_page.text
+    assert "Create setup link" in detail_page.text
     assert "Imported Regionless Crew" in admin.get("/manage/accounts").text
 
     invited = admin.post(
-        "/manage/accounts/invitations",
+        f"/manage/crew/{person_id}/setup-link",
         data={
-            "email": "regionless@example.com",
-            "display_name": "Imported Regionless Crew",
-            "person_id": str(person_id),
             "role": "EMPLOYEE",
-            "region_id": str(region_id),
             "csrf_token": admin_csrf,
         },
     )
     assert invited.status_code == 200 and "#token=" in invited.text
+    pending = admin.get(f"/manage/crew/{person_id}")
+    assert "Invitation pending" in pending.text
+    assert "Revoke setup link" in pending.text
+    revoked = admin.post(
+        f"/manage/crew/{person_id}/setup-link/revoke",
+        data={"csrf_token": admin_csrf},
+        follow_redirects=False,
+    )
+    assert revoked.status_code == 303
+    reissued = admin.post(
+        f"/manage/crew/{person_id}/setup-link",
+        data={"role": "EMPLOYEE", "csrf_token": admin_csrf},
+    )
+    assert reissued.status_code == 200 and "#token=" in reissued.text
     with factory() as db:
         invitation = db.scalar(
-            select(Invitation).where(Invitation.email == "regionless@example.com")
+            select(Invitation)
+            .where(
+                Invitation.email == "regionless@example.com",
+                Invitation.revoked_at.is_(None),
+            )
+            .order_by(Invitation.created_at.desc())
         )
         assert invitation.person_id == person_id
         assert invitation.role == "EMPLOYEE"
@@ -3900,6 +4022,54 @@ def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db)
             select(AuditEvent.id).where(
                 AuditEvent.action == "person.profile.updated",
                 AuditEvent.target_id == str(person_id),
+            )
+        )
+
+
+def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        first = Person(display_name="Batch First", home_region_id=None)
+        second = Person(display_name="Batch Second", home_region_id=None)
+        db.add_all([first, second])
+        db.commit()
+        first_id, second_id = first.id, second.id
+        initial_user_count = db.scalar(select(func.count()).select_from(User))
+
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    invalid = admin.post(
+        "/manage/crew/onboarding/metadata",
+        data={
+            "person_ids": [str(first_id), str(second_id)],
+            "emails": ["same@example.com", "same@example.com"],
+            "region_ids": [str(region_id), str(region_id)],
+            "csrf_token": csrf,
+        },
+    )
+    assert invalid.status_code == 409
+    with factory() as db:
+        assert db.get(Person, first_id).email is None
+        assert db.get(Person, second_id).home_region_id is None
+        assert db.scalar(select(func.count()).select_from(User)) == initial_user_count
+
+    saved = admin.post(
+        "/manage/crew/onboarding/metadata",
+        data={
+            "person_ids": [str(first_id), str(second_id)],
+            "emails": ["batch.first@example.com", "batch.second@example.com"],
+            "region_ids": [str(region_id), str(region_id)],
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    with factory() as db:
+        assert db.get(Person, first_id).email == "batch.first@example.com"
+        assert db.get(Person, second_id).home_region_id == region_id
+        assert not db.scalar(
+            select(UserPersonLink.user_id).where(
+                UserPersonLink.person_id.in_([first_id, second_id])
             )
         )
 
