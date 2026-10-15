@@ -215,7 +215,6 @@ def crew_person_detail(
     capability_rows = list(
         db.scalars(select(PositionCapability).where(PositionCapability.person_id == person.id))
     )
-    capability_position_ids = {row.base_position_id for row in capability_rows}
     identity_counts: dict[str, int] = {}
     for position in positions:
         key = canonical_position_identity(position.name).key
@@ -289,9 +288,7 @@ def crew_person_detail(
             memberships=memberships,
             capability_rows=capability_rows,
             capability_positions={position.id: position for position in positions},
-            available_positions=[
-                position for position in positions if position.id not in capability_position_ids
-            ],
+            available_positions=positions,
             ambiguous_position_keys={key for key, count in identity_counts.items() if count > 1},
             ambiguous_position_ids={
                 position.id

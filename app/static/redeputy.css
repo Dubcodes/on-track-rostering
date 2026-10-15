@@ -846,6 +846,9 @@ a { color: inherit; }
   color: var(--text);
 }
 input, select, textarea { border-color: var(--line); background: var(--input-bg); color: var(--text); }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+input:disabled, select:disabled, textarea:disabled, button:disabled { color: var(--muted); opacity: .72; }
+select option { background: var(--input-bg); color: var(--text); }
 .button, button { background: var(--accent); color: var(--accent-text); }
 .button:hover, button:hover { background: var(--accent-strong); }
 .button.secondary, button.secondary { background: var(--surface-raised); color: var(--text); }
@@ -1153,7 +1156,10 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .builder-section > summary span, .builder-inline-advanced > summary { color: var(--muted); font-size: .78rem; }
 .builder-section[open] > summary, .builder-inline-advanced[open] > summary { margin-bottom: 12px; }
 .builder-inline-advanced { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
-.builder-time-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 9px; }
+.builder-time-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 9px; align-items: stretch; }
+.builder-time-grid > label { display: grid; grid-template-rows: auto minmax(42px,auto) 36px; align-content: start; gap: 5px; }
+.builder-time-grid > label > .button { align-self: end; min-height: 34px; padding-block: 5px; }
+.builder-timing-options { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .builder-save-bar { position: sticky; z-index: 8; bottom: max(6px,env(safe-area-inset-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow); }
 .workday-assignment { padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
 .workday-assignment.is-open { border-left: 4px solid var(--open-shift-border); background: var(--open-shift-bg); }
@@ -1295,6 +1301,20 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 .workspace-groups { display: grid; gap: 1rem; }
 .workspace-groups > div { display: grid; gap: .5rem; }
 .workspace-link-grid { display: flex; flex-wrap: wrap; gap: .65rem; }
+.hours-filter-bar { display: grid; grid-template-columns: minmax(150px,1.4fr) repeat(2,minmax(140px,1fr)) auto; gap: 9px; align-items: end; margin-bottom: 12px; }
+.hours-filter-bar label { min-width: 0; }
+.help-legend { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: 8px; }
+.help-legend > span { display: grid; gap: 2px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); color: var(--muted); }
+.help-legend strong { color: var(--text); }
+.help-notifications { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.help-notifications h3 { margin-top: 0; }
+.capability-history article { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; background: var(--surface); color: var(--text); }
+.capability-history article > div { min-width: 0; overflow-wrap: anywhere; }
+.capability-history article small { display: block; color: var(--muted); }
+.capability-decision-form { grid-template-columns: minmax(190px,1.6fr) minmax(140px,1fr) auto; }
+.identity-pair { display: flex; flex-wrap: wrap; gap: 6px; }
+.identity-pair code { max-width: 100%; overflow-wrap: anywhere; }
+.notice-scope { padding: 8px 0; }
 .lifecycle-action { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .78rem; font-weight: 800; }
 .buildable-empty-day { cursor: pointer; }
 .buildable-empty-day:hover, .buildable-empty-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--surface-soft); }
@@ -1384,4 +1404,10 @@ input, select, textarea { border-color: var(--line); background: var(--input-bg)
 @media (max-width: 700px) {
   .leave-record { grid-template-columns: 1fr; }
   .leave-record form, .leave-record button { width: 100%; }
+}
+@media (max-width: 560px) {
+  .hours-filter-bar, .help-notifications, .capability-decision-form { grid-template-columns: 1fr; }
+  .builder-time-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .builder-time-grid > label { min-width: 0; }
+  .builder-time-grid input, .builder-time-grid button { width: 100%; min-width: 0; }
 }

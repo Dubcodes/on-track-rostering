@@ -1978,6 +1978,11 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page.wait_for_url("**/manage/crew/*")
     assert page.get_by_role("heading", name="Browser Roster Manager").is_visible()
     assert page.locator("[data-person-editor]").count() == 1
+    capability_input = page.locator("[data-capability-input]")
+    assert capability_input.count() == 1
+    capability_input.focus()
+    assert page.locator("[data-capability-menu]").is_visible()
+    capability_input.press("Escape")
     _assert_no_horizontal_overflow(page)
     page.goto(base_url + "/manage/crew")
     crew_search = page.locator('input[name="q"]')
@@ -2008,6 +2013,8 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     _capture_page(page, f"builder-{width}.png")
     assert page.locator('script[src*="/static/builder.js?v="]').count() == 1
     assert page.get_by_role("button", name="Save & Preview").is_visible()
+    timing = page.locator("details.builder-section", has=page.get_by_text("Timing", exact=True))
+    assert timing.locator('input[name="truck_leaves_early"]').count() == 1
     rows = page.locator("[data-assignment-row]")
     assert rows.count() >= 5
     manager_action = rows.filter(
@@ -2441,7 +2448,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     page.goto(base_url + "/manage#notices")
     assert page.get_by_text(values["active_notice_text"], exact=True).count() == 1
     assert page.get_by_text(values["expired_notice_text"], exact=True).count() == 1
-    page.locator("#notices > details > summary").click()
+    assert page.locator("#notices > details").get_attribute("open") is not None
     assert page.locator(f'#notices input[name="region_ids"][value="{values["region_id"]}"]').is_checked()
     notice_text = f"Call time moved for browser review {width}"
     page.locator('#notices textarea[name="message"]').fill(notice_text)
@@ -2661,6 +2668,13 @@ def test_presets_fortnight_anchor_and_team_hours_are_responsive(
         320: "high-contrast",
     }[width]
     _select_theme(page, base_url, hours_theme)
+    page.goto(base_url + "/manage/hours")
+    assert page.locator(".hours-filter-bar").is_visible()
+    page.locator('.hours-filter-bar input[name="q"]').fill("Browser Crew Member")
+    page.locator(".hours-filter-bar button").click()
+    page.wait_for_load_state("domcontentloaded")
+    people = page.locator(".hours-person")
+    assert people.count() == 1
     page.goto(base_url + "/manage/hours")
     people = page.locator(".hours-person")
     assert people.count() >= 2

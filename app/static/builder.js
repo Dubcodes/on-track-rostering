@@ -2,6 +2,16 @@
   "use strict";
   const form = document.querySelector("[data-workday-form]");
   if (!form) return;
+  const truckControl = form.querySelector("[data-truck-control]");
+  const timingSection = Array.from(form.querySelectorAll("details.builder-section")).find(
+    (details) => details.querySelector(":scope > summary")?.textContent.trim() === "Timing",
+  );
+  if (truckControl && timingSection) {
+    const options = document.createElement("div");
+    options.className = "builder-timing-options";
+    options.append(truckControl);
+    timingSection.append(options);
+  }
   const conflictDialog = form.querySelector("[data-assignment-conflict-dialog]");
   let pendingConflict = null;
   const list = form.querySelector("[data-assignment-list]");

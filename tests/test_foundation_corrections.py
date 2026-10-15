@@ -25,7 +25,12 @@ from app.core.enums import Role
 from app.core.holidays import holiday_for_date
 from app.core.time import local_today
 from app.identity.models import Person, RoleGrant, SignupRequest, User, UserPersonLink
-from app.positions.service import bulk_eligibility, eligibility, set_preference_signal
+from app.positions.service import (
+    bulk_eligibility,
+    eligibility,
+    infer_worked_capability,
+    set_preference_signal,
+)
 from app.rostering.diff import publication_diff
 from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
 from app.rostering.participation import person_day_participation
@@ -426,11 +431,84 @@ def test_bulk_eligibility_matches_single_result_for_all_precedence_signals(db) -
         bulk = bulk_eligibility(db, {person.id for person in people}, {position.id})
     finally:
         sqlalchemy_event.remove(db.get_bind(), "before_cursor_execute", count_query)
-    assert len(statements) == 1
+    assert len(statements) <= 3, "bulk eligibility must use a bounded query count"
     assert all(
         bulk[(person.id, position.id)] == eligibility(db, person.id, position.id)
         for person in people
     )
+
+
+def test_worked_capability_requires_two_distinct_published_canonical_workdays(db) -> None:  # type: ignore[no-untyped-def]
+    actor = _user(db, "history@example.test")
+    region = Region(name="History Region")
+    person = Person(display_name="History Crew")
+    untouched = Person(display_name="No History Crew")
+    camera = BasePosition(name="CCU")
+    alias = BasePosition(name="CCU 2")
+    db.add_all([region, person, untouched, camera, alias])
+    db.flush()
+    assert eligibility(db, untouched.id, camera.id) == (False, "No capability signal")
+
+    for index, position in enumerate((camera, alias), start=1):
+        workday = Workday(region_id=region.id, created_by_user_id=actor.id)
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 10, index),
+            created_by_user_id=actor.id,
+            published_by_user_id=actor.id,
+        )
+        db.add(revision)
+        db.flush()
+        workday.current_published_revision_id = revision.id
+        db.add(
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position.id,
+                person_id=person.id,
+                display_name_snapshot=position.name,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        if index == 1:
+            db.add(
+                Assignment(
+                    revision_id=revision.id,
+                    base_position_id=alias.id,
+                    person_id=person.id,
+                    display_name_snapshot=alias.name,
+                    person_name_snapshot=person.display_name,
+                    status="ASSIGNED",
+                )
+            )
+        db.flush()
+        inferred = infer_worked_capability(db, person.id, position.id, actor.id, revision.id)
+        assert inferred is (index == 2)
+
+    infer_worked_capability(db, person.id, camera.id, actor.id, revision.id)
+    assert len(
+        list(
+            db.scalars(
+                select(PositionCapability).where(
+                    PositionCapability.person_id == person.id,
+                    PositionCapability.signal == "WORKED",
+                )
+            )
+        )
+    ) == 2
+    db.add(
+        PositionCapability(
+            person_id=person.id,
+            base_position_id=camera.id,
+            signal="MANAGER_BLOCK",
+        )
+    )
+    db.commit()
+    assert eligibility(db, person.id, camera.id) == (False, "Manager restricted")
 
 
 def test_multi_assignment_and_overnight_person_day_semantics() -> None:

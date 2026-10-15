@@ -13,7 +13,6 @@ from app.audit.service import record_audit
 from app.catalog.models import BasePosition, Region, Track, Vehicle
 from app.core.enums import (
     AssignmentStatus,
-    CapabilitySignal,
     DeclinePolicy,
     OpenApplicationStatus,
     RacingDiscipline,
@@ -26,7 +25,7 @@ from app.identity.contractor_access import refresh_contractor_access
 from app.identity.models import Person, User, UserPersonLink
 from app.notifications.models import NotificationEvent
 from app.notifications.service import record_event
-from app.positions.service import set_signal
+from app.positions.service import infer_worked_capability
 from app.rostering.conflicts import publication_conflicts
 from app.rostering.diff import PublicationChange, publication_diff
 from app.rostering.models import (
@@ -1145,14 +1144,13 @@ def _publish(
             )
         )
         for row in assigned:
-            capability = set_signal(
+            infer_worked_capability(
                 db,
                 row.person_id,
                 row.base_position_id,
-                CapabilitySignal.WORKED.value,
                 actor_user_id,  # type: ignore[arg-type]
+                draft.id,
             )
-            capability.source_revision_id = draft.id
         applications = list(
             db.scalars(
                 select(OpenPositionApplication).where(

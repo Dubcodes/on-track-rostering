@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -61,11 +61,6 @@ def _builder_vehicles(
     db: Session, request: Request, regions: list[Region], workday_region_id: uuid.UUID
 ) -> list[Vehicle]:
     statement = select(Vehicle).where(Vehicle.lifecycle == "ACTIVE")
-    if not request.state.actor.is_admin:
-        statement = statement.where(
-            or_(Vehicle.home_region_id.in_([region.id for region in regions]),
-                Vehicle.home_region_id.is_(None))
-        )
     return sorted(
         db.scalars(statement),
         key=lambda vehicle: (vehicle.home_region_id != workday_region_id, vehicle.name.casefold()),
@@ -285,6 +280,7 @@ def new_workday_page(
         track_travel_minutes=None,
         track_travel_minutes_is_override=False,
         first_trial_time=None,
+        last_trial_time=None,
         first_race_time=None,
         last_race_time=None,
         race_count=None,
@@ -297,6 +293,7 @@ def new_workday_page(
         hotel_to_track_minutes=None,
         return_travel_minutes=None,
         pack_up_minutes=60,
+        truck_start_offset_minutes=15,
         day_note="",
         change_reason="",
     )
@@ -318,7 +315,9 @@ def new_workday_page(
             assignment_leave_by_id={},
             applications_by_slot={},
             vehicles=_builder_vehicles(db, request, regions, selected_region.id),
-            vehicle_region_names={region.id: region.name for region in regions},
+            vehicle_region_names={
+                region.id: region.name for region in db.scalars(select(Region))
+            },
             transport_labels=TRANSPORT_LABELS,
             setup_lead_minutes=selected_region.lead_minutes_race_day,
             day_type_options=_day_type_options(),
@@ -562,7 +561,9 @@ def _builder_context(
         statuses=[item.value for item in AssignmentStatus],
         applications_by_slot=applications_by_slot,
         vehicles=_builder_vehicles(db, request, editable_regions, workday.region_id),
-        vehicle_region_names={region.id: region.name for region in editable_regions},
+        vehicle_region_names={
+            region.id: region.name for region in db.scalars(select(Region))
+        },
         transport_labels=TRANSPORT_LABELS,
         setup_lead_minutes=region.lead_minutes_race_day if region else 120,
         generated_travel=generated_travel,

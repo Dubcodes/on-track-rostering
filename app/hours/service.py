@@ -355,7 +355,7 @@ def group_people(
         assert isinstance(person_id, uuid.UUID)
         group = grouped.setdefault(
             person_id,
-            {"person": row["person"], "minutes": 0, "days": []},
+            {"person_id": person_id, "person": row["person"], "minutes": 0, "days": []},
         )
         group["minutes"] = int(group["minutes"]) + int(row["minutes"])
         days = group["days"]
@@ -366,7 +366,7 @@ def group_people(
         leave_by_person[person.id].append(leave)
         grouped.setdefault(
             person.id,
-            {"person": person.display_name, "minutes": 0, "days": []},
+            {"person_id": person.id, "person": person.display_name, "minutes": 0, "days": []},
         )
     for person_id, group in grouped.items():
         group["duration"] = format_minutes(int(group["minutes"]))

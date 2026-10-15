@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.catalog.models import Region
+from app.catalog.models import CrewGroup, PersonCrewGroup, Region
 from app.core.database import get_db
 from app.core.holidays import holiday_info_for_date
 from app.hours.service import (
@@ -75,7 +75,14 @@ def employee_hours(request: Request, offset: int = Query(0), db: Session = Depen
 
 
 @router.get("/manage/hours", response_class=HTMLResponse)
-def management_hours(request: Request, offset: int = Query(0), db: Session = Depends(get_db)):
+def management_hours(
+    request: Request,
+    offset: int = Query(0),
+    q: str = Query(""),
+    group_id: str = Query(""),
+    region_id: str = Query(""),
+    db: Session = Depends(get_db),
+):
     if request.state.actor.is_contractor or (
         not request.state.actor.is_admin
         and not any(
@@ -106,13 +113,75 @@ def management_hours(request: Request, offset: int = Query(0), db: Session = Dep
         }
         leave_statement = leave_statement.where(Person.home_region_id.in_(visible_regions))
     leave_rows = list(db.execute(leave_statement))
+    all_people = group_people(rows, start=start, end=end, leave_rows=leave_rows)
+    person_ids = {person["person_id"] for person in all_people}
+    people_records = {
+        person.id: person
+        for person in db.scalars(select(Person).where(Person.id.in_(person_ids)))
+    }
+    memberships: dict[object, set[object]] = {person_id: set() for person_id in person_ids}
+    if person_ids:
+        for person_id, crew_group_id in db.execute(
+            select(PersonCrewGroup.person_id, PersonCrewGroup.crew_group_id).where(
+                PersonCrewGroup.person_id.in_(person_ids)
+            )
+        ):
+            memberships[person_id].add(crew_group_id)
+    visible_region_ids = (
+        None
+        if request.state.actor.is_admin
+        else {
+            region_key
+            for region_key, roles in request.state.actor.regional_roles.items()
+            if {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
+        }
+    )
+    region_statement = select(Region).where(Region.lifecycle == "ACTIVE")
+    if visible_region_ids is not None:
+        region_statement = region_statement.where(Region.id.in_(visible_region_ids))
+    region_options = list(db.scalars(region_statement.order_by(Region.name)))
+    visible_group_ids = {
+        crew_group_id for person_groups in memberships.values() for crew_group_id in person_groups
+    }
+    group_options = list(
+        db.scalars(
+            select(CrewGroup)
+            .where(
+                CrewGroup.lifecycle == "ACTIVE",
+                CrewGroup.id.in_(visible_group_ids),
+            )
+            .order_by(CrewGroup.name)
+        )
+    )
+    query = q.strip().casefold()
+    people = [
+        person
+        for person in all_people
+        if (not query or query in str(person["person"]).casefold())
+        and (
+            not group_id
+            or any(
+                str(crew_group_id) == group_id
+                for crew_group_id in memberships.get(person["person_id"], set())
+            )
+        )
+        and (
+            not region_id
+            or str(people_records[person["person_id"]].home_region_id) == region_id
+        )
+    ]
     return templates.TemplateResponse(
         "hours.html",
         context(
             request,
             management=True,
             rows=[],
-            people=group_people(rows, start=start, end=end, leave_rows=leave_rows),
+            people=people,
+            group_options=group_options,
+            region_options=region_options,
+            selected_group_id=group_id,
+            selected_region_id=region_id,
+            query=q,
             total="",
             start=start,
             end=end,

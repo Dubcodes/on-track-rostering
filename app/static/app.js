@@ -257,16 +257,49 @@
       }
     });
   }
-  const positionSearch = document.querySelector("[data-position-search]");
-  const positionSelect = document.querySelector("[data-position-select]");
-  if (positionSearch && positionSelect) {
-    positionSearch.addEventListener("change", () => {
-      const match = Array.from(positionSelect.options).find(
-        (option) => option.text.trim().toLowerCase() === positionSearch.value.trim().toLowerCase(),
-      );
-      if (match) positionSelect.value = match.value;
+  document.querySelectorAll("[data-capability-picker]").forEach((picker) => {
+    const input = picker.querySelector("[data-capability-input]");
+    const value = picker.querySelector("[data-capability-value]");
+    const menu = picker.querySelector("[data-capability-menu]");
+    const empty = picker.querySelector("[data-capability-empty]");
+    const options = Array.from(picker.querySelectorAll("[data-capability-option]"));
+    let active = -1;
+    const visible = () => options.filter((option) => !option.hidden);
+    const setActive = (index) => {
+      const choices = visible();
+      options.forEach((option) => option.classList.remove("is-active"));
+      if (!choices.length) { active = -1; return; }
+      active = (index + choices.length) % choices.length;
+      choices[active].classList.add("is-active");
+      choices[active].scrollIntoView({block: "nearest"});
+    };
+    const open = () => { menu.hidden = false; input.setAttribute("aria-expanded", "true"); };
+    const close = () => { menu.hidden = true; input.setAttribute("aria-expanded", "false"); active = -1; };
+    const choose = (option) => {
+      input.value = option.dataset.label;
+      value.value = option.dataset.value;
+      close();
+    };
+    const filter = () => {
+      const query = input.value.trim().toLowerCase();
+      value.value = "";
+      options.forEach((option) => { option.hidden = !option.dataset.label.toLowerCase().includes(query); });
+      empty.hidden = visible().length !== 0;
+      setActive(0);
+    };
+    input.addEventListener("focus", () => { filter(); open(); });
+    input.addEventListener("input", () => { filter(); open(); });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { close(); return; }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault(); open(); setActive(active + (event.key === "ArrowDown" ? 1 : -1));
+      } else if (event.key === "Enter" && active >= 0) {
+        event.preventDefault(); choose(visible()[active]);
+      }
     });
-  }
+    options.forEach((option) => option.addEventListener("click", () => choose(option)));
+    document.addEventListener("pointerdown", (event) => { if (!picker.contains(event.target)) close(); });
+  });
   document.querySelectorAll("[data-capability-form]").forEach((form) => {
     form.addEventListener("submit", (event) => {
       const position = form.querySelector('[name="position_id"]');

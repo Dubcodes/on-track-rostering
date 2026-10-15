@@ -200,7 +200,9 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
     publish_current(db, workday, draft, manager.id)
     db.refresh(workday)
     assert workday.current_published_revision_id == draft.id
-    assert db.scalar(select(PositionCapability.signal)) == CapabilitySignal.WORKED.value
+    capability = db.scalar(select(PositionCapability))
+    assert capability.signal == CapabilitySignal.WORKED.value
+    assert eligibility(db, person.id, position.id) == (False, "No capability signal")
     employee_actor = actor(employee, person, region, Role.EMPLOYEE)
     rows = month_items(db, employee_actor, date(2026, 9, 1), date(2026, 10, 1))
     assert rows[0]["track"] == "Ellerslie"
@@ -250,6 +252,13 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
     blocked_position = BasePosition(name="Blocked personal month role")
     db.add(blocked_position)
     db.flush()
+    set_signal(
+        db,
+        person.id,
+        position.id,
+        CapabilitySignal.EMPLOYEE_ALLOW.value,
+        manager.id,
+    )
     set_signal(
         db,
         person.id,

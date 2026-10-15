@@ -3139,6 +3139,47 @@ def test_contextual_help_content_and_authorized_links(routed_db, context_key, he
     assert 'href="/manage/workdays/new"' not in help_home.text
 
 
+def test_rollout_management_surfaces_are_compact_and_user_facing(routed_db) -> None:  # type: ignore[no-untyped-def]
+    _factory, (region_id, _track_id, _position_id, person_id) = routed_db
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+
+    management = manager.get("/manage").text
+    assert "Operational crew notices" in management
+    assert '<details open>' in management
+    assert "More tools" not in management
+    assert management.index("Build") < management.index("Crew") < management.index("Team hours")
+
+    detail = manager.get(f"/manage/crew/{person_id}").text
+    assert detail.count('data-capability-input') == 1
+    assert 'name="position_id" data-capability-value' in detail
+    assert "Exact Position" not in detail
+    assert "Position convergence" not in detail
+
+    builder = manager.get(f"/manage/workdays/new?region_id={region_id}").text
+    assert re.search(r'name="truck_leaves_early"[^>]*checked', builder)
+    assert "Borrowed / other Region" in builder
+
+    hours = manager.get("/manage/hours").text
+    assert 'class="hours-filter-bar"' in hours
+    assert 'name="q"' in hours and 'name="group_id"' in hours
+    assert "No People match these filters" in manager.get(
+        "/manage/hours?q=no-such-person-on-track"
+    ).text
+
+    help_page = manager.get("/help").text
+    assert "Legend" in help_page
+    assert "Add to Home Screen" in help_page
+    assert "Report an error" in help_page
+    assert "app-footer" not in help_page
+
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+    admin_page = admin.get("/admin").text
+    assert "Application status" in admin_page
+    assert "Build" in admin_page and "Scheduler" in admin_page
+
+
 def test_upcoming_feed_is_today_when_rostered_plus_three_across_months(
     routed_db, monkeypatch
 ) -> None:  # type: ignore[no-untyped-def]
@@ -4422,6 +4463,14 @@ def test_vehicle_management_and_audit_are_region_scoped(routed_db) -> None:  # t
         assert vehicle and vehicle.home_region_id == region_id
         vehicle_id = vehicle.id
         other_region = db.scalar(select(Region).where(Region.id != region_id))
+        borrowed = Vehicle(
+            name="Southern Borrowed Van",
+            home_region_id=other_region.id,
+            category="Operational",
+        )
+        db.add(borrowed)
+        db.flush()
+        borrowed_id = borrowed.id
         manager_user = db.scalar(select(User).where(User.email == "manager@example.test"))
         record_audit(db, "regional.visible", "vehicle", vehicle.id, manager_user.id,
                      region_id=region_id,
@@ -4430,6 +4479,20 @@ def test_vehicle_management_and_audit_are_region_scoped(routed_db) -> None:  # t
                      region_id=other_region.id)
         db.commit()
         other_region_id = other_region.id
+    builder = manager.get(f"/manage/workdays/new?region_id={region_id}")
+    assert "Southern Borrowed Van" in builder.text
+    assert "Borrowed / other Region" in builder.text
+    forged_borrowed_edit = manager.post(
+        f"/manage/catalog/vehicles/{borrowed_id}",
+        data={"csrf_token": csrf, "name": "Taken over",
+              "home_region_id": str(region_id), "category": "Operational",
+              "model": "", "fuel_type": "", "lifecycle": "ACTIVE"},
+    )
+    assert forged_borrowed_edit.status_code == 403
+    with factory() as db:
+        borrowed = db.get(Vehicle, borrowed_id)
+        assert borrowed.name == "Southern Borrowed Van"
+        assert borrowed.home_region_id == other_region_id
     archived = manager.post(
         f"/manage/catalog/vehicles/{vehicle_id}",
         data={"csrf_token": csrf, "name": "Rental Van - October",
