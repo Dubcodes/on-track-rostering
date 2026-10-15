@@ -2906,6 +2906,8 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
     _login(page, base_url, values["manager"])
     page.goto(base_url + "/manage/workdays/new")
     page.locator("[data-assignment-list]").evaluate("element => element.replaceChildren()")
+    page.locator('select[name="region_id"]').select_option(values["region_id"])
+    page.locator('input[name="work_date"]').fill("2030-01-12")
 
     people = {
         "capable-a": str(uuid.uuid4()),
