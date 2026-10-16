@@ -2225,41 +2225,6 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             selected_vehicle_id = new_row.locator("[data-vehicle-value]").input_value()
             assert selected_vehicle_id
             assert original_person_row.locator("[data-vehicle-value]").input_value() == selected_vehicle_id
-            capacity_target = page.locator(
-                f'[data-assignment-row]:has([data-person-value][value="{values["position_aware_person_id"]}"])'
-            )
-            assert capacity_target.count() == 1
-            target_vehicle_picker = capacity_target.locator('[data-picker-kind="vehicle"]')
-            target_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
-            target_vehicle_picker.locator(
-                '[data-picker-option][data-transport-mode="VEHICLE"]'
-            ).first.click()
-            capacity_dialog = page.locator("[data-vehicle-capacity-dialog]")
-            assert capacity_dialog.is_visible()
-            capacity_dialog.get_by_role("button", name="Cancel").click()
-            assert capacity_target.locator("[data-vehicle-value]").input_value() == ""
-            target_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
-            target_vehicle_picker.locator(
-                '[data-picker-option][data-transport-mode="VEHICLE"]'
-            ).first.click()
-            capacity_dialog.get_by_role("button", name="Keep", exact=True).click()
-            target_person_id = capacity_target.locator("[data-person-value]").input_value()
-            assert capacity_target.locator("[data-vehicle-value]").input_value()
-            capacity_kicker = page.locator(
-                f'[data-assignment-row]:has([data-person-value][value="{values["manager_person_id"]}"])'
-            )
-            assert capacity_kicker.count() == 1
-            kicker_vehicle_picker = capacity_kicker.locator('[data-picker-kind="vehicle"]')
-            kicker_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
-            kicker_vehicle_picker.locator(
-                '[data-picker-option][data-transport-mode="VEHICLE"]'
-            ).first.click()
-            assert capacity_dialog.is_visible()
-            capacity_dialog.get_by_role("button", name="Kick last").click()
-            assert page.locator(
-                f'[data-assignment-row]:has([data-person-value][value="{target_person_id}"]) [data-vehicle-value]'
-            ).first.input_value() == ""
-            assert capacity_kicker.locator("[data-vehicle-value]").input_value()
             new_row.locator("[data-toggle-advanced]").click()
             new_row.locator('input[name="finish_destination_override"]').fill("Alternative return")
             new_row.locator('input[name="finish_destination_override"]').dispatch_event("change")
@@ -2361,6 +2326,52 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             guarded_url = page.url
             page.keyboard.press("n")
             assert page.url == guarded_url
+    assert not errors
+    context.close()
+
+
+def test_builder_vehicle_capacity_choices(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+
+    def row_for(person_key: str) -> Locator:
+        row = page.locator(
+            f'[data-assignment-row]:has([data-person-value][value="{values[person_key]}"])'
+        )
+        assert row.count() == 1
+        return row
+
+    def choose_vehicle(row: Locator) -> None:
+        picker = row.locator('[data-picker-kind="vehicle"]')
+        picker.locator("[data-picker-input]").fill("Browser Vehicle")
+        picker.locator('[data-picker-option][data-transport-mode="VEHICLE"]').first.click()
+
+    occupant = row_for("browser_person_id")
+    target = row_for("position_aware_person_id")
+    kicker = row_for("manager_person_id")
+    choose_vehicle(occupant)
+    vehicle_id = occupant.locator("[data-vehicle-value]").input_value()
+    assert vehicle_id
+
+    capacity_dialog = page.locator("[data-vehicle-capacity-dialog]")
+    choose_vehicle(target)
+    assert capacity_dialog.is_visible()
+    capacity_dialog.get_by_role("button", name="Cancel").click()
+    assert target.locator("[data-vehicle-value]").input_value() == ""
+
+    choose_vehicle(target)
+    capacity_dialog.get_by_role("button", name="Keep", exact=True).click()
+    assert target.locator("[data-vehicle-value]").input_value() == vehicle_id
+
+    choose_vehicle(kicker)
+    assert capacity_dialog.is_visible()
+    capacity_dialog.get_by_role("button", name="Kick last").click()
+    assert target.locator("[data-vehicle-value]").input_value() == ""
+    assert kicker.locator("[data-vehicle-value]").input_value() == vehicle_id
     assert not errors
     context.close()
 
