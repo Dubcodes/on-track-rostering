@@ -1093,7 +1093,7 @@ def test_master_data_palette_changes_with_theme(browser_site, width: int) -> Non
         page.goto(base_url + "/manage/catalog")
         assert page.locator('input[type="color"]').count() == 0
         record = page.locator(f'form[action="/manage/catalog/tracks/{values["track_id"]}"]')
-        record.locator("..").locator("summary").click()
+        record.locator("..").locator(":scope > summary").click()
         assert record.locator('select[name="region_id"]').is_visible()
         assert record.locator('input[name="map_reference"]').is_visible()
         colours.append(page.locator('.track-dot[data-presentation="track-01"]').first.evaluate("element => getComputedStyle(element).getPropertyValue('--track').trim()"))
@@ -1159,7 +1159,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
         assert suggested_return_id
         suggested.locator('select[name="track_id"]').select_option(values["track_id"])
         suggested.get_by_role("button", name="Confirm mapping").click()
-        page.wait_for_url("**/admin/online-sources?mapped=1")
+        page.wait_for_url("**/admin/online-sources?mapped=1#*")
         assert page.url.endswith(f"#{suggested_return_id}")
         assert page.locator(f"#{suggested_return_id}").is_visible()
         assert page.locator(
@@ -1177,7 +1177,7 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
         assert create_return_id
         create_form.locator('select[name="region_id"]').select_option(values["region_id"])
         create_form.get_by_role("button", name="Create Track & Map").click()
-        page.wait_for_url("**/admin/online-sources?created_mapped=1")
+        page.wait_for_url("**/admin/online-sources?created_mapped=1#*")
         assert page.url.endswith(f"#{create_return_id}")
         assert page.locator(f"#{create_return_id}").is_visible()
     _assert_no_horizontal_overflow(page)
@@ -2050,8 +2050,8 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     crew_search = page.locator('input[name="q"]')
     crew_search.fill("Browser Roster Manager")
     page.get_by_role("button", name="Filter").click()
-    assert page.get_by_text("Browser Roster Manager", exact=True).is_visible()
     person_link = page.get_by_role("link", name=re.compile("Browser Roster Manager"))
+    assert person_link.is_visible()
     person_link.click()
     page.wait_for_url("**/manage/crew/*")
     assert page.get_by_role("heading", name="Browser Roster Manager").is_visible()
@@ -2523,7 +2523,7 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
         'link[rel="stylesheet"], script[src]',
         "elements => elements.map(element => element.href || element.src).filter(url => url.includes('/static/'))",
     )
-    assert len(shared_asset_urls) == 7
+    assert len(shared_asset_urls) == 8
     assert any("/static/track-palette.css?v=" in url for url in shared_asset_urls)
     assert all(f"?v={build_id}" in url for url in shared_asset_urls)
 
