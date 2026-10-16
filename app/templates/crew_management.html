@@ -11,6 +11,9 @@
   <form method="get" class="form-grid">
     <label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
     <label>Search<input type="search" name="q" value="{{ query }}" placeholder="Name or work email"></label>
+    <label>Account type<select name="account_type"><option value="">All</option><option value="NONE" {% if account_type == 'NONE' %}selected{% endif %}>No account</option>{% for role in filter_account_types %}<option value="{{ role }}" {% if account_type == role %}selected{% endif %}>{{ role|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+    <label>Crew Group<select name="crew_group_id"><option value="">All</option>{% for group in filter_groups %}<option value="{{ group.id }}" {% if selected_crew_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>{% endfor %}</select></label>
+    <label>Position / capability<select name="position_id"><option value="">All</option>{% for position in filter_positions %}<option value="{{ position.id }}" {% if selected_position_id == position.id %}selected{% endif %}>{{ position.name }}</option>{% endfor %}</select></label>
     <label class="check"><input type="checkbox" name="show_archived" value="true" {% if show_archived %}checked{% endif %}> Show archived</label>
     <button>Filter</button>
   </form>
@@ -29,21 +32,22 @@
 {% if actor.is_admin and needs_setup_people %}
 <section class="panel" id="needs-setup">
   <div class="section-head"><div><p class="eyebrow">Onboarding queue</p><h2>Needs setup</h2></div><span class="badge">{{ needs_setup_people|length }}</span></div>
-  <p class="muted">Choose a Primary Region for each person. Work email is optional until an account or setup link is created.</p>
-  <form method="post" action="/manage/crew/onboarding/metadata" class="stack onboarding-setup-form">
+  <p class="muted">Edit only the People you are ready to update. Work email and Primary Region may stay blank until account setup.</p>
+  <form method="post" action="/manage/crew/onboarding/metadata" class="stack onboarding-setup-form" data-onboarding-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="record-list onboarding-setup-list">
       {% for person in needs_setup_people %}
-      <article class="onboarding-card onboarding-setup-card">
+      <article class="onboarding-card onboarding-setup-card" data-onboarding-row>
         <header><a href="/manage/crew/{{ person.id }}"><strong>{{ person.display_name }}</strong></a><span class="badge-row">{% if not person.email %}<span class="badge">Needs email</span>{% endif %}{% if not person.home_region_id %}<span class="badge">Needs Region</span>{% endif %}</span></header>
-        <input type="hidden" name="person_ids" value="{{ person.id }}">
-        <label>Work email (optional)<input name="emails" type="email" value="{{ person.email or '' }}"></label>
-        <label>Primary Region<select name="region_ids" required><option value="">Select Region</option>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == person.home_region_id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+        <input type="hidden" name="person_ids" value="{{ person.id }}" disabled data-onboarding-value>
+        <label>Work email<input name="emails" type="email" value="{{ person.email or '' }}" data-onboarding-control></label>
+        <label>Primary Region<select name="region_ids" data-onboarding-control><option value="">No Primary Region</option>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == person.home_region_id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
       </article>
       {% endfor %}
     </div>
-    <div class="save-bar onboarding-save-bar"><span>{{ needs_setup_people|length }} people need setup details</span><button>Save setup details</button></div>
+    <div class="save-bar onboarding-save-bar"><span><span data-onboarding-count>0</span> edited</span><button disabled data-onboarding-submit>Save setup details</button></div>
   </form>
+  <script src="/static/crew_onboarding.js?v={{ asset_version|urlencode }}" defer></script>
 </section>
 {% endif %}
 <section class="panel">

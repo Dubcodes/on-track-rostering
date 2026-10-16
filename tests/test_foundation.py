@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.auth.policy import Actor, can_crew_view, can_manage_region
 from app.auth.security import credential_error, is_safe_next
-from app.catalog.models import BasePosition, CrewGroup, Region, Track
+from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region, Track, Vehicle
 from app.core.enums import (
     AssignmentStatus,
     CapabilitySignal,
@@ -782,6 +782,67 @@ def test_atomic_builder_rejects_inactive_position_before_mutation(db) -> None:  
     assert assignment.status == AssignmentStatus.ASSIGNED.value
 
 
+def test_truck_requires_one_explicit_qualified_driver_and_allows_capacity_override(db) -> None:  # type: ignore[no-untyped-def]
+    region, track, position, driver, manager, *_ = seed_vertical(db)
+    passengers = [
+        Person(display_name="Passenger One", home_region_id=region.id),
+        Person(display_name="Passenger Two", home_region_id=region.id),
+    ]
+    truck = Vehicle(
+        name="Truck One",
+        home_region_id=region.id,
+        is_truck=True,
+        seat_capacity=2,
+    )
+    db.add_all([*passengers, truck])
+    db.commit()
+    workday = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.RACE_DAY.value,
+        work_date=date(2026, 10, 13),
+        track_id=track.id,
+        title="Truck validation",
+        actor_user_id=manager.id,
+    )
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    rows = [
+        DraftAssignmentInput(
+            base_position_id=position.id,
+            slot_index=index,
+            person_id=person.id,
+            status=AssignmentStatus.ASSIGNED.value,
+            transport_mode="VEHICLE",
+            vehicle_id=truck.id,
+            is_vehicle_driver=index == 1,
+        )
+        for index, person in enumerate([driver, *passengers], 1)
+    ]
+    with pytest.raises(ValueError, match="not qualified"):
+        save_draft(
+            db,
+            workday_id=workday.id,
+            draft_id=draft.id,
+            expected_version=workday.lock_version,
+            details=draft_details(draft),
+            assignments=rows,
+        )
+    db.rollback()
+    driver.truck_driver_qualified = True
+    db.commit()
+    save_draft(
+        db,
+        workday_id=workday.id,
+        draft_id=draft.id,
+        expected_version=workday.lock_version,
+        details=draft_details(draft),
+        assignments=rows,
+    )
+    saved = list(db.scalars(select(Assignment).where(Assignment.revision_id == draft.id)))
+    assert len({row.person_id for row in saved}) == 3  # Deliberate 3 people / 2 seats is retained.
+    assert [row.person_id for row in saved if row.is_vehicle_driver] == [driver.id]
+
+
 def test_trials_atomic_save_updates_timing_and_ignores_only_untouched_new_row(db) -> None:  # type: ignore[no-untyped-def]
     region, track, _position, _person, manager, *_ = seed_vertical(db)
     workday = create_workday(
@@ -925,11 +986,13 @@ def test_position_aware_crew_picker_and_duplicate_names_are_id_safe(db) -> None:
 
 def test_crew_picker_dice_contractors_and_published_track_familiarity(db) -> None:  # type: ignore[no-untyped-def]
     region, track, position, familiar_person, manager, *_ = seed_vertical(db)
-    other_position = BasePosition(name="Track history alternate")
+    other_position = BasePosition(name="Track history alternate", crew_group_id=position.crew_group_id)
     other_track = Track(name="Other history Track", region_id=region.id, palette_slot=2)
     moderate_person = Person(display_name="Moderate Track Crew", home_region_id=region.id)
     no_history_person = Person(display_name="No Track History Crew", home_region_id=region.id)
     contractor_person = Person(display_name="Manual Contractor", home_region_id=region.id)
+    casual_person = Person(display_name="Manual Casual", home_region_id=region.id)
+    disabled_person = Person(display_name="Disabled Employee", home_region_id=region.id)
     moderate_user = User(
         email="moderate-track@example.test", display_name=moderate_person.display_name,
         credential_hash="x",
@@ -938,6 +1001,14 @@ def test_crew_picker_dice_contractors_and_published_track_familiarity(db) -> Non
         email="manual-contractor@example.test", display_name=contractor_person.display_name,
         credential_hash="x",
     )
+    casual_user = User(
+        email="manual-casual@example.test", display_name=casual_person.display_name,
+        credential_hash="x",
+    )
+    disabled_user = User(
+        email="disabled-employee@example.test", display_name=disabled_person.display_name,
+        credential_hash="x", status="DISABLED",
+    )
     db.add_all(
         [
             other_position,
@@ -945,8 +1016,12 @@ def test_crew_picker_dice_contractors_and_published_track_familiarity(db) -> Non
             moderate_person,
             no_history_person,
             contractor_person,
+            casual_person,
+            disabled_person,
             moderate_user,
             contractor_user,
+            casual_user,
+            disabled_user,
         ]
     )
     db.flush()
@@ -955,9 +1030,61 @@ def test_crew_picker_dice_contractors_and_published_track_familiarity(db) -> Non
             UserPersonLink(user_id=moderate_user.id, person_id=moderate_person.id),
             UserPersonLink(user_id=contractor_user.id, person_id=contractor_person.id),
             RoleGrant(
+                user_id=moderate_user.id,
+                role=Role.EMPLOYEE.value,
+                region_id=region.id,
+            ),
+            PersonCrewGroup(
+                person_id=familiar_person.id,
+                crew_group_id=position.crew_group_id,
+            ),
+            PersonCrewGroup(
+                person_id=moderate_person.id,
+                crew_group_id=position.crew_group_id,
+            ),
+            PositionCapability(
+                person_id=moderate_person.id,
+                base_position_id=position.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
+            ),
+            PersonCrewGroup(
+                person_id=contractor_person.id,
+                crew_group_id=position.crew_group_id,
+            ),
+            RoleGrant(
                 user_id=contractor_user.id,
                 role=Role.CONTRACTOR.value,
                 region_id=region.id,
+            ),
+            UserPersonLink(user_id=casual_user.id, person_id=casual_person.id),
+            RoleGrant(
+                user_id=casual_user.id,
+                role=Role.CASUAL.value,
+                region_id=region.id,
+            ),
+            PersonCrewGroup(
+                person_id=casual_person.id,
+                crew_group_id=position.crew_group_id,
+            ),
+            PositionCapability(
+                person_id=casual_person.id,
+                base_position_id=position.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
+            ),
+            UserPersonLink(user_id=disabled_user.id, person_id=disabled_person.id),
+            RoleGrant(
+                user_id=disabled_user.id,
+                role=Role.EMPLOYEE.value,
+                region_id=region.id,
+            ),
+            PersonCrewGroup(
+                person_id=disabled_person.id,
+                crew_group_id=position.crew_group_id,
+            ),
+            PositionCapability(
+                person_id=disabled_person.id,
+                base_position_id=position.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
             ),
         ]
     )
@@ -1050,8 +1177,11 @@ def test_crew_picker_dice_contractors_and_published_track_familiarity(db) -> Non
     people = {person.id: person for _label, rows in view.groups for person in rows}
     assert people[familiar_person.id].dice_familiarity == 2
     assert people[moderate_person.id].dice_familiarity == 1
+    assert people[moderate_person.id].dice_eligible is True
     assert people[no_history_person.id].dice_familiarity == 0
     assert people[contractor_person.id].dice_eligible is False
+    assert people[casual_person.id].dice_eligible is False
+    assert people[disabled_person.id].dice_eligible is False
     assert people[contractor_person.id].dice_employment_known is True
     assert people[no_history_person.id].dice_employment_known is False
     assert contractor_person.id in people  # Manual selection remains available.

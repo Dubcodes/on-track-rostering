@@ -6,7 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.accounts.onboarding import (
@@ -66,6 +66,7 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
         )
     linked_people = select(UserPersonLink.person_id)
     users_query = select(User)
+    account_q = request.query_params.get("account_q", "").strip()
     if not request.state.actor.is_admin:
         users_query = users_query.where(User.status == "ACTIVE")
         linked_user_ids = (
@@ -78,6 +79,11 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
         )
         users_query = users_query.where(
             User.id.in_(linked_user_ids) | User.id.in_(granted_user_ids)
+        )
+    if account_q:
+        term = f"%{account_q}%"
+        users_query = users_query.where(
+            or_(User.display_name.ilike(term), User.email.ilike(term))
         )
     users = list(db.scalars(users_query.order_by(User.display_name)))
     people_query = select(Person).where(
@@ -163,6 +169,7 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 "INVITATION_EXPIRED", "ACCOUNT_LINKED", "ARCHIVED",
             ),
             users=users,
+            account_q=account_q,
             device_counts=(
                 {user.id: active_device_count(db, user.id) for user in users}
                 if request.state.actor.is_admin
@@ -379,7 +386,7 @@ def create_regional_invitation(
     require_fresh_auth(request)
     if region_id not in region_ids:
         raise HTTPException(403)
-    if role not in {Role.EMPLOYEE.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
+    if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
         raise HTTPException(403, "Regional invitations cannot grant that role.")
     linked_person_id = optional_uuid(person_id, "crew identity")
     if linked_person_id:

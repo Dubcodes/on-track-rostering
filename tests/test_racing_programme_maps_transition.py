@@ -33,6 +33,7 @@ from app.track_maps.service import (
     effective_map,
     image_candidates,
     image_dimensions,
+    map_refresh_due,
     reset_manual_map,
     save_manual_map,
     trusted_image_url,
@@ -407,6 +408,18 @@ def test_manual_map_precedes_automatic_and_reset_restores_it(db, monkeypatch, tm
     previous.unlink()
 
 
+def test_track_map_refresh_is_quarterly_and_preserves_last_good_cache() -> None:
+    checked_at = datetime(2026, 1, 1, tzinfo=UTC)
+    row = TrackMap(
+        automatic_checked_at=checked_at,
+        automatic_file_name="last-good.png",
+        automatic_status="ERROR",
+    )
+    assert not map_refresh_due(row, now=checked_at + timedelta(days=89))
+    assert map_refresh_due(row, now=checked_at + timedelta(days=90))
+    assert effective_map(row)["file_name"] == "last-good.png"  # type: ignore[index]
+
+
 def _capture() -> str:
     areas = [{"areaId": "10", "areaName": "Director"}, {"areaId": "11", "areaName": "Camera"}]
     shifts = [
@@ -661,3 +674,15 @@ def test_transition_import_maps_numbered_ccu_to_one_base_position_and_slot(db) -
     assert db.scalar(
         select(func.count()).select_from(BasePosition).where(BasePosition.lifecycle == "ACTIVE")
     ) == 1
+
+
+def test_transition_import_blocks_vehicle_identifiers_from_becoming_positions(db) -> None:  # type: ignore[no-untyped-def]
+    _user, _region, _track_row = _foundation(db)
+    payload = parse_capture(_capture())
+    published = [row for row in payload["shifts"] if row["published"]]
+    published[0]["area_name"] = "684"
+    published[1]["area_name"] = "Rav91"
+    preview = preview_capture(db, payload)
+    assert not preview.valid
+    assert sum("source Vehicle identifier" in item for item in preview.conflicts) == 2
+    assert db.scalar(select(func.count()).select_from(BasePosition)) == 0

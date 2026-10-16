@@ -8,6 +8,7 @@ class Lifecycle(StrEnum):
 
 class Role(StrEnum):
     CONTRACTOR = "CONTRACTOR"
+    CASUAL = "CASUAL"
     EMPLOYEE = "EMPLOYEE"
     SUB_MANAGER = "SUB_MANAGER"
     MANAGER = "MANAGER"

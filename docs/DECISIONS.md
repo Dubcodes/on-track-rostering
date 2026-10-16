@@ -117,3 +117,15 @@ Normal pages do not expose a global build footer or development/migration diagno
 Personal Month is independent of role authority: it contains the linked Person's own current publication assignments and applicable Open Positions. Primary-Region source events appear only after the Region-wide latest current published SCHEDULED horizon (or today when no horizon exists). Crew is the distinct authorized regional all-crew calendar.
 
 Active Base Position identity is global and canonical across Crew Groups. Ordinary create, rename and import paths share the alias/numbered-position resolver; known historical duplicates are not constrained or silently converged. Notice targets and Admin notice-publisher overrides use append-only relational tables, with override-row presence distinguishing default derivation from explicit empty. Error reports are deliberately small first-party records rather than tickets or arbitrary request captures.
+
+## Dice, transport capacity and account assistance
+
+Dice is a lightweight suggestion over positive facts, never authority: an active linked User with Employee/Sub-Manager/Manager working access, matching Primary Region, active Crew Group membership and canonical capability/history. Contractor, Casual, disabled, expired and unlinked People remain manually selectable but never enter Dice. Same-Track/Position history outranks same-Track related Crew Group history; random choice remains inside the strongest available tier.
+
+Vehicle capacity counts distinct People including the driver. Capacity is nullable for legacy Vehicles and a suggested four for new ordinary records. Over-capacity is a deliberate Builder decision and remains visible at Preview. A truck requires exactly one explicitly designated Person whose separately maintained truck-driving qualification is true; Position, Crew Group and account role never imply that qualification.
+
+Sub-Manager account assistance is limited to existing ordinary linked People in an operationally managed Region and never authorizes account creation/deletion, role escalation, or control of an active Manager/Admin. An exceptional Crew-Group Manager model is not inferred from Crew Group membership. Until its write boundaries for mixed Workdays, publication, People and accounts are explicitly decided, the existing Region boundary remains the restrictive authority.
+
+## Persistent Track-map ownership
+
+The container entrypoint runs briefly with image root authority only to create and repair ownership of `/app/data/track_maps`, including retained named-volume files, then permanently execs the app or scheduler as `ontrack`. It does not recursively weaken unrelated paths. Automatic map checks are due after 90 days; refresh failures retain the last valid local cache, while manual overrides remain authoritative until explicit reversion.

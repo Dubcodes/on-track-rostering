@@ -119,6 +119,30 @@ def can_administer_user(db: Session, actor: Actor, user: User, region_id: uuid.U
     )
 
 
+def can_assist_user(db: Session, actor: Actor, user: User, region_id: uuid.UUID) -> bool:
+    """Existing ordinary-account help; never creation or privileged-role administration."""
+    if can_administer_user(db, actor, user, region_id):
+        return True
+    if Role.SUB_MANAGER.value not in actor.roles_for(region_id):
+        return False
+    if db.scalar(
+        select(RoleGrant.id).where(
+            RoleGrant.user_id == user.id,
+            RoleGrant.status == "ACTIVE",
+            RoleGrant.role.in_([Role.ADMIN.value, Role.MANAGER.value]),
+        ).limit(1)
+    ):
+        return False
+    link = db.get(UserPersonLink, user.id)
+    person = db.get(Person, link.person_id) if link else None
+    return bool(
+        person
+        and person.lifecycle == "ACTIVE"
+        and person.home_region_id == region_id
+        and can_manage_region(actor, region_id)
+    )
+
+
 def can_grant_role(actor: Actor, role: str, region_id: uuid.UUID | None) -> bool:
     if actor.is_admin:
         return role in {item.value for item in Role} and (
@@ -126,7 +150,12 @@ def can_grant_role(actor: Actor, role: str, region_id: uuid.UUID | None) -> bool
             or (role != Role.ADMIN.value and region_id is not None)
         )
     return bool(
-        role == Role.SUB_MANAGER.value
+        role in {
+            Role.EMPLOYEE.value,
+            Role.CASUAL.value,
+            Role.CONTRACTOR.value,
+            Role.SUB_MANAGER.value,
+        }
         and region_id is not None
         and Role.MANAGER.value in actor.roles_for(region_id)
     )
@@ -135,7 +164,7 @@ def can_grant_role(actor: Actor, role: str, region_id: uuid.UUID | None) -> bool
 def can_crew_view(actor: Actor, region_id: uuid.UUID) -> bool:
     if actor.is_contractor:
         return False
-    allowed = {Role.EMPLOYEE.value, Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
+    allowed = {Role.EMPLOYEE.value, Role.CASUAL.value, Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
     return actor.is_admin or bool(actor.roles_for(region_id) & allowed)
 
 
@@ -147,6 +176,7 @@ def external_calendar_region_ids(db: Session, actor: Actor) -> set[uuid.UUID] | 
         return None
     planning_roles = {
         Role.EMPLOYEE.value,
+        Role.CASUAL.value,
         Role.SUB_MANAGER.value,
         Role.MANAGER.value,
         Role.VIEWER.value,
@@ -156,8 +186,9 @@ def external_calendar_region_ids(db: Session, actor: Actor) -> set[uuid.UUID] | 
         for region_id, roles in actor.regional_roles.items()
         if roles & planning_roles
     }
-    has_employee_role = Role.EMPLOYEE.value in actor.global_roles or any(
-        Role.EMPLOYEE.value in roles for roles in actor.regional_roles.values()
+    working_roles = {Role.EMPLOYEE.value, Role.CASUAL.value}
+    has_employee_role = bool(actor.global_roles & working_roles) or any(
+        bool(roles & working_roles) for roles in actor.regional_roles.values()
     )
     if actor.person_id and has_employee_role:
         home_region_id = db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
@@ -176,7 +207,7 @@ def can_view_management_detail(actor: Actor, region_id: uuid.UUID) -> bool:
 
 def can_apply_for_open_position(actor: Actor, region_id: uuid.UUID) -> bool:
     """Only linked Employees may self-apply; broad Viewer access is never write authority."""
-    return bool(actor.person_id and Role.EMPLOYEE.value in actor.roles_for(region_id))
+    return bool(actor.person_id and actor.roles_for(region_id) & {Role.EMPLOYEE.value, Role.CASUAL.value})
 
 
 def can_self_decline_assignment(
@@ -193,6 +224,7 @@ def can_self_decline_assignment(
     roles = actor.roles_for(workday.region_id)
     if actor.person_id is None or not roles & {
         Role.EMPLOYEE.value,
+        Role.CASUAL.value,
         Role.CONTRACTOR.value,
     }:
         return False

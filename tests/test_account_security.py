@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from app.auth.policy import actor_for
+from app.auth.policy import actor_for, can_assist_user
 from app.auth.security import create_device, hash_credential
 from app.auth.service import (
     activate_invitation,
@@ -58,7 +58,7 @@ def test_pending_grant_never_authorizes_and_activates_on_primary_login(db) -> No
     assert elevated_device.elevated is True
 
 
-def test_manager_can_only_stage_submanager_in_managed_region(db) -> None:  # type: ignore[no-untyped-def]
+def test_manager_stages_only_ordinary_roles_in_managed_region(db) -> None:  # type: ignore[no-untyped-def]
     managed, other = Region(name="Managed"), Region(name="Other")
     db.add_all([managed, other])
     manager = _user(db, "manager@example.test")
@@ -79,12 +79,20 @@ def test_manager_can_only_stage_submanager_in_managed_region(db) -> None:  # typ
         region_id=managed.id,
     )
     assert grant.status == "PENDING"
+    employee_grant = grant_role(
+        db,
+        actor=actor,
+        target_user=target,
+        role=Role.EMPLOYEE.value,
+        region_id=managed.id,
+    )
+    assert employee_grant.status == "PENDING"
     with pytest.raises(PermissionError):
         grant_role(
             db,
             actor=actor,
             target_user=target,
-            role=Role.EMPLOYEE.value,
+            role=Role.MANAGER.value,
             region_id=managed.id,
         )
     with pytest.raises(PermissionError):
@@ -95,6 +103,29 @@ def test_manager_can_only_stage_submanager_in_managed_region(db) -> None:  # typ
             role=Role.SUB_MANAGER.value,
             region_id=other.id,
         )
+
+
+def test_submanager_assistance_is_existing_ordinary_accounts_only(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Operational")
+    db.add(region)
+    helper = _user(db, "helper@example.test")
+    employee = _user(db, "employee@example.test")
+    manager = _user(db, "senior@example.test")
+    employee_person = Person(display_name="Employee", home_region_id=region.id)
+    manager_person = Person(display_name="Manager", home_region_id=region.id)
+    db.add_all([employee_person, manager_person])
+    db.flush()
+    db.add_all([
+        UserPersonLink(user_id=employee.id, person_id=employee_person.id),
+        UserPersonLink(user_id=manager.id, person_id=manager_person.id),
+        RoleGrant(user_id=helper.id, role=Role.SUB_MANAGER.value, region_id=region.id),
+        RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
+        RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=region.id),
+    ])
+    db.commit()
+    helper_actor = actor_for(db, helper)
+    assert can_assist_user(db, helper_actor, employee, region.id)
+    assert not can_assist_user(db, helper_actor, manager, region.id)
 
 
 def test_final_active_admin_grant_cannot_be_revoked(db) -> None:  # type: ignore[no-untyped-def]

@@ -45,7 +45,7 @@ from app.rostering.service import (
     update_assignment,
     update_draft_details,
 )
-from app.rostering.travel import TRANSPORT_LABELS, TRANSPORT_UNASSIGNED
+from app.rostering.travel import TRANSPORT_LABELS, TRANSPORT_UNASSIGNED, TRANSPORT_VEHICLE
 from app.unavailability.service import active_for_people_on_date, unavailability_label
 from app.web import context, templates
 
@@ -120,6 +120,7 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         "assignment_end_time",
         "transport_mode",
         "vehicle_id",
+        "is_vehicle_driver",
         "custom_transport_text",
         "accommodation_name",
         "accommodation_address",
@@ -132,9 +133,9 @@ def _draft_payload(  # type: ignore[no-untyped-def]
     for name in field_names:
         if not values[name] and row_count:
             values[name] = [""] * row_count
-    for name in ("transport_mode", "note_private", "uses_standard_travel"):
+    for name in ("transport_mode", "note_private", "uses_standard_travel", "is_vehicle_driver"):
         if all(not value for value in values[name]) and row_count:
-            default = "UNASSIGNED" if name == "transport_mode" else "1"
+            default = "UNASSIGNED" if name == "transport_mode" else ("0" if name == "is_vehicle_driver" else "1")
             values[name] = [default] * row_count
     if any(len(items) != row_count for items in values.values()):
         raise ValueError("The assignment rows were incomplete. Refresh and try again.")
@@ -151,6 +152,7 @@ def _draft_payload(  # type: ignore[no-untyped-def]
             end_time=parse_time(str(values["assignment_end_time"][index])),
             transport_mode=str(values["transport_mode"][index] or TRANSPORT_UNASSIGNED),
             vehicle_id=_optional_uuid(values["vehicle_id"][index]),
+            is_vehicle_driver=str(values["is_vehicle_driver"][index]) == "1",
             custom_transport_text=str(values["custom_transport_text"][index]),
             accommodation_name=str(values["accommodation_name"][index]),
             accommodation_address=str(values["accommodation_address"][index]),
@@ -580,6 +582,7 @@ def workday_crew_picker(
     position_id: uuid.UUID,
     request: Request,
     track_id: uuid.UUID | None = None,
+    work_date: date | None = None,
     db: Session = Depends(get_db),
 ):
     workday = db.get(Workday, workday_id)
@@ -597,7 +600,7 @@ def workday_crew_picker(
         view = crew_picker_views(
             db,
             region_id=workday.region_id,
-            work_date=draft.work_date,
+            work_date=work_date or draft.work_date,
             track_id=track_id,
             exclude_workday_id=workday.id,
             position_ids={position_id},
@@ -638,9 +641,9 @@ def workday_crew_picker(
 @router.get("/new-workday/crew-picker", response_class=JSONResponse)
 def new_workday_crew_picker(
     region_id: uuid.UUID,
-    work_date: date,
     position_id: uuid.UUID,
     request: Request,
+    work_date: date | None = None,
     track_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
 ):
@@ -697,6 +700,24 @@ def _publication_warnings(
         db.scalars(select(Assignment).where(Assignment.revision_id == draft.id))
     )
     warnings: list[str] = []
+    occupants_by_vehicle: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for row in assignments:
+        if row.vehicle_id and row.person_id and row.transport_mode == TRANSPORT_VEHICLE:
+            occupants_by_vehicle.setdefault(row.vehicle_id, set()).add(row.person_id)
+    if occupants_by_vehicle:
+        vehicles = {
+            vehicle.id: vehicle
+            for vehicle in db.scalars(
+                select(Vehicle).where(Vehicle.id.in_(occupants_by_vehicle))
+            )
+        }
+        for vehicle_id, occupants in occupants_by_vehicle.items():
+            vehicle = vehicles.get(vehicle_id)
+            if vehicle and vehicle.seat_capacity and len(occupants) > vehicle.seat_capacity:
+                warnings.append(
+                    f"{vehicle.name} is over capacity: {len(occupants)} people for "
+                    f"{vehicle.seat_capacity} seats."
+                )
     if draft.track_id is None:
         warnings.append("Track is still to be confirmed.")
     if draft.start_time is None:

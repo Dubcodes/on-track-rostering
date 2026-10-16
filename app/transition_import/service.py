@@ -37,6 +37,15 @@ SAFE_IGNORED_FIELDS = (
 MAX_PREVIEW_DETAILS = 100
 
 
+def source_vehicle_identifier(value: str) -> bool:
+    """Recognise capture area labels that are vehicle identities, not capabilities."""
+    compact = "".join(value.split())
+    return bool(
+        re.fullmatch(r"\d{2,6}", compact)
+        or re.fullmatch(r"[A-Za-z]{1,6}\d{2,4}", compact)
+    )
+
+
 @dataclass
 class TransitionPreview:
     counts: dict[str, int] = field(default_factory=dict)
@@ -353,6 +362,13 @@ def preview_capture(db: Session, payload: dict[str, object]) -> TransitionPrevie
             _append_detail(preview, "skipped_workdays", f"{label}: unresolved Track")
             continue
         _append_detail(preview, "tracks", f"{row['location']}: {track.name}")
+        if source_vehicle_identifier(str(row["area_name"])):
+            preview.conflicts.append(
+                f"{row['area_name']} looks like a source Vehicle identifier, not a Position; "
+                "resolve it in the one-time transition mapping before import."
+            )
+            preview.valid = False
+            continue
         identity = canonical_position_identity(str(row["area_name"]))
         try:
             position = resolve_active_position(db, str(row["area_name"]))
@@ -533,6 +549,10 @@ def apply_capture(db: Session, payload: dict[str, object], actor_user_id: uuid.U
             shift_key = str(row["id"] or _payload_hash(row))
             if _reference(db, "ASSIGNMENT", shift_key):
                 continue
+            if source_vehicle_identifier(str(row["area_name"])):
+                raise ValueError(
+                    f"Source Vehicle identifier {row['area_name']} cannot create a Base Position."
+                )
             position, identity, _created = resolve_or_create_position(
                 db,
                 str(row["area_name"]),

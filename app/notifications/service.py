@@ -229,7 +229,7 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
             .where(
                 User.status == "ACTIVE",
                 RoleGrant.status == "ACTIVE",
-                RoleGrant.role == Role.EMPLOYEE.value,
+                RoleGrant.role.in_([Role.EMPLOYEE.value, Role.CASUAL.value]),
                 RoleGrant.region_id == event.region_id,
             )
         ).all()
@@ -779,7 +779,7 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
         employee_regions = {
             region_id
             for role, region_id in grants
-            if role == Role.EMPLOYEE.value and region_id is not None
+            if role in {Role.EMPLOYEE.value, Role.CASUAL.value} and region_id is not None
         }
         if preference.weekly_digest:
             rows = db.execute(

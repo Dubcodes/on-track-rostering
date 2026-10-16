@@ -190,8 +190,8 @@ def create_invitation(
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
         raise ValueError("Display name must be between 2 and 120 characters.")
-    if role not in {Role.CONTRACTOR.value, Role.EMPLOYEE.value, Role.SUB_MANAGER.value}:
-        raise ValueError("Invitations may only grant Contractor, Employee, or Sub-Manager access.")
+    if role not in {Role.CONTRACTOR.value, Role.CASUAL.value, Role.EMPLOYEE.value, Role.SUB_MANAGER.value}:
+        raise ValueError("Invitations may only grant Contractor, Casual, Employee, or Sub-Manager access.")
     if db.scalar(select(User.id).where(User.email == email)):
         raise ValueError("An account already uses that email.")
     if role != Role.ADMIN.value and region_id is None:
@@ -424,8 +424,8 @@ def approve_signup(
     region = db.get(Region, region_id)
     if not region or region.lifecycle != "ACTIVE":
         raise ValueError("Select an active region for this signup approval.")
-    if role not in {Role.EMPLOYEE.value, Role.CONTRACTOR.value}:
-        raise ValueError("Signup approval may only grant Employee or Contractor access.")
+    if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value}:
+        raise ValueError("Signup approval may only grant Employee, Casual, or Contractor access.")
     if not (actor.is_admin or Role.MANAGER.value in actor.roles_for(region_id)):
         raise PermissionError("You cannot approve accounts for that region.")
     if not actor.is_admin and signup.requested_region_id != region_id:

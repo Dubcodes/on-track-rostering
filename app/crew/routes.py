@@ -12,7 +12,13 @@ from app.accounts.onboarding import onboarding_state
 from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.links import credential_reset_url, invitation_url
-from app.auth.policy import can_administer_region, can_administer_user
+from app.auth.policy import (
+    can_administer_region,
+    can_administer_user,
+    can_assist_user,
+    can_grant_role,
+    can_manage_region,
+)
 from app.auth.security import require_fresh_auth, verify_csrf
 from app.auth.service import (
     create_credential_reset,
@@ -38,7 +44,20 @@ router = APIRouter(prefix="/manage/crew")
 
 def _regions(db: Session, request: Request) -> list[Region]:
     rows = list(db.scalars(select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)))
-    return [row for row in rows if can_administer_region(request.state.actor, row.id)]
+    return [row for row in rows if can_manage_region(request.state.actor, row.id)]
+
+
+def _person_in_operational_scope(db: Session, request: Request, person_id: uuid.UUID) -> Person:
+    person = db.get(Person, person_id)
+    if not person:
+        raise HTTPException(404)
+    if person.home_region_id is None:
+        if request.state.actor.is_admin:
+            return person
+        raise HTTPException(404)
+    if not can_manage_region(request.state.actor, person.home_region_id):
+        raise HTTPException(403, "Regional roster authority required.")
+    return person
 
 
 def _person_in_scope(
@@ -65,6 +84,9 @@ def crew_management(
     request: Request,
     region_id: uuid.UUID | None = None,
     q: str = "",
+    account_type: str = "",
+    crew_group_id: uuid.UUID | None = None,
+    position_id: uuid.UUID | None = None,
     show_archived: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -78,6 +100,40 @@ def crew_management(
     if q.strip():
         term = f"%{q.strip()}%"
         statement = statement.where(or_(Person.display_name.ilike(term), Person.email.ilike(term)))
+    if account_type:
+        if account_type == "NONE":
+            statement = statement.where(
+                Person.id.not_in(select(UserPersonLink.person_id))
+            )
+        elif account_type in {role.value for role in Role}:
+            statement = statement.where(
+                Person.id.in_(
+                    select(UserPersonLink.person_id)
+                    .join(RoleGrant, RoleGrant.user_id == UserPersonLink.user_id)
+                    .where(RoleGrant.role == account_type, RoleGrant.status == "ACTIVE")
+                )
+            )
+    if crew_group_id:
+        statement = statement.where(
+            Person.id.in_(
+                select(PersonCrewGroup.person_id).where(
+                    PersonCrewGroup.crew_group_id == crew_group_id
+                )
+            )
+        )
+    if position_id:
+        statement = statement.where(
+            Person.id.in_(
+                select(PositionCapability.person_id).where(
+                    PositionCapability.base_position_id == position_id,
+                    PositionCapability.signal.in_([
+                        CapabilitySignal.WORKED.value,
+                        CapabilitySignal.EMPLOYEE_ALLOW.value,
+                        CapabilitySignal.MANAGER_ALLOW.value,
+                    ]),
+                )
+            )
+        )
     people = list(db.scalars(statement.order_by(Person.display_name)))
     needs_setup_statement = (
         select(Person)
@@ -191,6 +247,12 @@ def crew_management(
             directory_summaries=directory_summaries,
             region_names={region.id: region.name for region in regions},
             query=q,
+            account_type=account_type,
+            selected_crew_group_id=crew_group_id,
+            selected_position_id=position_id,
+            filter_account_types=[role.value for role in Role],
+            filter_groups=list(db.scalars(select(CrewGroup).where(CrewGroup.lifecycle == "ACTIVE").order_by(CrewGroup.name))),
+            filter_positions=list(db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name))),
             show_archived=show_archived,
         ),
     )
@@ -202,7 +264,7 @@ def crew_person_detail(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    person = _person_in_scope(db, request, person_id, allow_unassigned_admin=True)
+    person = _person_in_operational_scope(db, request, person_id)
     regions = _regions(db, request)
     groups = list(
         db.scalars(select(CrewGroup).where(CrewGroup.lifecycle == "ACTIVE").order_by(CrewGroup.name))
@@ -310,6 +372,11 @@ def crew_person_detail(
                 and person.home_region_id
                 and can_administer_user(db, request.state.actor, account, person.home_region_id)
             ),
+            can_assist_account=bool(
+                account
+                and person.home_region_id
+                and can_assist_user(db, request.state.actor, account, person.home_region_id)
+            ),
         ),
     )
 
@@ -320,18 +387,27 @@ def save_crew_person(
     request: Request,
     display_name: str = Form(...),
     email: str = Form(""),
-    home_region_id: uuid.UUID = Form(...),
+    home_region_id: str = Form(""),
+    truck_driver_qualified: bool = Form(False),
     group_ids: list[uuid.UUID] = Form(default=[]),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
     person = _person_in_scope(db, request, person_id, allow_unassigned_admin=True)
-    destination = db.get(Region, home_region_id)
-    if not destination or destination.lifecycle != "ACTIVE" or not can_administer_region(
-        request.state.actor, destination.id
-    ):
-        raise HTTPException(403, "Primary Region is outside your authority.")
+    destination = None
+    if home_region_id.strip():
+        try:
+            destination_id = uuid.UUID(home_region_id)
+        except ValueError as exc:
+            raise HTTPException(400, "Choose a valid Primary Region.") from exc
+        destination = db.get(Region, destination_id)
+        if not destination or destination.lifecycle != "ACTIVE" or not can_administer_region(
+            request.state.actor, destination.id
+        ):
+            raise HTTPException(403, "Primary Region is outside your authority.")
+    elif not request.state.actor.is_admin:
+        raise HTTPException(403, "Admin authority is required to leave Primary Region blank.")
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
         raise HTTPException(400, "Enter a crew name between 2 and 120 characters.")
@@ -350,7 +426,8 @@ def save_crew_person(
         raise HTTPException(400, "Select active Crew groups only.")
     person.display_name = clean_name
     person.email = clean_email
-    person.home_region_id = destination.id
+    person.home_region_id = destination.id if destination else None
+    person.truck_driver_qualified = truck_driver_qualified
     db.execute(delete(PersonCrewGroup).where(PersonCrewGroup.person_id == person.id))
     db.add_all(
         PersonCrewGroup(person_id=person.id, crew_group_id=group_id)
@@ -358,8 +435,11 @@ def save_crew_person(
     )
     record_audit(
         db, "person.management.updated", "person", person.id, request.state.user.id,
-        region_id=destination.id,
-        detail={"group_count": len(allowed_groups)},
+        region_id=destination.id if destination else None,
+        detail={
+            "group_count": len(allowed_groups),
+            "truck_driver_qualified": person.truck_driver_qualified,
+        },
     )
     db.commit()
     if "application/json" in request.headers.get("accept", ""):
@@ -372,7 +452,7 @@ def update_onboarding_metadata(
     request: Request,
     person_ids: list[uuid.UUID] = Form(default=[]),
     emails: list[str] = Form(default=[]),
-    region_ids: list[uuid.UUID] = Form(default=[]),
+    region_ids: list[str] = Form(default=[]),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -380,14 +460,21 @@ def update_onboarding_metadata(
         raise HTTPException(403, "Admin authority required.")
     verify_csrf(request, csrf_token)
     if not person_ids or not (len(person_ids) == len(emails) == len(region_ids)):
-        raise HTTPException(400, "Submit complete Person, email and Primary Region rows.")
+        raise HTTPException(400, "Submit complete edited Person rows.")
     if len(set(person_ids)) != len(person_ids):
         raise HTTPException(400, "Each Person UUID may appear only once.")
     people = {row.id: row for row in db.scalars(select(Person).where(Person.id.in_(person_ids)))}
+    parsed_region_ids: list[uuid.UUID | None] = []
+    for raw_region_id in region_ids:
+        try:
+            parsed_region_ids.append(uuid.UUID(raw_region_id) if raw_region_id.strip() else None)
+        except ValueError as exc:
+            raise HTTPException(400, "Use valid Primary Region identifiers.") from exc
+    selected_region_ids = {region_id for region_id in parsed_region_ids if region_id}
     regions = {row.id: row for row in db.scalars(
-        select(Region).where(Region.id.in_(region_ids), Region.lifecycle == "ACTIVE")
+        select(Region).where(Region.id.in_(selected_region_ids), Region.lifecycle == "ACTIVE")
     )}
-    if len(people) != len(person_ids) or len(regions) != len(set(region_ids)):
+    if len(people) != len(person_ids) or len(regions) != len(selected_region_ids):
         raise HTTPException(400, "Use active exact Person and Primary Region identifiers.")
     normalized: list[str | None] = []
     for person_id, email in zip(person_ids, emails, strict=True):
@@ -414,35 +501,48 @@ def update_onboarding_metadata(
     supplied_emails = [email for email in normalized if email is not None]
     if len(set(supplied_emails)) != len(supplied_emails):
         raise HTTPException(409, "Work emails must be unique within the batch.")
+    changed_count = 0
     for person_id, clean_email, region_id in zip(
-        person_ids, normalized, region_ids, strict=True
+        person_ids, normalized, parsed_region_ids, strict=True
     ):
         person = people[person_id]
+        new_region_id = regions[region_id].id if region_id else None
+        if person.email == clean_email and person.home_region_id == new_region_id:
+            continue
         person.email = clean_email
-        person.home_region_id = regions[region_id].id
+        person.home_region_id = new_region_id
         record_audit(
             db,
             "person.onboarding_metadata.updated",
             "person",
             person.id,
             request.state.user.id,
-            region_id=region_id,
+            region_id=new_region_id,
         )
+        changed_count += 1
     db.commit()
-    return RedirectResponse(f"/manage/crew?metadata={len(person_ids)}", status_code=303)
+    return RedirectResponse(f"/manage/crew?metadata={changed_count}", status_code=303)
 
 
 def _controlled_account(
-    db: Session, request: Request, person_id: uuid.UUID
+    db: Session, request: Request, person_id: uuid.UUID, *, allow_operational_assist: bool = False
 ) -> tuple[Person, User]:
-    person = _person_in_scope(db, request, person_id)
+    person = (
+        _person_in_operational_scope(db, request, person_id)
+        if allow_operational_assist
+        else _person_in_scope(db, request, person_id)
+    )
     account = db.scalar(
         select(User).join(UserPersonLink).where(UserPersonLink.person_id == person.id)
     )
     if (
         not account
         or person.home_region_id is None
-        or not can_administer_user(db, request.state.actor, account, person.home_region_id)
+        or not (
+            can_assist_user(db, request.state.actor, account, person.home_region_id)
+            if allow_operational_assist
+            else can_administer_user(db, request.state.actor, account, person.home_region_id)
+        )
     ):
         raise HTTPException(403, "This account requires higher authority.")
     return person, account
@@ -458,8 +558,8 @@ def create_person_setup_link(
 ):
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
-    person = _person_in_scope(db, request, person_id)
-    if role not in {Role.EMPLOYEE.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
+    person = _person_in_scope(db, request, person_id, allow_unassigned_admin=True)
+    if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
         raise HTTPException(403, "That account role is not available here.")
     if not person.email or person.home_region_id is None:
         raise HTTPException(409, "Work email and Primary Region are required.")
@@ -507,7 +607,9 @@ def update_person_account_status(
 ):
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
-    _person, account = _controlled_account(db, request, person_id)
+    _person, account = _controlled_account(
+        db, request, person_id, allow_operational_assist=True
+    )
     if account.id == request.state.user.id or account_status not in {"ACTIVE", "DISABLED"}:
         raise HTTPException(400, "Invalid account status change.")
     account.status = account_status
@@ -536,6 +638,78 @@ def update_person_account_status(
     )
     db.commit()
     return RedirectResponse(f"/manage/crew/{person_id}#account", status_code=303)
+
+
+@router.post("/{person_id}/employment-type")
+def update_person_employment_type(
+    person_id: uuid.UUID,
+    request: Request,
+    role: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Atomically replace an ordinary Employee/Casual classification."""
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    person, account = _controlled_account(db, request, person_id)
+    if role not in {Role.EMPLOYEE.value, Role.CASUAL.value}:
+        raise HTTPException(400, "Choose Employee or Casual.")
+    if person.home_region_id is None or not can_grant_role(
+        request.state.actor, role, person.home_region_id
+    ):
+        raise HTTPException(403, "You cannot change that account classification.")
+    grants = list(
+        db.scalars(
+            select(RoleGrant).where(
+                RoleGrant.user_id == account.id,
+                RoleGrant.status != "REVOKED",
+            )
+        )
+    )
+    if any(grant.role == Role.CONTRACTOR.value for grant in grants):
+        raise HTTPException(409, "Use the Contractor lifecycle controls for this account.")
+    ordinary = [
+        grant
+        for grant in grants
+        if grant.region_id == person.home_region_id
+        and grant.role in {Role.EMPLOYEE.value, Role.CASUAL.value}
+    ]
+    if any(grant.role == role for grant in ordinary):
+        return RedirectResponse(f"/manage/crew/{person.id}#account", status_code=303)
+    now = utcnow()
+    previous = [grant.role for grant in ordinary]
+    active_replaced = any(grant.status == "ACTIVE" for grant in ordinary)
+    for grant in ordinary:
+        grant.status = "REVOKED"
+        grant.revoked_at = now
+    replacement = RoleGrant(
+        user_id=account.id,
+        role=role,
+        region_id=person.home_region_id,
+        status="PENDING",
+        granted_by_user_id=request.state.user.id,
+    )
+    db.add(replacement)
+    if active_replaced:
+        account.auth_epoch += 1
+        for device in db.scalars(
+            select(TrustedDevice).where(
+                TrustedDevice.user_id == account.id,
+                TrustedDevice.revoked_at.is_(None),
+            )
+        ):
+            device.revoked_at = now
+    record_audit(
+        db,
+        "user.employment_type.changed",
+        "user",
+        account.id,
+        request.state.user.id,
+        region_id=person.home_region_id,
+        detail={"previous": previous, "new": role, "status": "PENDING"},
+    )
+    db.commit()
+    return RedirectResponse(f"/manage/crew/{person.id}?employment=pending#account", status_code=303)
 
 
 @router.post("/{person_id}/setup-link/revoke")
@@ -583,7 +757,9 @@ def reset_person_credential(
 ):
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
-    _person, account = _controlled_account(db, request, person_id)
+    _person, account = _controlled_account(
+        db, request, person_id, allow_operational_assist=True
+    )
     if account.id == request.state.user.id:
         raise HTTPException(400, "Use Settings to change your own credential.")
     try:

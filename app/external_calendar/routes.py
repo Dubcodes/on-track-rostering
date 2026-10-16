@@ -429,6 +429,7 @@ def map_track(
     provider: str = Form(...),
     external_track_name: str = Form(...),
     track_id: uuid.UUID = Form(...),
+    return_to: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -450,7 +451,8 @@ def map_track(
         detail={"provider": provider, "external_track_key": normalized_key(external_track_name)},
     )
     db.commit()
-    return RedirectResponse("/admin/online-sources?mapped=1", status_code=303)
+    anchor = return_to if return_to.startswith("source-") else "unmatched-sources"
+    return RedirectResponse(f"/admin/online-sources?mapped=1#{anchor}", status_code=303)
 
 
 @router.post("/admin/online-sources/create-track-map")
@@ -461,6 +463,7 @@ def create_track_and_map(
     region_id: uuid.UUID = Form(...),
     track_name: str = Form(...),
     map_reference: str = Form(""),
+    return_to: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -522,7 +525,8 @@ def create_track_and_map(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
-    return RedirectResponse("/admin/online-sources?created_mapped=1", status_code=303)
+    anchor = return_to if return_to.startswith("source-") else "unmatched-sources"
+    return RedirectResponse(f"/admin/online-sources?created_mapped=1#{anchor}", status_code=303)
 
 
 @router.get("/admin/online-sources/source-inventory.json")

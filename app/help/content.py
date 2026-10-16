@@ -293,7 +293,7 @@ def _allowed(actor: Actor, capability: str) -> bool:
     if capability == "person":
         return actor.person_id is not None
     if capability == "employee":
-        return Role.EMPLOYEE.value in roles
+        return bool(roles & {Role.EMPLOYEE.value, Role.CASUAL.value})
     if capability == "admin":
         return actor.is_admin
     if capability == "manage":
@@ -305,6 +305,7 @@ def _allowed(actor: Actor, capability: str) -> bool:
             roles
             & {
                 Role.EMPLOYEE.value,
+                Role.CASUAL.value,
                 Role.SUB_MANAGER.value,
                 Role.MANAGER.value,
                 Role.VIEWER.value,

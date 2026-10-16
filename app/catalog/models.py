@@ -156,4 +156,5 @@ class Vehicle(Base):
     home_region_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("regions.id"), nullable=True)
     fuel_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     is_truck: Mapped[bool] = mapped_column(Boolean, default=False)
+    seat_capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)

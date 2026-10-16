@@ -1064,7 +1064,8 @@ def update_capability_preference(
 ):
     verify_csrf(request, csrf_token)
     if request.state.actor.person_id is None or not any(
-        Role.EMPLOYEE.value in roles for roles in request.state.actor.regional_roles.values()
+        roles & {Role.EMPLOYEE.value, Role.CASUAL.value}
+        for roles in request.state.actor.regional_roles.values()
     ):
         raise HTTPException(403, "A linked crew identity is required.")
     if signal not in {

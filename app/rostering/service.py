@@ -72,6 +72,7 @@ class AssignmentInput:
     end_time: time | None = None
     transport_mode: str = TRANSPORT_UNASSIGNED
     vehicle_id: uuid.UUID | None = None
+    is_vehicle_driver: bool = False
     custom_transport_text: str = ""
     accommodation_name: str = ""
     accommodation_address: str = ""
@@ -338,6 +339,7 @@ def ensure_draft(
                 note_private=old.note_private,
                 vehicle_id=old.vehicle_id,
                 vehicle_name_snapshot=old.vehicle_name_snapshot,
+                is_vehicle_driver=old.is_vehicle_driver,
                 transport_mode=old.transport_mode,
                 custom_transport_text=old.custom_transport_text,
                 accommodation_name=old.accommodation_name,
@@ -547,6 +549,7 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
                 transport_mode=row.transport_mode,
                 vehicle_id=row.vehicle_id,
                 vehicle_name_snapshot=row.vehicle_name_snapshot,
+                is_vehicle_driver=row.is_vehicle_driver,
                 custom_transport_text=row.custom_transport_text,
                 accommodation_name=row.accommodation_name,
                 uses_standard_travel=True,
@@ -828,7 +831,29 @@ def save_draft(
             raise ValueError("Vehicle selection does not match the transport option.")
         if item.transport_mode == TRANSPORT_CUSTOM and not item.custom_transport_text.strip():
             raise ValueError("Enter the custom transport arrangement.")
+        if item.is_vehicle_driver and (not person or not vehicle or not vehicle.is_truck):
+            raise ValueError("A designated truck driver must be assigned to that truck.")
+        if item.is_vehicle_driver and not person.truck_driver_qualified:
+            raise ValueError(f"{person.display_name} is not qualified as a truck driver.")
         prepared.append((item, position, person))
+
+    for vehicle in active_vehicles.values():
+        if not vehicle.is_truck:
+            continue
+        occupants = {
+            person.id
+            for item, _position, person in prepared
+            if person and item.vehicle_id == vehicle.id and item.transport_mode == TRANSPORT_VEHICLE
+        }
+        if not occupants:
+            continue
+        drivers = {
+            person.id
+            for item, _position, person in prepared
+            if person and item.vehicle_id == vehicle.id and item.is_vehicle_driver
+        }
+        if len(drivers) != 1:
+            raise ValueError(f"Choose exactly one qualified driver for truck {vehicle.name}.")
 
     previous_start_origin = draft.start_origin
     previous_finish_destination = draft.finish_destination
@@ -950,6 +975,7 @@ def save_draft(
         assignment.end_time = item.end_time
         assignment.transport_mode = item.transport_mode
         assignment.vehicle_id = item.vehicle_id
+        assignment.is_vehicle_driver = item.is_vehicle_driver
         assignment.vehicle_name_snapshot = (
             active_vehicles[item.vehicle_id].name if item.vehicle_id else None
         )
@@ -1420,6 +1446,7 @@ def reschedule_published_workday(
                     note_private=old.note_private,
                     vehicle_id=old.vehicle_id,
                     vehicle_name_snapshot=old.vehicle_name_snapshot,
+                    is_vehicle_driver=old.is_vehicle_driver,
                     transport_mode=old.transport_mode,
                     custom_transport_text=old.custom_transport_text,
                     accommodation_name=old.accommodation_name,
@@ -1681,6 +1708,7 @@ def decline_published_assignment(
                     note_private=old.note_private,
                     vehicle_id=old.vehicle_id,
                     vehicle_name_snapshot=old.vehicle_name_snapshot,
+                    is_vehicle_driver=old.is_vehicle_driver,
                     transport_mode=old.transport_mode,
                     custom_transport_text=old.custom_transport_text,
                     accommodation_name=old.accommodation_name,

@@ -45,6 +45,7 @@ class Person(Base):
         ForeignKey("regions.id"), nullable=True, index=True
     )
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
+    truck_driver_qualified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     user_link: Mapped[UserPersonLink | None] = relationship(back_populates="person", uselist=False)

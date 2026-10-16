@@ -88,3 +88,7 @@ await human confirmation.
 Contextual Help is available from roster, management, setup, source, import,
 account, and security workspaces. Related links are filtered to the signed-in
 user's authority; route authorization remains authoritative.
+
+## Recorded transition discrepancy: Ellerslie 17 October
+
+The reviewed historical capture showed source Vehicle labels including `684`, `685` and `Rav91` represented as Positions and extra assignment rows. Existing published Workdays are not rewritten. For the forthcoming one-time migration, these labels must be classified through an explicit Vehicle mapping before apply; import preview now blocks vehicle-shaped identifiers from resolving or creating a canonical Base Position. The source evidence remains a reconciliation item and creates no capability history.

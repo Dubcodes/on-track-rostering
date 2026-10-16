@@ -161,7 +161,7 @@ def test_contractor_notice_relevance_requires_published_assignment(db) -> None: 
     assert relevant_notice_region_ids(db, actor) == {region.id}
 
 
-def test_open_position_digest_does_not_treat_manager_grant_as_employee(db) -> None:  # type: ignore[no-untyped-def]
+def test_open_position_digest_includes_casual_but_not_manager_only(db) -> None:  # type: ignore[no-untyped-def]
     region = Region(name="Digest manager region")
     user = User(
         email="digest-manager@example.test",
@@ -169,8 +169,14 @@ def test_open_position_digest_does_not_treat_manager_grant_as_employee(db) -> No
         credential_hash=hash_credential("123456"),
     )
     person = Person(display_name="Digest manager")
+    casual_user = User(
+        email="digest-casual@example.test",
+        display_name="Digest casual",
+        credential_hash=hash_credential("123456"),
+    )
+    casual_person = Person(display_name="Digest casual", home_region_id=region.id)
     position = BasePosition(name="Digest camera")
-    db.add_all([region, user, person, position])
+    db.add_all([region, user, person, casual_user, casual_person, position])
     db.flush()
     db.add_all(
         [
@@ -179,6 +185,14 @@ def test_open_position_digest_does_not_treat_manager_grant_as_employee(db) -> No
             NotificationPreference(user_id=user.id, open_positions_digest=True),
             PositionCapability(
                 person_id=person.id,
+                base_position_id=position.id,
+                signal=CapabilitySignal.MANAGER_ALLOW.value,
+            ),
+            UserPersonLink(user_id=casual_user.id, person_id=casual_person.id),
+            RoleGrant(user_id=casual_user.id, role=Role.CASUAL.value, region_id=region.id),
+            NotificationPreference(user_id=casual_user.id, open_positions_digest=True),
+            PositionCapability(
+                person_id=casual_person.id,
                 base_position_id=position.id,
                 signal=CapabilitySignal.MANAGER_ALLOW.value,
             ),
@@ -206,7 +220,11 @@ def test_open_position_digest_does_not_treat_manager_grant_as_employee(db) -> No
     )
     workday.current_published_revision_id = revision.id
     db.flush()
-    assert generate_periodic_digests(db, now=datetime(2026, 10, 5, tzinfo=UTC)) == 0
+    assert generate_periodic_digests(db, now=datetime(2026, 10, 5, tzinfo=UTC)) == 1
+    digest = db.scalar(
+        select(NotificationEvent).where(NotificationEvent.event_type == "OPEN_POSITIONS_DIGEST")
+    )
+    assert digest and digest.audience_user_id == casual_user.id
 
 
 def test_delivery_is_encrypted_and_idempotent(db) -> None:  # type: ignore[no-untyped-def]

@@ -1197,6 +1197,15 @@ select option { background: var(--input-bg); color: var(--text); }
 .builder-dice-button svg { width: 18px; height: 18px; }
 .builder-dice-feedback { flex-basis: 100%; min-height: 1.2em; }
 .person-travel-fields { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; padding: .65rem; border: 1px solid var(--line); border-radius: 8px; }
+.track-map-admin-preview { display: block; width: min(100%, 360px); max-height: 180px; object-fit: contain; border-radius: 10px; background: var(--surface-soft); }
+.track-map-open { width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.track-map-open img { display: block; width: 100%; max-height: 420px; object-fit: contain; }
+.track-map-dialog { width: min(96vw, 1200px); height: min(92vh, 900px); padding: 0; overflow: hidden; background: var(--surface); }
+.track-map-dialog::backdrop { background: rgb(0 0 0 / 78%); }
+.track-map-close { position: absolute; z-index: 2; top: 8px; right: 8px; }
+.track-map-viewport { width: 100%; height: 100%; overflow: auto; touch-action: pinch-zoom pan-x pan-y; overscroll-behavior: contain; }
+.track-map-viewport img { display: block; width: auto; height: auto; max-width: none; }
+
 @media (max-width: 620px) {
   .page-heading.compact-heading, .builder-assignment-heading { align-items: stretch; flex-direction: column; }
   .workday-assignment { padding: 8px; }

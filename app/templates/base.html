@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/static/branding.css?v={{ asset_version|urlencode }}">
   <script src="/static/passkeys.js?v={{ asset_version|urlencode }}" defer></script>
   <script src="/static/notifications.js?v={{ asset_version|urlencode }}" defer></script>
+  <script src="/static/return-to-item.js?v={{ asset_version|urlencode }}" defer></script>
   <title>{% block title %}{{ branding.product_name }}{% endblock %}</title>
 </head>
 <body data-user-namespace="{{ user.id if user else '' }}" data-build-id="{{ asset_version }}">

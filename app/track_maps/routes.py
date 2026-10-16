@@ -71,7 +71,7 @@ def upload_track_map(
         detail={"width": row.manual_width, "height": row.manual_height, "bytes": row.manual_bytes},
     )
     db.commit()
-    return RedirectResponse("/manage/catalog#tracks", status_code=303)
+    return RedirectResponse(f"/manage/catalog?map=uploaded#track-{track.id}", status_code=303)
 
 
 @router.post("/manage/catalog/tracks/{track_id}/map/reset")
@@ -93,7 +93,7 @@ def reset_track_map(
         db.commit()
         if previous:
             previous.unlink(missing_ok=True)
-    return RedirectResponse("/manage/catalog#tracks", status_code=303)
+    return RedirectResponse(f"/manage/catalog?map=reverted#track-{track.id}", status_code=303)
 
 
 @router.post("/manage/catalog/tracks/{track_id}/map/refresh")
@@ -128,4 +128,4 @@ def refresh_track_map(
         },
     )
     db.commit()
-    return RedirectResponse("/manage/catalog#tracks", status_code=303)
+    return RedirectResponse(f"/manage/catalog?map=refreshed#track-{track.id}", status_code=303)

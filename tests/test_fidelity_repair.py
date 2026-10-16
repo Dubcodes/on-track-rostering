@@ -871,6 +871,12 @@ def test_portainer_uses_shared_registry_images_with_production_pinning() -> None
     assert "STAGING_ONTRACK_VAPID_PRIVATE_KEY=\n" in staging_example
     assert "STAGING_ONTRACK_VAPID_SUBJECT=mailto:operations@example.com" in staging_example
     assert ".ontrack-build-id" in dockerfile and "sha256sum" in dockerfile
+    entrypoint = open("scripts/container-entrypoint.sh", encoding="utf-8").read()
+    assert 'install -d -o ontrack -g ontrack /app/data/track_maps' in entrypoint
+    assert 'find /app/data/track_maps -xdev' in entrypoint
+    assert 'exec gosu ontrack "$@"' in entrypoint
+    assert 'ENTRYPOINT ["/usr/local/bin/ontrack-entrypoint"]' in dockerfile
+    assert "USER ontrack" not in dockerfile
 
 
 def test_compose_healthchecks_use_allowed_host_without_weakening_readiness(monkeypatch) -> None:  # type: ignore[no-untyped-def]

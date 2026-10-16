@@ -307,4 +307,12 @@
       form.action = `${form.dataset.actionBase}${position.value}`;
     });
   });
+  document.querySelectorAll('select[name="role"]').forEach((select) => {
+    if (select.querySelector('option[value="CASUAL"]')) return;
+    const employee = select.querySelector('option[value="EMPLOYEE"]');
+    const option = document.createElement("option");
+    option.value = "CASUAL";
+    option.textContent = "Casual";
+    employee?.insertAdjacentElement("afterend", option);
+  });
 })();

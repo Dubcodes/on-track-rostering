@@ -254,7 +254,7 @@ def create_track(request: Request, region_id: uuid.UUID = Form(...), name: str =
         record_audit(db, "track.created", "track", row.id, request.state.user.id, region_id=region_id,
                      detail={"default_travel_minutes": row.default_travel_minutes})
         db.commit()
-    return RedirectResponse("/manage/catalog#tracks", status_code=303)
+    return RedirectResponse(f"/manage/catalog?created=track#track-{row.id}", status_code=303)
 
 
 @router.post("/tracks/{track_id}")
@@ -292,7 +292,7 @@ def update_track(track_id: uuid.UUID, request: Request, name: str = Form(...), r
                          "default_travel_minutes": row.default_travel_minutes})
     with controlled_integrity(db, "A track in that region already uses that name."):
         db.commit()
-    return RedirectResponse("/manage/catalog#tracks", status_code=303)
+    return RedirectResponse(f"/manage/catalog?saved=track#track-{row.id}", status_code=303)
 
 
 @router.post("/regions/{region_id}")
@@ -568,20 +568,25 @@ def create_vehicle(
     model: str = Form(""),
     fuel_type: str = Form(""),
     is_truck: bool = Form(False),
+    seat_capacity: int | None = Form(4),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
     _vehicle_region(db, request.state.actor, home_region_id)
+    if seat_capacity is not None and seat_capacity < 1:
+        raise HTTPException(400, "Vehicle capacity must be at least one person.")
     row = Vehicle(name=_name(name, 100), home_region_id=home_region_id,
                   category=_name(category, 80), model=model.strip()[:100] or None,
-                  fuel_type=fuel_type.strip()[:40] or None, is_truck=is_truck)
+                  fuel_type=fuel_type.strip()[:40] or None, is_truck=is_truck,
+                  seat_capacity=seat_capacity)
     with controlled_integrity(db, "A vehicle already uses that name."):
         db.add(row)
         db.flush()
         record_audit(db, "vehicle.created", "vehicle", row.id, request.state.user.id,
                      region_id=row.home_region_id,
-                     detail={"name": row.name, "category": row.category, "model": row.model})
+                     detail={"name": row.name, "category": row.category, "model": row.model,
+                             "is_truck": row.is_truck, "seat_capacity": row.seat_capacity})
         db.commit()
     return RedirectResponse("/manage/catalog#vehicles", status_code=303)
 
@@ -596,6 +601,7 @@ def update_vehicle(
     model: str = Form(""),
     fuel_type: str = Form(""),
     is_truck: bool = Form(False),
+    seat_capacity: int | None = Form(None),
     lifecycle: str = Form(...),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
@@ -610,17 +616,22 @@ def update_vehicle(
     ):
         raise HTTPException(403, "Regional administration authority required.")
     _vehicle_region(db, request.state.actor, home_region_id)
+    if seat_capacity is not None and seat_capacity < 1:
+        raise HTTPException(400, "Vehicle capacity must be at least one person.")
     previous = {"name": row.name, "home_region_id": str(row.home_region_id),
                 "category": row.category, "model": row.model, "fuel_type": row.fuel_type,
+                "is_truck": row.is_truck, "seat_capacity": row.seat_capacity,
                 "lifecycle": row.lifecycle}
     row.name, row.home_region_id = _name(name, 100), home_region_id
     row.category, row.model = _name(category, 80), model.strip()[:100] or None
     row.fuel_type, row.lifecycle = fuel_type.strip()[:40] or None, _lifecycle(lifecycle)
     row.is_truck = is_truck
+    row.seat_capacity = seat_capacity
     record_audit(db, "vehicle.updated", "vehicle", row.id, request.state.user.id,
                  region_id=row.home_region_id,
                  detail={"previous": previous, "name": row.name, "home_region_id": str(row.home_region_id),
                          "category": row.category, "model": row.model, "fuel_type": row.fuel_type,
+                         "is_truck": row.is_truck, "seat_capacity": row.seat_capacity,
                          "lifecycle": row.lifecycle})
     with controlled_integrity(db, "A vehicle already uses that name."):
         db.commit()

@@ -228,7 +228,7 @@ def map_refresh_due(row: TrackMap | None, *, now=None) -> bool:  # type: ignore[
     return (
         row is None
         or row.automatic_checked_at is None
-        or now - row.automatic_checked_at >= timedelta(days=28)
+        or now - row.automatic_checked_at >= timedelta(days=90)
     )
 
 

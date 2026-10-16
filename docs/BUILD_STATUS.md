@@ -45,6 +45,8 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 - Shared searchable-picker behavior that opens the complete valid list on focus and restores the authoritative selected label/ID on cancellation, plus built-in and optional Admin PNG favicon/manifest branding.
 - Builder Timing now keeps the truck control aligned inside Timing, with new Race Days defaulting it on. Help includes roster legends, Android/iOS notification setup, and Report error guidance. Normal pages no longer expose build/version footer diagnostics; Administration owns build/version/SHA information. Current theme/readability cleanup is included in responsive qualification.
 - The same application image supplies a PostgreSQL-advisory-locked scheduler for racing discovery/programme/map refresh, Contractor expiry, and notification generation/delivery. Durable scheduler heartbeat plus live, ready, and scheduler health endpoints provide an operations foundation; readiness remains database-only.
+- Current roster-operations refinement supports edited-row-only Person onboarding with nullable email/Primary Region, strict positive Dice eligibility, date/Track-later unsaved Builder setup, distinct-Person Vehicle capacity, explicit truck-driver qualification/designation, quarterly Track-map refresh with retained-cache permission repair, and exact-item return after Track/source work.
+- `CASUAL` is a normal linked working account classification for roster participation, capability preferences, Open Positions and notifications, but is deliberately excluded from Dice. Sub-Managers may assist existing ordinary in-scope accounts after fresh authentication; account creation, deletion, privileged role changes and Manager/Admin account control remain unavailable.
 
 ## Qualification history
 
@@ -63,6 +65,7 @@ These are historical checkpoints, not the current qualification baseline.
 - Backup and restore rehearsal for PostgreSQL and the application-data volume.
 - Immutable production image promotion, production secrets and WebAuthn RP identity freeze/rotation, and operational governance.
 - More advanced historical/predictive Position suggestions beyond the implemented two-published-Workday eligibility rule and simple regional presets.
+- Exceptional Crew-Group-scoped Manager write authority remains unresolved. Existing Region authority stays authoritative: no group grant currently implies mixed-Workday, publication, Person, or account control outside an administered Region.
 - Configurable Open Position auto-accept; current applications remain Manager-approved.
 - IV configuration / IV setup domain; the original operational design expected it, but no current implementation exists.
 

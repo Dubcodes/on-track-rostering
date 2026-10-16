@@ -155,7 +155,11 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
         director = BasePosition(name=f"Director {suffix}", crew_group_id=group.id)
         side_one = BasePosition(name="Side 1", crew_group_id=group.id)
         side_two = BasePosition(name="Side 2", crew_group_id=group.id)
-        vehicle = Vehicle(name=f"Browser Vehicle {suffix}", home_region_id=region.id)
+        vehicle = Vehicle(
+            name=f"Browser Vehicle {suffix}",
+            home_region_id=region.id,
+            seat_capacity=1,
+        )
         duplicate_a = Person(display_name="John Smith", home_region_id=cross_region.id)
         duplicate_b = Person(display_name="John Smith", home_region_id=cross_region.id)
         person.home_region_id = region.id
@@ -1151,9 +1155,13 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     suggested_record.locator(":scope > summary").click()
     suggested = suggested_record.locator('form[action="/admin/online-sources/map"]')
     if width == 320:
+        suggested_return_id = suggested_record.get_attribute("id")
+        assert suggested_return_id
         suggested.locator('select[name="track_id"]').select_option(values["track_id"])
         suggested.get_by_role("button", name="Confirm mapping").click()
         page.wait_for_url("**/admin/online-sources?mapped=1")
+        assert page.url.endswith(f"#{suggested_return_id}")
+        assert page.locator(f"#{suggested_return_id}").is_visible()
         assert page.locator(
             f'form:has(input[name="external_track_name"][value="{values["track_name"]}"])'
         ).count() == 0
@@ -1165,9 +1173,13 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     create_form = create_record.locator('form[action="/admin/online-sources/create-track-map"]')
     assert create_form.locator('select[name="region_id"]').count() == 1
     if width == 320:
+        create_return_id = create_record.get_attribute("id")
+        assert create_return_id
         create_form.locator('select[name="region_id"]').select_option(values["region_id"])
         create_form.get_by_role("button", name="Create Track & Map").click()
         page.wait_for_url("**/admin/online-sources?created_mapped=1")
+        assert page.url.endswith(f"#{create_return_id}")
+        assert page.locator(f"#{create_return_id}").is_visible()
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"online-sources-{width}.png")
 
@@ -2211,6 +2223,38 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             assert original_person_row.locator("[data-vehicle-value]").input_value() == new_row.locator(
                 "[data-vehicle-value]"
             ).input_value()
+            other_people_rows = page.locator(
+                f'[data-assignment-row]:has([data-person-value]:not([value=""]):not([value="{values["browser_person_id"]}"]))'
+            )
+            capacity_target = other_people_rows.first
+            target_vehicle_picker = capacity_target.locator('[data-picker-kind="vehicle"]')
+            target_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
+            target_vehicle_picker.locator(
+                '[data-picker-option][data-transport-mode="VEHICLE"]'
+            ).first.click()
+            capacity_dialog = page.locator("[data-vehicle-capacity-dialog]")
+            assert capacity_dialog.is_visible()
+            capacity_dialog.get_by_role("button", name="Cancel").click()
+            assert capacity_target.locator("[data-vehicle-value]").input_value() == ""
+            target_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
+            target_vehicle_picker.locator(
+                '[data-picker-option][data-transport-mode="VEHICLE"]'
+            ).first.click()
+            capacity_dialog.get_by_role("button", name="Keep", exact=True).click()
+            target_person_id = capacity_target.locator("[data-person-value]").input_value()
+            assert capacity_target.locator("[data-vehicle-value]").input_value()
+            capacity_kicker = other_people_rows.nth(1)
+            kicker_vehicle_picker = capacity_kicker.locator('[data-picker-kind="vehicle"]')
+            kicker_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
+            kicker_vehicle_picker.locator(
+                '[data-picker-option][data-transport-mode="VEHICLE"]'
+            ).first.click()
+            assert capacity_dialog.is_visible()
+            capacity_dialog.get_by_role("button", name="Kick last").click()
+            assert page.locator(
+                f'[data-assignment-row]:has([data-person-value][value="{target_person_id}"]) [data-vehicle-value]'
+            ).first.input_value() == ""
+            assert capacity_kicker.locator("[data-vehicle-value]").input_value()
             new_row.locator("[data-toggle-advanced]").click()
             new_row.locator('input[name="finish_destination_override"]').fill("Alternative return")
             new_row.locator('input[name="finish_destination_override"]').dispatch_event("change")

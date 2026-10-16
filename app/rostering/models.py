@@ -130,6 +130,7 @@ class Assignment(Base):
     note_private: Mapped[bool] = mapped_column(Boolean, default=True)
     vehicle_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("vehicles.id"), nullable=True)
     vehicle_name_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    is_vehicle_driver: Mapped[bool] = mapped_column(Boolean, default=False)
     vehicle: Mapped[Vehicle | None] = relationship()
     transport_mode: Mapped[str] = mapped_column(String(24), default="UNASSIGNED")
     custom_transport_text: Mapped[str] = mapped_column(String(160), default="")

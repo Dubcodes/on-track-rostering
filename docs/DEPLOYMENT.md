@@ -34,6 +34,8 @@ docker compose exec app python -m app.cli production-check
 
 Back up both PostgreSQL and `/app/data`; the Admin data export is not a disaster-recovery backup. Follow [BACKUP_RESTORE.md](BACKUP_RESTORE.md) for exact production backup commands, an isolated staging restore rehearsal, and the emergency production procedure.
 
+The shared image entrypoint creates and repairs ownership only for `/app/data/track_maps` on fresh or retained application-data volumes, then execs both web and scheduler commands as the unprivileged `ontrack` account. Do not override that entrypoint or broaden its ownership repair to unrelated mounted paths. After an image update, verify both services can read the retained map cache and an authorized map refresh/upload can write it.
+
 ## Private staging
 
 The real Portainer stack display name is `on-track-rostering`, and it uses `compose.staging.yaml`. That Compose file deliberately declares the separate project name `on-track-rostering-staging`, which produces staging-only resources such as `on-track-rostering-staging_app-1`, `on-track-rostering-staging_db-1`, and `on-track-rostering-staging_scheduler-1`. Do not confuse the Portainer display name with the Compose project/resource prefix. After a push to `main` passes its exact-head release gate, CI publishes `ghcr.io/dubcodes/on-track-rostering:sha-<commit>` and, only while that commit is still `origin/main`, updates `ghcr.io/dubcodes/on-track-rostering:staging`. The latter is a convenience tag for staging only; it is never a production promotion mechanism.

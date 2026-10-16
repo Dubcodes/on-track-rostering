@@ -4356,8 +4356,8 @@ def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:
     csrf = _login(admin, "admin@example.test", "99887766")
     queue = admin.get("/manage/crew")
     assert queue.status_code == 200
-    assert "Choose a Primary Region for each person." in queue.text
-    assert "Work email is optional until an account or setup link is created." in queue.text
+    assert "Edit only the People you are ready to update." in queue.text
+    assert "Work email and Primary Region may stay blank until account setup." in queue.text
     assert 'name="emails" type="email"' in queue.text
     assert 'name="emails" type="email" value="" required' not in queue.text
     assert "Person UUID is the exact machine key" not in queue.text
@@ -4399,9 +4399,9 @@ def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:
     saved = admin.post(
         "/manage/crew/onboarding/metadata",
         data={
-            "person_ids": [str(first_id), str(second_id)],
-            "emails": ["", "batch.second@example.com"],
-            "region_ids": [str(region_id), str(region_id)],
+            "person_ids": [str(second_id)],
+            "emails": ["batch.second@example.com"],
+            "region_ids": [str(region_id)],
             "csrf_token": csrf,
         },
         follow_redirects=False,
@@ -4409,7 +4409,7 @@ def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:
     assert saved.status_code == 303
     with factory() as db:
         assert db.get(Person, first_id).email is None
-        assert db.get(Person, first_id).home_region_id == region_id
+        assert db.get(Person, first_id).home_region_id is None
         assert db.get(Person, second_id).email == "batch.second@example.com"
         assert db.get(Person, second_id).home_region_id == region_id
         assert not db.scalar(
