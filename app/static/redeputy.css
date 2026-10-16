@@ -1305,7 +1305,7 @@ select option { background: var(--input-bg); color: var(--text); }
 .inline-help-content { position: absolute; z-index: 30; left: 0; bottom: calc(100% + .45rem); display: none; width: min(280px, calc(100vw - 32px)); padding: .55rem .65rem; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); box-shadow: var(--shadow); color: var(--text); font-size: .78rem; font-weight: 500; line-height: 1.35; text-transform: none; letter-spacing: normal; white-space: normal; }
 .inline-help:hover .inline-help-content, .inline-help:focus .inline-help-content, .inline-help:focus-within .inline-help-content { display: block; }
 @media (max-width: 620px) {
-  .inline-help-content { top: calc(100% + .35rem); bottom: auto; }
+  .inline-help-content { top: calc(100% + .35rem); bottom: auto; width: min(240px, calc(100vw - 32px)); }
 }
 .capability-table { display: grid; gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
 .capability-heading, .capability-row { display: grid; grid-template-columns: minmax(8rem, 1.5fr) minmax(6rem, 1fr) minmax(9rem, 1.2fr) auto; gap: .5rem; align-items: center; padding: .45rem .55rem; background: var(--surface); }
