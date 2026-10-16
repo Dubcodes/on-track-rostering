@@ -815,6 +815,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             "head_on_position_id": str(head_on.id),
             "director_position_id": str(director.id),
             "browser_person_id": str(person.id),
+            "manager_person_id": str(manager_person.id),
             "position_aware_person_id": str(other_person.id),
             "duplicate_person_ids": [str(duplicate_a.id), str(duplicate_b.id)],
             "regionless_person_id": str(regionless_person.id),
@@ -2221,13 +2222,13 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             vehicle_input.fill("")
             vehicle_option = vehicle_picker.locator('[data-picker-option][data-transport-mode="VEHICLE"]').first
             vehicle_option.click()
-            assert original_person_row.locator("[data-vehicle-value]").input_value() == new_row.locator(
-                "[data-vehicle-value]"
-            ).input_value()
-            other_people_rows = page.locator(
-                f'[data-assignment-row]:has([data-person-value]:not([value=""]):not([value="{values["browser_person_id"]}"]))'
+            selected_vehicle_id = new_row.locator("[data-vehicle-value]").input_value()
+            assert selected_vehicle_id
+            assert original_person_row.locator("[data-vehicle-value]").input_value() == selected_vehicle_id
+            capacity_target = page.locator(
+                f'[data-assignment-row]:has([data-person-value][value="{values["position_aware_person_id"]}"])'
             )
-            capacity_target = other_people_rows.first
+            assert capacity_target.count() == 1
             target_vehicle_picker = capacity_target.locator('[data-picker-kind="vehicle"]')
             target_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
             target_vehicle_picker.locator(
@@ -2244,7 +2245,10 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             capacity_dialog.get_by_role("button", name="Keep", exact=True).click()
             target_person_id = capacity_target.locator("[data-person-value]").input_value()
             assert capacity_target.locator("[data-vehicle-value]").input_value()
-            capacity_kicker = other_people_rows.nth(1)
+            capacity_kicker = page.locator(
+                f'[data-assignment-row]:has([data-person-value][value="{values["manager_person_id"]}"])'
+            )
+            assert capacity_kicker.count() == 1
             kicker_vehicle_picker = capacity_kicker.locator('[data-picker-kind="vehicle"]')
             kicker_vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
             kicker_vehicle_picker.locator(
