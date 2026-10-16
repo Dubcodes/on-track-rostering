@@ -2362,9 +2362,16 @@ def test_builder_vehicle_capacity_choices(browser_site) -> None:  # type: ignore
     choose_vehicle(occupant)
     vehicle_id = occupant.locator("[data-vehicle-value]").input_value()
     assert vehicle_id
+    occupant_person_id = occupant.locator("[data-person-value]").input_value()
+    target_person_id = target.locator("[data-person-value]").input_value()
+    assert occupant_person_id == values["browser_person_id"]
+    assert target_person_id == values["position_aware_person_id"]
+    assert target_person_id != occupant_person_id
+    assert target.locator("[data-vehicle-value]").input_value() == ""
 
     capacity_dialog = page.locator("[data-vehicle-capacity-dialog]")
     choose_vehicle(target)
+    assert not errors, errors
     assert capacity_dialog.is_visible()
     capacity_dialog.get_by_role("button", name="Cancel").click()
     assert target.locator("[data-vehicle-value]").input_value() == ""
