@@ -805,6 +805,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             "track_id": str(track.id),
             "track_name": track.name,
             "cross_track_id": str(cross_track.id),
+            "vehicle_id": str(vehicle.id),
             "active_notice_text": active_notice_text,
             "expired_notice_text": expired_notice_text,
             "external_event_id": str(external_event.id),
@@ -2220,7 +2221,10 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
             vehicle_picker = new_row.locator('[data-picker-kind="vehicle"]')
             vehicle_input = vehicle_picker.locator("[data-picker-input]")
             vehicle_input.fill("")
-            vehicle_option = vehicle_picker.locator('[data-picker-option][data-transport-mode="VEHICLE"]').first
+            vehicle_option = vehicle_picker.locator(
+                f'[data-picker-option][data-value="{values["vehicle_id"]}"]'
+            )
+            assert vehicle_option.get_attribute("data-capacity") == "1"
             vehicle_option.click()
             selected_vehicle_id = new_row.locator("[data-vehicle-value]").input_value()
             assert selected_vehicle_id
@@ -2348,7 +2352,9 @@ def test_builder_vehicle_capacity_choices(browser_site) -> None:  # type: ignore
     def choose_vehicle(row: Locator) -> None:
         picker = row.locator('[data-picker-kind="vehicle"]')
         picker.locator("[data-picker-input]").fill("Browser Vehicle")
-        picker.locator('[data-picker-option][data-transport-mode="VEHICLE"]').first.click()
+        option = picker.locator(f'[data-picker-option][data-value="{values["vehicle_id"]}"]')
+        assert option.get_attribute("data-capacity") == "1"
+        option.click()
 
     occupant = row_for("browser_person_id")
     target = row_for("position_aware_person_id")
