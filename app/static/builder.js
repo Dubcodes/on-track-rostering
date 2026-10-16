@@ -148,6 +148,9 @@
         option.dataset.eligible = person.eligible ? "1" : "0";
         option.dataset.sameDate = person.same_date ? "1" : "0";
         option.dataset.onLeave = person.on_leave ? "1" : "0";
+        option.dataset.diceEligible = person.dice_eligible ? "1" : "0";
+        option.dataset.diceEmploymentKnown = person.dice_employment_known ? "1" : "0";
+        option.dataset.diceFamiliarity = String(person.dice_familiarity || 0);
         if (person.on_leave) {
           option.dataset.leaveStart = person.leave_start || "";
           option.dataset.leaveEnd = person.leave_end || "";
@@ -209,6 +212,8 @@
     const selectedPersonId = row.querySelector("[data-person-value]").value;
     const url = new URL(form.dataset.crewPickerUrl, window.location.origin);
     url.searchParams.set("position_id", positionId);
+    const trackId = form.querySelector('[name="track_id"]')?.value || "";
+    if (trackId) url.searchParams.set("track_id", trackId);
     if (form.dataset.newMode === "1") {
       url.searchParams.set("region_id", form.querySelector('[name="region_id"]').value);
       url.searchParams.set("work_date", form.querySelector('[name="work_date"]').value);
@@ -505,6 +510,7 @@
           .filter(Boolean),
       );
       let filled = 0;
+      const unknownEmployment = new Set();
       shuffled(targets).forEach((row) => {
         const picker = row.querySelector('[data-picker-kind="person"]');
         const localGroup = picker.querySelector('.search-picker-group[data-local="1"]');
@@ -512,19 +518,32 @@
           [...(localGroup?.querySelectorAll('[data-picker-option][data-state="ASSIGNED"]') || [])]
             .filter((option) =>
               option.dataset.eligible === "1"
+              && option.dataset.diceEligible === "1"
               && option.dataset.sameDate !== "1"
               && option.dataset.onLeave !== "1"
               && !assigned.has(option.dataset.value)
             ),
         );
-        const chosen = candidates[0];
+        candidates
+          .filter((option) => option.dataset.diceEmploymentKnown !== "1")
+          .forEach((option) => unknownEmployment.add(option.dataset.value));
+        const bestFamiliarity = candidates.reduce(
+          (best, option) => Math.max(best, Number(option.dataset.diceFamiliarity || 0)),
+          0,
+        );
+        const chosen = candidates.find(
+          (option) => Number(option.dataset.diceFamiliarity || 0) === bestFamiliarity,
+        );
         if (!chosen) return;
         applyPersonChoice(picker, chosen);
         assigned.add(chosen.dataset.value);
         filled += 1;
       });
       const remaining = targets.length - filled;
-      feedback.textContent = `Filled ${filled} of ${targets.length} unassigned positions · ${remaining} still need crew`;
+      const limitation = unknownEmployment.size
+        ? ` · Contractor status could not be verified for ${unknownEmployment.size} unlinked crew`
+        : "";
+      feedback.textContent = `Filled ${filled} of ${targets.length} unassigned positions · ${remaining} still need crew${limitation}`;
     } finally {
       button.disabled = false;
     }

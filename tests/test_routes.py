@@ -4356,8 +4356,10 @@ def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:
     csrf = _login(admin, "admin@example.test", "99887766")
     queue = admin.get("/manage/crew")
     assert queue.status_code == 200
-    assert "Add a work email and Primary Region for each person." in queue.text
-    assert "Accounts are set up separately." in queue.text
+    assert "Choose a Primary Region for each person." in queue.text
+    assert "Work email is optional until an account or setup link is created." in queue.text
+    assert 'name="emails" type="email"' in queue.text
+    assert 'name="emails" type="email" value="" required' not in queue.text
     assert "Person UUID is the exact machine key" not in queue.text
     assert f"Person {first_id}" not in queue.text
     assert f"Person {second_id}" not in queue.text
@@ -4380,11 +4382,25 @@ def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:
         assert db.get(Person, second_id).home_region_id is None
         assert db.scalar(select(func.count()).select_from(User)) == initial_user_count
 
+    invalid_format = admin.post(
+        "/manage/crew/onboarding/metadata",
+        data={
+            "person_ids": [str(first_id), str(second_id)],
+            "emails": ["not-an-email", "valid@example.com"],
+            "region_ids": [str(region_id), str(region_id)],
+            "csrf_token": csrf,
+        },
+    )
+    assert invalid_format.status_code == 400
+    with factory() as db:
+        assert db.get(Person, first_id).home_region_id is None
+        assert db.get(Person, second_id).email is None
+
     saved = admin.post(
         "/manage/crew/onboarding/metadata",
         data={
             "person_ids": [str(first_id), str(second_id)],
-            "emails": ["batch.first@example.com", "batch.second@example.com"],
+            "emails": ["", "batch.second@example.com"],
             "region_ids": [str(region_id), str(region_id)],
             "csrf_token": csrf,
         },
@@ -4392,13 +4408,23 @@ def test_admin_batch_onboarding_metadata_is_exact_and_atomic(routed_db) -> None:
     )
     assert saved.status_code == 303
     with factory() as db:
-        assert db.get(Person, first_id).email == "batch.first@example.com"
+        assert db.get(Person, first_id).email is None
+        assert db.get(Person, first_id).home_region_id == region_id
+        assert db.get(Person, second_id).email == "batch.second@example.com"
         assert db.get(Person, second_id).home_region_id == region_id
         assert not db.scalar(
             select(UserPersonLink.user_id).where(
                 UserPersonLink.person_id.in_([first_id, second_id])
             )
         )
+    queue_after = admin.get(f"/manage/crew?region_id={region_id}")
+    assert "Batch First" in queue_after.text
+    assert "Needs email" in queue_after.text
+    no_email_setup = admin.post(
+        f"/manage/crew/{first_id}/setup-link",
+        data={"role": "EMPLOYEE", "csrf_token": csrf},
+    )
+    assert no_email_setup.status_code == 409
 
 
 def test_position_convergence_is_explicit_admin_only_and_audited(routed_db) -> None:  # type: ignore[no-untyped-def]

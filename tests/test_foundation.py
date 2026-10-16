@@ -922,6 +922,152 @@ def test_position_aware_crew_picker_and_duplicate_names_are_id_safe(db) -> None:
     assert len({person.context_label for person in duplicate_options}) == 2
     assert all("Southern" in person.context_label for person in duplicate_options)
 
+
+def test_crew_picker_dice_contractors_and_published_track_familiarity(db) -> None:  # type: ignore[no-untyped-def]
+    region, track, position, familiar_person, manager, *_ = seed_vertical(db)
+    other_position = BasePosition(name="Track history alternate")
+    other_track = Track(name="Other history Track", region_id=region.id, palette_slot=2)
+    moderate_person = Person(display_name="Moderate Track Crew", home_region_id=region.id)
+    no_history_person = Person(display_name="No Track History Crew", home_region_id=region.id)
+    contractor_person = Person(display_name="Manual Contractor", home_region_id=region.id)
+    moderate_user = User(
+        email="moderate-track@example.test", display_name=moderate_person.display_name,
+        credential_hash="x",
+    )
+    contractor_user = User(
+        email="manual-contractor@example.test", display_name=contractor_person.display_name,
+        credential_hash="x",
+    )
+    db.add_all(
+        [
+            other_position,
+            other_track,
+            moderate_person,
+            no_history_person,
+            contractor_person,
+            moderate_user,
+            contractor_user,
+        ]
+    )
+    db.flush()
+    db.add_all(
+        [
+            UserPersonLink(user_id=moderate_user.id, person_id=moderate_person.id),
+            UserPersonLink(user_id=contractor_user.id, person_id=contractor_person.id),
+            RoleGrant(
+                user_id=contractor_user.id,
+                role=Role.CONTRACTOR.value,
+                region_id=region.id,
+            ),
+        ]
+    )
+
+    def add_history(
+        person: Person,
+        base_position: BasePosition,
+        *,
+        work_date: date,
+        category: str = WorkdayCategory.RACE_DAY.value,
+        status: str = WorkdayStatus.SCHEDULED.value,
+        published: bool = True,
+        history_track: Track = track,
+    ) -> Workday:
+        workday = Workday(
+            region_id=region.id,
+            category=category,
+            status=status,
+            created_by_user_id=manager.id,
+        )
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED" if published else "DRAFT",
+            work_date=work_date,
+            track_id=history_track.id,
+            created_by_user_id=manager.id,
+        )
+        db.add(revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=base_position.id,
+                display_name_snapshot=base_position.name,
+                person_id=person.id,
+                status=AssignmentStatus.ASSIGNED.value,
+            )
+        )
+        if published:
+            workday.current_published_revision_id = revision.id
+        return workday
+
+    target_date = date(2026, 11, 20)
+    add_history(familiar_person, position, work_date=date(2026, 11, 1))
+    add_history(moderate_person, other_position, work_date=date(2026, 11, 2))
+    add_history(
+        no_history_person, position, work_date=date(2026, 11, 3), published=False
+    )
+    add_history(
+        no_history_person,
+        position,
+        work_date=date(2026, 11, 4),
+        status=WorkdayStatus.CANCELLED.value,
+    )
+    add_history(
+        no_history_person,
+        position,
+        work_date=date(2026, 11, 5),
+        category=WorkdayCategory.TRAVEL_DAY.value,
+    )
+    add_history(
+        no_history_person,
+        position,
+        work_date=date(2026, 11, 7),
+        status=WorkdayStatus.ABANDONED.value,
+    )
+    add_history(
+        no_history_person,
+        position,
+        work_date=date(2026, 11, 8),
+        history_track=other_track,
+    )
+    add_history(no_history_person, position, work_date=date(2026, 11, 21))
+    current = add_history(
+        no_history_person, position, work_date=date(2026, 11, 6)
+    )
+    db.commit()
+
+    view = crew_picker_views(
+        db,
+        region_id=region.id,
+        work_date=target_date,
+        track_id=track.id,
+        exclude_workday_id=current.id,
+        position_ids={position.id},
+    )[position.id]
+    people = {person.id: person for _label, rows in view.groups for person in rows}
+    assert people[familiar_person.id].dice_familiarity == 2
+    assert people[moderate_person.id].dice_familiarity == 1
+    assert people[no_history_person.id].dice_familiarity == 0
+    assert people[contractor_person.id].dice_eligible is False
+    assert people[contractor_person.id].dice_employment_known is True
+    assert people[no_history_person.id].dice_employment_known is False
+    assert contractor_person.id in people  # Manual selection remains available.
+
+    without_track = crew_picker_views(
+        db,
+        region_id=region.id,
+        work_date=target_date,
+        position_ids={position.id},
+    )[position.id]
+    assert all(
+        person.dice_familiarity == 0
+        for _label, rows in without_track.groups
+        for person in rows
+    )
+
 def test_cross_region_uses_person_home_region_not_role_scope(db) -> None:  # type: ignore[no-untyped-def]
     north, central = Region(name="North"), Region(name="Central")
     db.add_all([north, central])

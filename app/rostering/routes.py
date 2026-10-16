@@ -579,12 +579,17 @@ def workday_crew_picker(
     workday_id: uuid.UUID,
     position_id: uuid.UUID,
     request: Request,
+    track_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
 ):
     workday = db.get(Workday, workday_id)
     if not workday:
         raise HTTPException(404)
     require_manage_region(request.state.actor, workday.region_id)
+    if track_id:
+        track = db.get(Track, track_id)
+        if not track or track.lifecycle != "ACTIVE" or track.region_id != workday.region_id:
+            raise HTTPException(400, "Select an active Track in the Workday Region.")
     draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
     if not draft:
         raise HTTPException(409, "Open the editor again to create a draft")
@@ -593,6 +598,7 @@ def workday_crew_picker(
             db,
             region_id=workday.region_id,
             work_date=draft.work_date,
+            track_id=track_id,
             exclude_workday_id=workday.id,
             position_ids={position_id},
         )[position_id]
@@ -616,6 +622,9 @@ def workday_crew_picker(
                             "leave_start": person.leave_start.isoformat() if person.leave_start else None,
                             "leave_end": person.leave_end.isoformat() if person.leave_end else None,
                             "leave_label": person.leave_label,
+                            "dice_eligible": person.dice_eligible,
+                            "dice_employment_known": person.dice_employment_known,
+                            "dice_familiarity": person.dice_familiarity,
                         }
                         for person in people
                     ],
@@ -632,14 +641,20 @@ def new_workday_crew_picker(
     work_date: date,
     position_id: uuid.UUID,
     request: Request,
+    track_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
 ):
     require_manage_region(request.state.actor, region_id)
+    if track_id:
+        track = db.get(Track, track_id)
+        if not track or track.lifecycle != "ACTIVE" or track.region_id != region_id:
+            raise HTTPException(400, "Select an active Track in the Workday Region.")
     try:
         view = crew_picker_views(
             db,
             region_id=region_id,
             work_date=work_date,
+            track_id=track_id,
             position_ids={position_id},
         )[position_id]
     except ValueError as exc:
@@ -662,6 +677,9 @@ def new_workday_crew_picker(
                             "leave_start": person.leave_start.isoformat() if person.leave_start else None,
                             "leave_end": person.leave_end.isoformat() if person.leave_end else None,
                             "leave_label": person.leave_label,
+                            "dice_eligible": person.dice_eligible,
+                            "dice_employment_known": person.dice_employment_known,
+                            "dice_familiarity": person.dice_familiarity,
                         }
                         for person in people
                     ],

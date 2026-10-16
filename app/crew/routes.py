@@ -389,7 +389,7 @@ def update_onboarding_metadata(
     )}
     if len(people) != len(person_ids) or len(regions) != len(set(region_ids)):
         raise HTTPException(400, "Use active exact Person and Primary Region identifiers.")
-    normalized: list[str] = []
+    normalized: list[str | None] = []
     for person_id, email in zip(person_ids, emails, strict=True):
         person = people[person_id]
         if person.lifecycle != Lifecycle.ACTIVE.value or db.scalar(
@@ -397,18 +397,22 @@ def update_onboarding_metadata(
         ):
             raise HTTPException(409, "Batch metadata is limited to active unlinked People.")
         try:
-            clean_email = validated_email(email)
+            clean_email = validated_email(email) if email.strip() else None
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if db.scalar(
-            select(Person.id).where(
-                func.lower(Person.email) == clean_email,
-                Person.id != person.id,
-            ).limit(1)
-        ) or db.scalar(select(User.id).where(func.lower(User.email) == clean_email).limit(1)):
+        if clean_email and (
+            db.scalar(
+                select(Person.id).where(
+                    func.lower(Person.email) == clean_email,
+                    Person.id != person.id,
+                ).limit(1)
+            )
+            or db.scalar(select(User.id).where(func.lower(User.email) == clean_email).limit(1))
+        ):
             raise HTTPException(409, f"Work email for {person.display_name} is already in use.")
         normalized.append(clean_email)
-    if len(set(normalized)) != len(normalized):
+    supplied_emails = [email for email in normalized if email is not None]
+    if len(set(supplied_emails)) != len(supplied_emails):
         raise HTTPException(409, "Work emails must be unique within the batch.")
     for person_id, clean_email, region_id in zip(
         person_ids, normalized, region_ids, strict=True

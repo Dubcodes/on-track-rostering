@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.catalog.models import BasePosition, Region
-from app.core.enums import WorkdayStatus
-from app.identity.models import Person
+from app.core.enums import AssignmentStatus, Role, WorkdayCategory, WorkdayStatus
+from app.identity.models import Person, RoleGrant, UserPersonLink
 from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.unavailability.service import active_for_people_on_date, unavailability_label
@@ -27,6 +27,9 @@ class CrewPickerPerson:
     on_leave: bool
     leave_start: date | None
     leave_end: date | None
+    dice_eligible: bool
+    dice_employment_known: bool
+    dice_familiarity: int
 
     @property
     def leave_label(self) -> str:
@@ -61,6 +64,7 @@ def crew_picker_views(
     region_id: uuid.UUID,
     work_date: date,
     position_ids: set[uuid.UUID | None],
+    track_id: uuid.UUID | None = None,
     exclude_workday_id: uuid.UUID | None = None,
 ) -> dict[uuid.UUID | None, CrewPickerView]:
     """Build canonical position-aware crew groups without moving policy into JavaScript."""
@@ -74,6 +78,22 @@ def crew_picker_views(
         )
     )
     person_ids = {person.id for person in people}
+    linked_person_ids = set(
+        db.scalars(
+            select(UserPersonLink.person_id).where(UserPersonLink.person_id.in_(person_ids))
+        )
+    ) if person_ids else set()
+    contractor_person_ids = set(
+        db.scalars(
+            select(UserPersonLink.person_id)
+            .join(RoleGrant, RoleGrant.user_id == UserPersonLink.user_id)
+            .where(
+                UserPersonLink.person_id.in_(person_ids),
+                RoleGrant.role == Role.CONTRACTOR.value,
+                RoleGrant.status == "ACTIVE",
+            )
+        )
+    ) if person_ids else set()
     concrete_position_ids = {position_id for position_id in position_ids if position_id}
     positions = {
         position.id: position
@@ -110,6 +130,26 @@ def crew_picker_views(
         name for name, count in Counter(person.display_name for person in people).items() if count > 1
     }
     leave_by_person = active_for_people_on_date(db, person_ids, work_date)
+    track_history: dict[uuid.UUID, set[uuid.UUID]] = {}
+    if track_id and person_ids:
+        history_statement = (
+            select(Assignment.person_id, Assignment.base_position_id)
+            .join(WorkdayRevision, WorkdayRevision.id == Assignment.revision_id)
+            .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
+            .where(
+                WorkdayRevision.track_id == track_id,
+                WorkdayRevision.work_date < work_date,
+                Workday.status == WorkdayStatus.SCHEDULED.value,
+                Workday.category != WorkdayCategory.TRAVEL_DAY.value,
+                Assignment.status == AssignmentStatus.ASSIGNED.value,
+                Assignment.person_id.in_(person_ids),
+                Assignment.base_position_id.is_not(None),
+                *([Workday.id != exclude_workday_id] if exclude_workday_id else []),
+            )
+            .distinct()
+        )
+        for person_id, historical_position_id in db.execute(history_statement):
+            track_history.setdefault(person_id, set()).add(historical_position_id)
 
     views: dict[uuid.UUID | None, CrewPickerView] = {}
     for position_id in position_ids:
@@ -138,6 +178,14 @@ def crew_picker_views(
                 on_leave=person.id in leave_by_person,
                 leave_start=(leave_by_person[person.id].start_date if person.id in leave_by_person else None),
                 leave_end=(leave_by_person[person.id].end_date if person.id in leave_by_person else None),
+                dice_eligible=person.id not in contractor_person_ids,
+                dice_employment_known=person.id in linked_person_ids,
+                dice_familiarity=(
+                    2
+                    if position_id is not None
+                    and position_id in track_history.get(person.id, set())
+                    else 1 if track_history.get(person.id) else 0
+                ),
             )
             (primary if person.home_region_id == region_id else other).append(option)
         views[position_id] = CrewPickerView(

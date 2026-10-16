@@ -29,7 +29,7 @@
 {% if actor.is_admin and needs_setup_people %}
 <section class="panel" id="needs-setup">
   <div class="section-head"><div><p class="eyebrow">Onboarding queue</p><h2>Needs setup</h2></div><span class="badge">{{ needs_setup_people|length }}</span></div>
-  <p class="muted">Add a work email and Primary Region for each person. Accounts are set up separately.</p>
+  <p class="muted">Choose a Primary Region for each person. Work email is optional until an account or setup link is created.</p>
   <form method="post" action="/manage/crew/onboarding/metadata" class="stack onboarding-setup-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="record-list onboarding-setup-list">
@@ -37,7 +37,7 @@
       <article class="onboarding-card onboarding-setup-card">
         <header><a href="/manage/crew/{{ person.id }}"><strong>{{ person.display_name }}</strong></a><span class="badge-row">{% if not person.email %}<span class="badge">Needs email</span>{% endif %}{% if not person.home_region_id %}<span class="badge">Needs Region</span>{% endif %}</span></header>
         <input type="hidden" name="person_ids" value="{{ person.id }}">
-        <label>Work email<input name="emails" type="email" value="{{ person.email or '' }}" required></label>
+        <label>Work email (optional)<input name="emails" type="email" value="{{ person.email or '' }}"></label>
         <label>Primary Region<select name="region_ids" required><option value="">Select Region</option>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == person.home_region_id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
       </article>
       {% endfor %}

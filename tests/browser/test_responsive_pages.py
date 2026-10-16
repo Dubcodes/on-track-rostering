@@ -2908,6 +2908,7 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
     page.locator("[data-assignment-list]").evaluate("element => element.replaceChildren()")
     page.locator('select[name="region_id"]').select_option(values["region_id"])
     page.locator('input[name="work_date"]').fill("2030-01-12")
+    page.locator('select[name="track_id"]').select_option(values["track_id"])
 
     people = {
         "capable-a": str(uuid.uuid4()),
@@ -2918,6 +2919,7 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
         "leave": str(uuid.uuid4()),
         "same-date": str(uuid.uuid4()),
         "cross-region": str(uuid.uuid4()),
+        "contractor": str(uuid.uuid4()),
         "manual": str(uuid.uuid4()),
     }
     local_people = [
@@ -2926,6 +2928,12 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
         {"id": people["blocked"], "label": "Manager blocked", "eligible": False},
         {"id": people["opted-out"], "label": "Employee opted out", "eligible": False},
         {"id": people["one-workday"], "label": "One prior Workday", "eligible": False},
+        {
+            "id": people["contractor"],
+            "label": "Manual Contractor",
+            "eligible": True,
+            "dice_eligible": False,
+        },
         {
             "id": people["leave"],
             "label": "Crew on leave",
@@ -2948,6 +2956,10 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
         person.setdefault("leave_label", "")
         person.setdefault("leave_start", None)
         person.setdefault("leave_end", None)
+        person.setdefault("dice_eligible", True)
+        person.setdefault("dice_employment_known", True)
+        person.setdefault("dice_familiarity", 0)
+    local_people[0]["dice_familiarity"] = 2
     payload = {
         "groups": [
             {"label": "Local crew", "local": True, "people": local_people},
@@ -2966,6 +2978,9 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
                         "leave_label": "",
                         "leave_start": None,
                         "leave_end": None,
+                        "dice_eligible": True,
+                        "dice_employment_known": True,
+                        "dice_familiarity": 0,
                     }
                 ],
             },
@@ -2974,8 +2989,10 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
     page.evaluate(
         r"""payload => {
           const originalFetch = window.fetch.bind(window);
+          window.__crewPickerUrls = [];
           window.fetch = async (input, init) => {
             if (String(input).includes("/manage/new-workday/crew-picker?")) {
+              window.__crewPickerUrls.push(String(input));
               return new Response(JSON.stringify(payload), {
                 status: 200,
                 headers: {"Content-Type": "application/json"},
@@ -3026,6 +3043,10 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
     assert page.locator("[data-dice-feedback]").inner_text() == (
         "Filled 2 of 3 unassigned positions · 1 still need crew"
     )
+    assert all(
+        f"track_id={values['track_id']}" in url
+        for url in page.evaluate("window.__crewPickerUrls")
+    )
 
     assert rows.nth(0).locator("[data-person-value]").input_value() == people["manual"]
     assert rows.nth(1).locator("[data-assignment-state]").input_value() == "OPEN"
@@ -3043,6 +3064,7 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
             people["blocked"],
             people["opted-out"],
             people["one-workday"],
+            people["contractor"],
             people["leave"],
             people["same-date"],
             people["cross-region"],
@@ -3050,6 +3072,42 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
     )
     assert non_get_requests == []
     assert page.url.endswith("/manage/workdays/new")
+    assert not errors
+    context.close()
+
+
+def test_builder_inline_help_is_label_attached_keyboard_and_mobile(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(
+        viewport={"width": 320, "height": 760},
+        has_touch=True,
+    )
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/manage/workdays/new")
+
+    assert page.locator(".help-tip").count() == 0
+    assert page.locator(".inline-help").filter(has_text="?").count() == 0
+    assignments_help = page.locator(".builder-assignment-heading .inline-help")
+    assignments_help.focus()
+    assert assignments_help.locator("[role=tooltip]").is_visible()
+
+    apply_preset = page.get_by_role("button", name="Apply preset")
+    apply_preset.focus()
+    assert apply_preset.locator("xpath=..", has_text="Applies the selected").locator(
+        "[role=tooltip]"
+    ).is_visible()
+    apply_preset.click()
+    first_row = page.locator("[data-assignment-row]").first
+    first_row.locator("[data-toggle-advanced]").click()
+    personal_start = first_row.locator(".inline-help", has_text="Personal start")
+    personal_start.tap()
+    assert personal_start.locator("[role=tooltip]").is_visible()
+    private_note = first_row.locator(".inline-help", has_text="Note for crew member")
+    private_note.focus()
+    assert private_note.locator("[role=tooltip]").is_visible()
+    _assert_no_horizontal_overflow(page)
     assert not errors
     context.close()
 
