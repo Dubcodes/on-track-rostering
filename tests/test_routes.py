@@ -3955,6 +3955,11 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
     assert "Staff directory" in crew_html
     assert f'href="/manage/crew/{person_id}"' in crew_html
     assert "capability-table" not in crew_html
+    filtered_crew = manager.get(
+        f"/manage/crew?region_id={region_id}&q=Amy&account_type=&crew_group_id=&position_id="
+    )
+    assert filtered_crew.status_code == 200
+    assert f'href="/manage/crew/{person_id}"' in filtered_crew.text
     person_detail = manager.get(f"/manage/crew/{person_id}")
     assert person_detail.status_code == 200
     assert f"Person {person_id}" in person_detail.text

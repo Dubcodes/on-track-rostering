@@ -30,6 +30,7 @@ from app.auth.service import (
 from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Lifecycle, Role
+from app.core.forms import optional_uuid
 from app.core.time import utcnow
 from app.identity.models import Invitation, Person, RoleGrant, TrustedDevice, User, UserPersonLink
 from app.notices.models import NoticePublishingScope, NoticePublishingScopeRegion
@@ -85,14 +86,16 @@ def crew_management(
     region_id: uuid.UUID | None = None,
     q: str = "",
     account_type: str = "",
-    crew_group_id: uuid.UUID | None = None,
-    position_id: uuid.UUID | None = None,
+    crew_group_id: str = "",
+    position_id: str = "",
     show_archived: bool = False,
     db: Session = Depends(get_db),
 ):
     regions = _regions(db, request)
     if not regions:
         raise HTTPException(403, "Regional roster authority required")
+    selected_crew_group_id = optional_uuid(crew_group_id, "Crew Group")
+    selected_position_id = optional_uuid(position_id, "Position")
     selected = next((region for region in regions if region.id == region_id), regions[0])
     statement = select(Person).where(Person.home_region_id == selected.id)
     if not show_archived:
@@ -113,19 +116,19 @@ def crew_management(
                     .where(RoleGrant.role == account_type, RoleGrant.status == "ACTIVE")
                 )
             )
-    if crew_group_id:
+    if selected_crew_group_id:
         statement = statement.where(
             Person.id.in_(
                 select(PersonCrewGroup.person_id).where(
-                    PersonCrewGroup.crew_group_id == crew_group_id
+                    PersonCrewGroup.crew_group_id == selected_crew_group_id
                 )
             )
         )
-    if position_id:
+    if selected_position_id:
         statement = statement.where(
             Person.id.in_(
                 select(PositionCapability.person_id).where(
-                    PositionCapability.base_position_id == position_id,
+                    PositionCapability.base_position_id == selected_position_id,
                     PositionCapability.signal.in_([
                         CapabilitySignal.WORKED.value,
                         CapabilitySignal.EMPLOYEE_ALLOW.value,
@@ -248,8 +251,8 @@ def crew_management(
             region_names={region.id: region.name for region in regions},
             query=q,
             account_type=account_type,
-            selected_crew_group_id=crew_group_id,
-            selected_position_id=position_id,
+            selected_crew_group_id=selected_crew_group_id,
+            selected_position_id=selected_position_id,
             filter_account_types=[role.value for role in Role],
             filter_groups=list(db.scalars(select(CrewGroup).where(CrewGroup.lifecycle == "ACTIVE").order_by(CrewGroup.name))),
             filter_positions=list(db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name))),
