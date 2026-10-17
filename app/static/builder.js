@@ -28,12 +28,30 @@
   const vehicleOptionFor = (row, vehicleId) => row.querySelector(
     `[data-picker-kind="vehicle"] [data-picker-option][data-value="${CSS.escape(vehicleId)}"]`,
   );
-  const applyWithVehicleCapacity = (picker, personId, vehicleOption, apply) => {
+  const proposedOccupantsForVehicle = (vehicleId, personId, replacingRow) => {
+    const occupants = occupantsForVehicle(vehicleId);
+    const proposed = [...occupants];
+    const replacedPersonId = replacingRow?.querySelector("[data-person-value]").value || "";
+    if (replacedPersonId && replacedPersonId !== personId) {
+      const remainsInVehicle = [...list.querySelectorAll("[data-assignment-row]")].some((row) =>
+        row !== replacingRow
+        && row.querySelector("[data-person-value]").value === replacedPersonId
+        && row.querySelector("[data-vehicle-value]").value === vehicleId
+      );
+      const replacedIndex = proposed.indexOf(replacedPersonId);
+      if (!remainsInVehicle && replacedIndex >= 0) proposed.splice(replacedIndex, 1);
+    }
+    if (personId && !proposed.includes(personId)) proposed.push(personId);
+    return {occupants, proposed};
+  };
+  const applyWithVehicleCapacity = (picker, personId, vehicleOption, replacingRow, apply) => {
     const vehicleId = vehicleOption?.dataset.value || "";
     const capacity = Number(vehicleOption?.dataset.capacity || 0);
-    const occupants = vehicleId ? occupantsForVehicle(vehicleId) : [];
+    const {occupants, proposed} = vehicleId
+      ? proposedOccupantsForVehicle(vehicleId, personId, replacingRow)
+      : {occupants: [], proposed: []};
     if (!personId || !vehicleId || capacity <= 0
-      || occupants.includes(personId) || occupants.length < capacity) {
+      || proposed.length <= occupants.length || proposed.length <= capacity) {
       apply();
       return;
     }
@@ -418,6 +436,7 @@
       picker,
       option.dataset.value,
       vehicleOptionFor(targetRow, vehicleId),
+      targetRow,
       apply,
     );
   };
@@ -425,7 +444,7 @@
     if (picker.dataset.pickerKind === "vehicle" && option.dataset.value && option.dataset.capacity) {
       const target = picker.closest("[data-assignment-row]");
       const personId = target.querySelector("[data-person-value]").value;
-      applyWithVehicleCapacity(picker, personId, option, () => applyPersonChoice(picker, option));
+      applyWithVehicleCapacity(picker, personId, option, target, () => applyPersonChoice(picker, option));
       return;
     }
     if (picker.dataset.pickerKind === "person" && option.dataset.value) {
@@ -472,6 +491,7 @@
         picker,
         option.dataset.value,
         vehicleOptionFor(row, vehicleId),
+        row,
         () => applyPersonChoice(picker, option),
       );
       return;

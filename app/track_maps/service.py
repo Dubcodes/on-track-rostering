@@ -20,6 +20,7 @@ from app.external_calendar.http import SourceHTTPClient
 
 LOVE_RACING_ORIGIN = "https://loveracing.nz"
 MAX_MANUAL_MAP_BYTES = 15 * 1024 * 1024
+MAP_HEADER_BYTES = 64 * 1024
 COURSES: dict[str, tuple[str, str]] = {
     "rotorua": ("/RaceInfo/Clubs-And-Courses/1/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Arawa%20Park%20copy.jpg"),
     "avondale": ("/RaceInfo/Clubs-And-Courses/4/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Avondale%202.jpg"),
@@ -175,21 +176,48 @@ def _available_map(
     if not path:
         return None
     try:
-        content = path.read_bytes()
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            header = stream.read(MAP_HEADER_BYTES)
     except OSError:
         return None
-    content_type, _extension = image_kind(content)
-    width, height = image_dimensions(content)
-    if not content_type or width < 200 or height < 200:
+    content_type, _extension = image_kind(header)
+    width, height = image_dimensions(header)
+    expected_type = getattr(row, f"{prefix}_content_type")
+    expected_width = getattr(row, f"{prefix}_width")
+    expected_height = getattr(row, f"{prefix}_height")
+    expected_bytes = getattr(row, f"{prefix}_bytes")
+    if (
+        not content_type
+        or width < 200
+        or height < 200
+        or expected_type != content_type
+        or expected_width != width
+        or expected_height != height
+        or expected_bytes != size
+    ):
         return None
     return {
         "file_name": file_name,
         "content_type": content_type,
         "width": width,
         "height": height,
-        "bytes": len(content),
+        "bytes": size,
         "manual": manual,
     }
+
+
+def _fully_valid_map(row: TrackMap, prefix: str) -> bool:
+    available = _available_map(row, prefix, manual=prefix == "manual")
+    path = map_path(str(available["file_name"])) if available else None
+    if not path:
+        return False
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return False
+    expected_hash = getattr(row, f"{prefix}_hash")
+    return not expected_hash or hashlib.sha256(content).hexdigest() == expected_hash
 
 
 def effective_map(row: TrackMap | None) -> dict[str, object] | None:
@@ -282,7 +310,7 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         _area, _short, size, content, content_type, extension, source_url = max(images)
         width, height = image_dimensions(content)
         previous_score = (row.automatic_width or 0) * (row.automatic_height or 0)
-        if _available_map(row, "automatic", manual=False) and previous_score > width * height:
+        if _fully_valid_map(row, "automatic") and previous_score > width * height:
             row.automatic_checked_at = now
             row.automatic_status = "AVAILABLE"
             row.automatic_error = None
@@ -303,7 +331,7 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         row.automatic_error = None
     except Exception as exc:
         row.automatic_checked_at = now
-        automatic_available = bool(_available_map(row, "automatic", manual=False))
+        automatic_available = _fully_valid_map(row, "automatic")
         row.automatic_status = "AVAILABLE" if automatic_available else "ERROR"
         row.automatic_error = f"{type(exc).__name__}: {str(exc)[:400]}"
     return row

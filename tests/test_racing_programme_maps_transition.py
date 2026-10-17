@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import struct
 from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -390,18 +391,19 @@ def test_manual_map_precedes_automatic_and_reset_restores_it(db, monkeypatch, tm
     map_directory = tmp_path.resolve()
     monkeypatch.setattr("app.track_maps.service._directory", lambda: map_directory)
     _user, _region, track = _foundation(db)
+    automatic = _png(400, 300)
     row = TrackMap(
         track_id=track.id,
         automatic_file_name="auto.png",
         automatic_content_type="image/png",
         automatic_width=400,
         automatic_height=300,
-        automatic_bytes=100,
+        automatic_bytes=len(automatic),
         automatic_status="AVAILABLE",
     )
     db.add(row)
     db.flush()
-    (map_directory / "auto.png").write_bytes(_png(400, 300))
+    (map_directory / "auto.png").write_bytes(automatic)
     saved = save_manual_map(db, track, _png())
     assert effective_map(saved)["manual"] is True  # type: ignore[index]
     assert (map_directory / saved.manual_file_name).is_file()
@@ -436,17 +438,18 @@ def test_missing_map_files_are_not_effective_and_manual_override_does_not_fall_b
     map_directory = tmp_path.resolve()
     monkeypatch.setattr("app.track_maps.service._directory", lambda: map_directory)
     _user, _region, track = _foundation(db)
+    automatic = _png()
     row = TrackMap(
         track_id=track.id,
         automatic_file_name="auto.png",
         automatic_content_type="image/png",
         automatic_width=640,
         automatic_height=480,
-        automatic_bytes=100,
+        automatic_bytes=len(automatic),
         automatic_status="AVAILABLE",
     )
     assert effective_map(row) is None
-    (map_directory / "auto.png").write_bytes(_png())
+    (map_directory / "auto.png").write_bytes(automatic)
     assert effective_map(row)["manual"] is False  # type: ignore[index]
     row.has_manual_override = True
     row.manual_file_name = "missing-manual.png"
@@ -459,19 +462,20 @@ def test_refresh_failure_retains_only_a_usable_automatic_cache(
     map_directory = tmp_path.resolve()
     monkeypatch.setattr("app.track_maps.service._directory", lambda: map_directory)
     _user, _region, track = _foundation(db)
+    automatic = _png()
     row = TrackMap(
         track_id=track.id,
         automatic_file_name="last-good.png",
         automatic_content_type="image/png",
         automatic_width=640,
         automatic_height=480,
-        automatic_bytes=100,
+        automatic_bytes=len(automatic),
         automatic_status="AVAILABLE",
     )
     db.add(row)
     db.flush()
     cached = map_directory / "last-good.png"
-    cached.write_bytes(_png())
+    cached.write_bytes(automatic)
 
     class FailingClient:
         def get(self, _url: str, *, accept: str):  # type: ignore[no-untyped-def]
@@ -484,6 +488,37 @@ def test_refresh_failure_retains_only_a_usable_automatic_cache(
     refreshed = refresh_automatic_map(db, track, FailingClient())  # type: ignore[arg-type]
     assert refreshed.automatic_status == "ERROR"
     assert effective_map(refreshed) is None
+
+
+def test_effective_map_uses_bounded_header_and_rejects_metadata_mismatch(
+    db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    map_directory = tmp_path.resolve()
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: map_directory)
+    _user, _region, track = _foundation(db)
+    content = _png() + (b"padding" * 20_000)
+    path = map_directory / "bounded.png"
+    path.write_bytes(content)
+    row = TrackMap(
+        track_id=track.id,
+        automatic_file_name=path.name,
+        automatic_content_type="image/png",
+        automatic_width=640,
+        automatic_height=480,
+        automatic_bytes=len(content),
+        automatic_status="AVAILABLE",
+    )
+
+    def fail_full_read(_path: Path) -> bytes:
+        raise AssertionError("ordinary map availability must not load the whole file")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_full_read)
+    assert effective_map(row)["bytes"] == len(content)  # type: ignore[index]
+    row.automatic_bytes += 1
+    assert effective_map(row) is None
+    row.automatic_bytes -= 1
+    path.write_bytes(b"not an image" + (b"x" * (len(content) - 12)))
+    assert effective_map(row) is None
 
 
 def _capture() -> str:
