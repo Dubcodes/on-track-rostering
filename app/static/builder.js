@@ -25,6 +25,28 @@
     vehicleAssignmentOrder.set(vehicleId, ordered);
     return ordered;
   };
+  const vehicleOptionFor = (row, vehicleId) => row.querySelector(
+    `[data-picker-kind="vehicle"] [data-picker-option][data-value="${CSS.escape(vehicleId)}"]`,
+  );
+  const applyWithVehicleCapacity = (picker, personId, vehicleOption, apply) => {
+    const vehicleId = vehicleOption?.dataset.value || "";
+    const capacity = Number(vehicleOption?.dataset.capacity || 0);
+    const occupants = vehicleId ? occupantsForVehicle(vehicleId) : [];
+    if (!personId || !vehicleId || capacity <= 0
+      || occupants.includes(personId) || occupants.length < capacity) {
+      apply();
+      return;
+    }
+    pendingVehicleConflict = {
+      apply,
+      vehicleId,
+      lastPersonId: occupants[occupants.length - 1],
+    };
+    capacityDialog.querySelector("[data-capacity-message]").textContent = `${vehicleOption.dataset.label} has ${capacity} seats including the driver and is already full.`;
+    closePicker(picker);
+    capacityDialog.showModal();
+    capacityDialog.querySelector("[data-capacity-kick]").focus();
+  };
   const viewport = () => {
     const visual = window.visualViewport;
     return {
@@ -313,15 +335,33 @@
       if (option.dataset.value) loadCrewPicker(row, option.dataset.value);
       renumberRepeatedPositions();
     } else if (picker.dataset.pickerKind === "person") {
+      const vehicleId = row.querySelector("[data-vehicle-value]").value;
+      const personId = option.dataset.value || "";
+      const alreadyInVehicle = vehicleId
+        ? occupantsForVehicle(vehicleId).includes(personId)
+        : false;
       row.querySelector("[data-person-value]").value = option.dataset.value || "";
       row.querySelector("[data-assignment-state]").value = option.dataset.state || "ASSIGNED";
       const warning = row.querySelector("[data-assignment-leave]");
       warning.textContent = option.dataset.leaveLabel || "";
       warning.hidden = !option.dataset.leaveLabel;
+      projectPersonTravel(row);
+      if (vehicleId && personId) {
+        const ordered = occupantsForVehicle(vehicleId);
+        vehicleAssignmentOrder.set(
+          vehicleId,
+          alreadyInVehicle
+            ? ordered
+            : [...ordered.filter((occupantId) => occupantId !== personId), personId],
+        );
+      }
     } else if (picker.dataset.pickerKind === "vehicle") {
       const personId = row.querySelector("[data-person-value]").value;
       const previousVehicleId = row.querySelector("[data-vehicle-value]").value;
       const mode = option.dataset.transportMode || (option.dataset.value ? "VEHICLE" : "UNASSIGNED");
+      const alreadyInVehicle = mode === "VEHICLE" && personId
+        ? occupantsForVehicle(option.dataset.value).includes(personId)
+        : false;
       row.querySelector("[data-vehicle-value]").value = mode === "VEHICLE" ? option.dataset.value || "" : "";
       row.querySelector("[data-transport-value]").value = mode;
       if (mode !== "CUSTOM") row.querySelector('input[name="custom_transport_text"]').value = "";
@@ -337,7 +377,9 @@
         const ordered = occupantsForVehicle(option.dataset.value);
         vehicleAssignmentOrder.set(
           option.dataset.value,
-          [...ordered.filter((occupantId) => occupantId !== personId), personId],
+          alreadyInVehicle
+            ? ordered
+            : [...ordered.filter((occupantId) => occupantId !== personId), personId],
         );
       }
     }
@@ -358,30 +400,33 @@
   const finishConflict = (action) => {
     if (!pendingConflict) return;
     const {picker, option, existingRow} = pendingConflict;
-    if (action === "move" && existingRow) resetPersonRow(existingRow);
-    if (action === "keep") {
-      const targetRow = picker.closest("[data-assignment-row]");
-      copyPersonTravel(existingRow, targetRow);
-    }
-    if (action !== "cancel") applyPersonChoice(picker, option);
     pendingConflict = null;
     conflictDialog.close();
+    if (action === "cancel") return;
+    const targetRow = picker.closest("[data-assignment-row]");
+    const apply = () => {
+      if (action === "move" && existingRow) resetPersonRow(existingRow);
+      if (action === "keep") copyPersonTravel(existingRow, targetRow);
+      applyPersonChoice(picker, option);
+    };
+    if (action === "keep") {
+      apply();
+      return;
+    }
+    const vehicleId = targetRow.querySelector("[data-vehicle-value]").value;
+    applyWithVehicleCapacity(
+      picker,
+      option.dataset.value,
+      vehicleOptionFor(targetRow, vehicleId),
+      apply,
+    );
   };
   const choose = (picker, option) => {
     if (picker.dataset.pickerKind === "vehicle" && option.dataset.value && option.dataset.capacity) {
       const target = picker.closest("[data-assignment-row]");
       const personId = target.querySelector("[data-person-value]").value;
-      const capacity = Number(option.dataset.capacity);
-      const occupants = occupantsForVehicle(option.dataset.value)
-        .filter((occupantId) => occupantId !== personId);
-      if (personId && capacity > 0 && occupants.length >= capacity) {
-        pendingVehicleConflict = {picker, option, lastPersonId: occupants[occupants.length - 1]};
-        capacityDialog.querySelector("[data-capacity-message]").textContent = `${option.dataset.label} has ${capacity} seats including the driver and is already full.`;
-        closePicker(picker);
-        capacityDialog.showModal();
-        capacityDialog.querySelector("[data-capacity-kick]").focus();
-        return;
-      }
+      applyWithVehicleCapacity(picker, personId, option, () => applyPersonChoice(picker, option));
+      return;
     }
     if (picker.dataset.pickerKind === "person" && option.dataset.value) {
       const row = picker.closest("[data-assignment-row]");
@@ -420,6 +465,17 @@
         return;
       }
     }
+    if (picker.dataset.pickerKind === "person" && option.dataset.value) {
+      const row = picker.closest("[data-assignment-row]");
+      const vehicleId = row.querySelector("[data-vehicle-value]").value;
+      applyWithVehicleCapacity(
+        picker,
+        option.dataset.value,
+        vehicleOptionFor(row, vehicleId),
+        () => applyPersonChoice(picker, option),
+      );
+      return;
+    }
     applyPersonChoice(picker, option);
   };
   conflictDialog?.querySelector("[data-conflict-move]")?.addEventListener("click", () => finishConflict("move"));
@@ -428,7 +484,8 @@
   conflictDialog?.addEventListener("cancel", (event) => { event.preventDefault(); finishConflict("cancel"); });
   const finishVehicleConflict = (action) => {
     if (!pendingVehicleConflict) return;
-    const {picker, option, lastPersonId} = pendingVehicleConflict;
+    const {apply, vehicleId, lastPersonId} = pendingVehicleConflict;
+    pendingVehicleConflict = null;
     if (action === "kick") {
       list.querySelectorAll("[data-assignment-row]").forEach((row) => {
         if (row.querySelector("[data-person-value]").value !== lastPersonId) return;
@@ -441,12 +498,11 @@
         input.dataset.selectedLabel = input.value;
       });
       vehicleAssignmentOrder.set(
-        option.dataset.value,
-        occupantsForVehicle(option.dataset.value).filter((personId) => personId !== lastPersonId),
+        vehicleId,
+        occupantsForVehicle(vehicleId).filter((personId) => personId !== lastPersonId),
       );
     }
-    if (action !== "cancel") applyPersonChoice(picker, option);
-    pendingVehicleConflict = null;
+    if (action !== "cancel") apply();
     capacityDialog.close();
   };
   capacityDialog?.querySelector("[data-capacity-kick]")?.addEventListener("click", () => finishVehicleConflict("kick"));
@@ -592,7 +648,6 @@
           .filter(Boolean),
       );
       let filled = 0;
-      const unknownEmployment = new Set();
       shuffled(targets).forEach((row) => {
         const picker = row.querySelector('[data-picker-kind="person"]');
         const localGroup = picker.querySelector('.search-picker-group[data-local="1"]');
@@ -606,9 +661,6 @@
               && !assigned.has(option.dataset.value)
             ),
         );
-        candidates
-          .filter((option) => option.dataset.diceEmploymentKnown !== "1")
-          .forEach((option) => unknownEmployment.add(option.dataset.value));
         const bestFamiliarity = candidates.reduce(
           (best, option) => Math.max(best, Number(option.dataset.diceFamiliarity || 0)),
           0,
@@ -622,10 +674,10 @@
         filled += 1;
       });
       const remaining = targets.length - filled;
-      const limitation = unknownEmployment.size
-        ? ` · Contractor status could not be verified for ${unknownEmployment.size} unlinked crew`
-        : "";
-      feedback.textContent = `Filled ${filled} of ${targets.length} unassigned positions · ${remaining} still need crew${limitation}`;
+      const dateAdvisory = form.querySelector('[name="work_date"]')?.value
+        ? ""
+        : " · Date not set — leave and scheduling conflicts have not been checked.";
+      feedback.textContent = `Filled ${filled} of ${targets.length} unassigned positions · ${remaining} still need crew${dateAdvisory}`;
     } finally {
       button.disabled = false;
     }

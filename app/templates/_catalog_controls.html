@@ -26,11 +26,12 @@
 </section>
 {% endmacro %}
 
-{% macro track_controls(tracks, archived_tracks, regions, csrf_token, map_by_track={}) %}
+{% macro track_controls(tracks, archived_tracks, regions, csrf_token, map_by_track={}, effective_map_by_track={}) %}
 <section class="panel" id="tracks">
   <div class="section-heading"><div><p class="eyebrow">Venue master data</p><h2>Active Tracks</h2></div></div>
   {% for track in tracks %}
   {% set track_map = map_by_track.get(track.id) %}
+  {% set available_map = effective_map_by_track.get(track.id) %}
   <details class="control-record" id="track-{{ track.id }}"><summary><span><i class="track-dot" data-presentation="{{ track.palette_slot|track_token }}"></i> <strong>{{ track.name }}</strong></span><span class="badge">Active</span></summary>
     <form method="post" action="/manage/catalog/tracks/{{ track.id }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ACTIVE">
@@ -41,15 +42,20 @@
     </form>
     <section class="map-admin-controls">
       <h3>Track map</h3>
-      {% if track_map and track_map.has_manual_override %}
+      {% if track_map and track_map.has_manual_override and available_map %}
         <p><span class="badge">Manual override</span> {{ track_map.manual_width }}×{{ track_map.manual_height }} · {{ track_map.manual_updated_at|display_datetime }}</p>
         <img class="track-map-admin-preview" src="/track-maps/{{ track.id }}" alt="{{ track.name }} track map preview" loading="lazy">
         <a class="button secondary" href="/track-maps/{{ track.id }}" target="_blank">View map</a>
         <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/reset"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Revert to Love Racing map</button></form>
-      {% elif track_map and track_map.automatic_file_name %}
+      {% elif track_map and track_map.has_manual_override %}
+        <p class="muted"><span class="badge">Manual override</span> Map file unavailable. Upload a replacement or deliberately revert to the Love Racing map.</p>
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/reset"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Revert to Love Racing map</button></form>
+      {% elif available_map %}
         <p><span class="badge">Love Racing map</span> {{ track_map.automatic_width }}×{{ track_map.automatic_height }} · checked {{ track_map.automatic_checked_at|display_datetime }}</p>
         <img class="track-map-admin-preview" src="/track-maps/{{ track.id }}" alt="{{ track.name }} track map preview" loading="lazy">
         <a class="button secondary" href="/track-maps/{{ track.id }}" target="_blank">View map</a>
+      {% elif track_map and track_map.automatic_file_name %}
+        <p class="muted">Automatic map file unavailable.{% if track_map.automatic_error %} {{ track_map.automatic_error }}{% endif %}</p>
       {% else %}
         <p class="muted">Automatic {% if track_map %}{{ track_map.automatic_status|lower }}{% else %}unchecked{% endif %}{% if track_map and track_map.automatic_error %} · {{ track_map.automatic_error }}{% endif %}</p>
       {% endif %}

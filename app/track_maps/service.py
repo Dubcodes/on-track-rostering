@@ -164,22 +164,39 @@ def _directory() -> Path:
     return directory.resolve()
 
 
-def effective_map(row: TrackMap | None) -> dict[str, object] | None:
-    if row is None:
-        return None
-    manual = bool(row.has_manual_override and row.manual_file_name)
-    prefix = "manual" if manual else "automatic"
+def _available_map(
+    row: TrackMap,
+    prefix: str,
+    *,
+    manual: bool,
+) -> dict[str, object] | None:
     file_name = getattr(row, f"{prefix}_file_name")
-    if not file_name:
+    path = map_path(file_name or "")
+    if not path:
+        return None
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return None
+    content_type, _extension = image_kind(content)
+    width, height = image_dimensions(content)
+    if not content_type or width < 200 or height < 200:
         return None
     return {
         "file_name": file_name,
-        "content_type": getattr(row, f"{prefix}_content_type"),
-        "width": getattr(row, f"{prefix}_width"),
-        "height": getattr(row, f"{prefix}_height"),
-        "bytes": getattr(row, f"{prefix}_bytes"),
+        "content_type": content_type,
+        "width": width,
+        "height": height,
+        "bytes": len(content),
         "manual": manual,
     }
+
+
+def effective_map(row: TrackMap | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    manual = bool(row.has_manual_override)
+    return _available_map(row, "manual" if manual else "automatic", manual=manual)
 
 
 def map_path(file_name: str) -> Path | None:
@@ -265,7 +282,7 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         _area, _short, size, content, content_type, extension, source_url = max(images)
         width, height = image_dimensions(content)
         previous_score = (row.automatic_width or 0) * (row.automatic_height or 0)
-        if row.automatic_file_name and previous_score > width * height:
+        if _available_map(row, "automatic", manual=False) and previous_score > width * height:
             row.automatic_checked_at = now
             row.automatic_status = "AVAILABLE"
             row.automatic_error = None
@@ -286,7 +303,8 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         row.automatic_error = None
     except Exception as exc:
         row.automatic_checked_at = now
-        row.automatic_status = "AVAILABLE" if row.automatic_file_name else "ERROR"
+        automatic_available = bool(_available_map(row, "automatic", manual=False))
+        row.automatic_status = "AVAILABLE" if automatic_available else "ERROR"
         row.automatic_error = f"{type(exc).__name__}: {str(exc)[:400]}"
     return row
 
@@ -296,5 +314,6 @@ def due_tracks(db: Session) -> list[Track]:
     return [
         track
         for track in db.scalars(select(Track).where(Track.lifecycle == "ACTIVE"))
-        if canonical_track_name(track.name) in COURSES and map_refresh_due(rows.get(track.id))
+        if canonical_track_name(track.map_reference or track.name) in COURSES
+        and map_refresh_due(rows.get(track.id))
     ]

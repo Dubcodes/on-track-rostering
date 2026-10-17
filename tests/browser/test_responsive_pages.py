@@ -2389,6 +2389,84 @@ def test_builder_vehicle_capacity_choices(browser_site) -> None:  # type: ignore
     context.close()
 
 
+def test_builder_capacity_applies_when_person_is_selected_after_vehicle(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + f"/manage/workdays/{values['workday_id']}")
+
+    occupied = page.locator(
+        f'[data-assignment-row]:has([data-person-value][value="{values["browser_person_id"]}"])'
+    )
+    vehicle_picker = occupied.locator('[data-picker-kind="vehicle"]')
+    vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
+    vehicle_picker.locator(
+        f'[data-picker-option][data-value="{values["vehicle_id"]}"]'
+    ).click()
+
+    page.get_by_role("button", name="Add position").click()
+    target = page.locator("[data-assignment-row]").last
+    position_picker = target.locator('[data-picker-kind="position"]')
+    position_picker.locator("[data-picker-input]").click()
+    position_picker.locator(
+        f'[data-picker-option][data-value="{values["head_on_position_id"]}"]'
+    ).click()
+    target_vehicle = target.locator('[data-picker-kind="vehicle"]')
+    target_vehicle.locator("[data-picker-input]").fill("Browser Vehicle")
+    target_vehicle.locator(
+        f'[data-picker-option][data-value="{values["vehicle_id"]}"]'
+    ).click()
+    assert target.locator("[data-person-value]").input_value() == ""
+    assert target.locator("[data-vehicle-value]").input_value() == values["vehicle_id"]
+
+    def choose_existing_person() -> None:
+        person_picker = target.locator('[data-picker-kind="person"]')
+        person_picker.locator("[data-picker-input]").fill("Browser Position Aware")
+        person_picker.locator(
+            f'[data-picker-option][data-value="{values["position_aware_person_id"]}"]'
+        ).click()
+        page.locator("[data-assignment-conflict-dialog]").get_by_role(
+            "button", name="Move to this position"
+        ).click()
+
+    original = page.locator(
+        f'[data-assignment-row]:has([data-person-value][value="{values["position_aware_person_id"]}"])'
+    )
+    capacity_dialog = page.locator("[data-vehicle-capacity-dialog]")
+    choose_existing_person()
+    assert capacity_dialog.is_visible()
+    capacity_dialog.get_by_role("button", name="Cancel").click()
+    assert target.locator("[data-person-value]").input_value() == ""
+    assert original.locator("[data-person-value]").input_value() == values["position_aware_person_id"]
+
+    choose_existing_person()
+    capacity_dialog.get_by_role("button", name="Keep", exact=True).click()
+    assert target.locator("[data-person-value]").input_value() == values["position_aware_person_id"]
+    assert original.locator("[data-person-value]").input_value() == ""
+
+    page.get_by_role("button", name="Add position").click()
+    duplicate = page.locator("[data-assignment-row]").last
+    duplicate_position = duplicate.locator('[data-picker-kind="position"]')
+    duplicate_position.locator("[data-picker-input]").click()
+    duplicate_position.locator(
+        f'[data-picker-option][data-value="{values["head_on_position_id"]}"]'
+    ).click()
+    duplicate_person = duplicate.locator('[data-picker-kind="person"]')
+    duplicate_person.locator("[data-picker-input]").fill("Browser Position Aware")
+    duplicate_person.locator(
+        f'[data-picker-option][data-value="{values["position_aware_person_id"]}"]'
+    ).click()
+    page.locator("[data-assignment-conflict-dialog]").get_by_role(
+        "button", name="Keep both"
+    ).click()
+    assert not capacity_dialog.is_visible()
+    assert duplicate.locator("[data-vehicle-value]").input_value() == values["vehicle_id"]
+    assert not errors, errors
+    context.close()
+
+
 @pytest.mark.parametrize("width", [1280, 320])
 def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
@@ -3145,6 +3223,37 @@ def test_dice_fills_only_distinct_available_capable_local_crew_in_the_form(brows
     )
     assert non_get_requests == []
     assert page.url.endswith("/manage/workdays/new")
+    assert not errors
+    context.close()
+
+
+def test_dice_without_date_reports_unchecked_conflicts(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/manage/workdays/new")
+    page.locator("[data-assignment-list]").evaluate("element => element.replaceChildren()")
+    page.locator('select[name="region_id"]').select_option(values["region_id"])
+    assert page.locator('input[name="work_date"]').input_value() == ""
+    page.get_by_role("button", name="Add position").click()
+    row = page.locator("[data-assignment-row]").last
+    picker = row.locator('[data-picker-kind="position"]')
+    picker.locator("[data-picker-input]").click()
+    picker.locator(
+        f'[data-picker-option][data-value="{values["head_on_position_id"]}"]'
+    ).click()
+    button = page.get_by_role(
+        "button", name=re.compile("Randomly fill unassigned Positions")
+    )
+    button.click()
+    page.wait_for_function(
+        "() => !document.querySelector('[data-random-fill]').disabled"
+    )
+    feedback = page.locator("[data-dice-feedback]").inner_text()
+    assert "Date not set — leave and scheduling conflicts have not been checked." in feedback
+    assert "Contractor status could not be verified" not in feedback
     assert not errors
     context.close()
 

@@ -29,7 +29,7 @@ from app.auth.policy import actor_for
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
 from app.branding.service import MAX_FAVICON_BYTES
-from app.catalog.models import BasePosition, CrewGroup, PositionPreset, Region, Track, Vehicle
+from app.catalog.models import BasePosition, CrewGroup, PositionPreset, Region, Track, TrackMap, Vehicle
 from app.core.config import get_settings
 from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
@@ -1026,6 +1026,122 @@ def _png_bytes(width: int, height: int, *, red: int = 18) -> bytes:
     scanline = b"\x00" + bytes((red, 59, 53, 255)) * width
     pixels = zlib.compress(scanline * height)
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
+
+
+def test_published_day_falls_back_when_map_metadata_points_to_missing_file(
+    routed_db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, position_id, person_id) = routed_db
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: tmp_path.resolve())
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        person = db.get(Person, person_id)
+        workday = Workday(region_id=region_id, created_by_user_id=manager.id)
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 11, 8),
+            track_id=track_id,
+            track_name_snapshot="Ellerslie",
+            title="Missing map day",
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+            published_at=utcnow(),
+        )
+        db.add(revision)
+        db.flush()
+        db.add_all(
+            [
+                Assignment(
+                    revision_id=revision.id,
+                    base_position_id=position_id,
+                    display_name_snapshot="CCU",
+                    person_id=person.id,
+                    person_name_snapshot=person.display_name,
+                    status="ASSIGNED",
+                ),
+                TrackMap(
+                    track_id=track_id,
+                    automatic_file_name="missing.png",
+                    automatic_content_type="image/png",
+                    automatic_width=640,
+                    automatic_height=480,
+                    automatic_bytes=100,
+                    automatic_status="AVAILABLE",
+                ),
+            ]
+        )
+        workday.current_published_revision_id = revision.id
+        db.commit()
+        workday_id = workday.id
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    page = employee.get(f"/day/{workday_id}")
+    assert page.status_code == 200
+    assert "Map unavailable." in page.text
+    assert f'/track-maps/{track_id}' not in page.text
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+    catalog = manager.get("/manage/catalog")
+    assert "Automatic map file unavailable." in catalog.text
+    assert f'src="/track-maps/{track_id}"' not in catalog.text
+    with factory() as db:
+        row = db.get(TrackMap, track_id)
+        row.has_manual_override = True
+        row.manual_file_name = "missing-manual.png"
+        row.manual_content_type = "image/png"
+        row.manual_width = 640
+        row.manual_height = 480
+        row.manual_bytes = 100
+        db.commit()
+    catalog = manager.get("/manage/catalog")
+    assert "Map file unavailable. Upload a replacement" in catalog.text
+    assert f'src="/track-maps/{track_id}"' not in catalog.text
+
+
+def test_admin_can_create_regionless_person_but_manager_cannot(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ids = routed_db
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin@example.test", "99887766")
+    created = admin.post(
+        "/manage/crew",
+        data={
+            "display_name": "Region Pending",
+            "email": "pending@example.com",
+            "region_id": "",
+            "csrf_token": admin_csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created.status_code == 303, created.text
+    assert created.headers["location"] == "/manage/crew#needs-setup"
+    with factory() as db:
+        person = db.scalar(select(Person).where(Person.email == "pending@example.com"))
+        assert person is not None and person.home_region_id is None
+        person_id = person.id
+    queue = admin.get("/manage/crew")
+    assert f'/manage/crew/{person_id}' in queue.text
+    assert "Needs Region" in queue.text
+
+    manager = TestClient(app)
+    manager_csrf = _login(manager, "manager@example.test", "123456")
+    denied = manager.post(
+        "/manage/crew",
+        data={
+            "display_name": "Manager Regionless",
+            "email": "manager-regionless@example.com",
+            "region_id": "",
+            "csrf_token": manager_csrf,
+        },
+    )
+    assert denied.status_code == 400
+    with factory() as db:
+        assert db.scalar(
+            select(Person).where(Person.email == "manager-regionless@example.com")
+        ) is None
 
 
 def test_admin_credential_reset_route_and_public_completion_are_bounded(routed_db) -> None:  # type: ignore[no-untyped-def]

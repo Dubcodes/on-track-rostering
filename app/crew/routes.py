@@ -891,16 +891,20 @@ def create_crew_member(
     request: Request,
     display_name: str = Form(...),
     email: str = Form(""),
-    region_id: uuid.UUID = Form(...),
+    region_id: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    region = db.get(Region, region_id)
-    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+    parsed_region_id = optional_uuid(region_id, "Primary Region")
+    if parsed_region_id:
+        region = db.get(Region, parsed_region_id)
+        if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+            raise HTTPException(400, "Select an active region.")
+        if not can_administer_region(request.state.actor, parsed_region_id):
+            raise HTTPException(403, "Regional administration authority required.")
+    elif not request.state.actor.is_admin:
         raise HTTPException(400, "Select an active region.")
-    if not can_administer_region(request.state.actor, region_id):
-        raise HTTPException(403, "Regional administration authority required.")
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
         raise HTTPException(400, "Enter a crew name between 2 and 120 characters.")
@@ -908,7 +912,7 @@ def create_crew_member(
         clean_email = validated_email(email) if email.strip() else None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    person = Person(display_name=clean_name, email=clean_email, home_region_id=region_id)
+    person = Person(display_name=clean_name, email=clean_email, home_region_id=parsed_region_id)
     db.add(person)
     db.flush()
     record_audit(
@@ -917,11 +921,12 @@ def create_crew_member(
         "person",
         person.id,
         request.state.user.id,
-        region_id=region_id,
+        region_id=parsed_region_id,
         detail={"display_name": clean_name},
     )
     db.commit()
-    return RedirectResponse(f"/manage/crew?region_id={region_id}", status_code=303)
+    destination = f"/manage/crew?region_id={parsed_region_id}" if parsed_region_id else "/manage/crew#needs-setup"
+    return RedirectResponse(destination, status_code=303)
 
 
 @router.post("/{person_id}/profile")

@@ -30,10 +30,12 @@ from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.scheduler import scheduler_lock, scheduler_tick
 from app.track_maps.service import (
     canonical_track_name,
+    due_tracks,
     effective_map,
     image_candidates,
     image_dimensions,
     map_refresh_due,
+    refresh_automatic_map,
     reset_manual_map,
     save_manual_map,
     trusted_image_url,
@@ -399,6 +401,7 @@ def test_manual_map_precedes_automatic_and_reset_restores_it(db, monkeypatch, tm
     )
     db.add(row)
     db.flush()
+    (map_directory / "auto.png").write_bytes(_png(400, 300))
     saved = save_manual_map(db, track, _png())
     assert effective_map(saved)["manual"] is True  # type: ignore[index]
     assert (map_directory / saved.manual_file_name).is_file()
@@ -417,7 +420,70 @@ def test_track_map_refresh_is_quarterly_and_preserves_last_good_cache() -> None:
     )
     assert not map_refresh_due(row, now=checked_at + timedelta(days=89))
     assert map_refresh_due(row, now=checked_at + timedelta(days=90))
-    assert effective_map(row)["file_name"] == "last-good.png"  # type: ignore[index]
+
+
+def test_scheduled_map_discovery_uses_effective_course_override(db) -> None:  # type: ignore[no-untyped-def]
+    _user, _region, track = _foundation(db)
+    track.name = "Custom Northern Venue"
+    track.map_reference = "Te Rapa"
+    db.flush()
+    assert [candidate.id for candidate in due_tracks(db)] == [track.id]
+
+
+def test_missing_map_files_are_not_effective_and_manual_override_does_not_fall_back(
+    db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    map_directory = tmp_path.resolve()
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: map_directory)
+    _user, _region, track = _foundation(db)
+    row = TrackMap(
+        track_id=track.id,
+        automatic_file_name="auto.png",
+        automatic_content_type="image/png",
+        automatic_width=640,
+        automatic_height=480,
+        automatic_bytes=100,
+        automatic_status="AVAILABLE",
+    )
+    assert effective_map(row) is None
+    (map_directory / "auto.png").write_bytes(_png())
+    assert effective_map(row)["manual"] is False  # type: ignore[index]
+    row.has_manual_override = True
+    row.manual_file_name = "missing-manual.png"
+    assert effective_map(row) is None
+
+
+def test_refresh_failure_retains_only_a_usable_automatic_cache(
+    db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    map_directory = tmp_path.resolve()
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: map_directory)
+    _user, _region, track = _foundation(db)
+    row = TrackMap(
+        track_id=track.id,
+        automatic_file_name="last-good.png",
+        automatic_content_type="image/png",
+        automatic_width=640,
+        automatic_height=480,
+        automatic_bytes=100,
+        automatic_status="AVAILABLE",
+    )
+    db.add(row)
+    db.flush()
+    cached = map_directory / "last-good.png"
+    cached.write_bytes(_png())
+
+    class FailingClient:
+        def get(self, _url: str, *, accept: str):  # type: ignore[no-untyped-def]
+            raise SourceHTTPError(f"Source unavailable for {accept}.")
+
+    refreshed = refresh_automatic_map(db, track, FailingClient())  # type: ignore[arg-type]
+    assert refreshed.automatic_status == "AVAILABLE"
+    assert effective_map(refreshed)["file_name"] == "last-good.png"  # type: ignore[index]
+    cached.unlink()
+    refreshed = refresh_automatic_map(db, track, FailingClient())  # type: ignore[arg-type]
+    assert refreshed.automatic_status == "ERROR"
+    assert effective_map(refreshed) is None
 
 
 def _capture() -> str:

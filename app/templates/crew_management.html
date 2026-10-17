@@ -24,7 +24,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Name<input name="display_name" required maxlength="120"></label>
       <label>Work email<input name="email" type="email"></label>
-      <label>Primary Region<select name="region_id" required>{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+      <label>Primary Region<select name="region_id" {% if not actor.is_admin %}required{% endif %}>{% if actor.is_admin %}<option value="">No Primary Region yet</option>{% endif %}{% for region in regions %}<option value="{{ region.id }}" {% if not actor.is_admin and region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
       <button>Add Person</button>
     </form>
   </details>
