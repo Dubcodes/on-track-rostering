@@ -2400,6 +2400,10 @@ def test_builder_vehicle_capacity_replacement_uses_proposed_occupancy(browser_si
     occupied = page.locator(
         f'[data-assignment-row]:has([data-person-value][value="{values["browser_person_id"]}"])'
     )
+    occupied_assignment_id = occupied.locator('[name="assignment_id"]').input_value()
+    occupied = page.locator(
+        f'[data-assignment-row]:has([name="assignment_id"][value="{occupied_assignment_id}"])'
+    )
     vehicle_picker = occupied.locator('[data-picker-kind="vehicle"]')
     vehicle_picker.locator("[data-picker-input]").fill("Browser Vehicle")
     vehicle_picker.locator(
@@ -2440,6 +2444,10 @@ def test_builder_vehicle_replacement_checks_capacity_when_old_person_remains(bro
 
     occupied = page.locator(
         f'[data-assignment-row]:has([data-person-value][value="{values["browser_person_id"]}"])'
+    )
+    occupied_assignment_id = occupied.locator('[name="assignment_id"]').input_value()
+    occupied = page.locator(
+        f'[data-assignment-row]:has([name="assignment_id"][value="{occupied_assignment_id}"])'
     )
     position_id = occupied.locator("[data-position-value]").input_value()
     vehicle_picker = occupied.locator('[data-picker-kind="vehicle"]')
