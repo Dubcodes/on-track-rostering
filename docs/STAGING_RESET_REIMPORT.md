@@ -56,7 +56,7 @@ Perform these steps only after the preceding authorization and target verificati
 3. For a genuinely clean installation, recreate only `ontrack_staging_app_data` if that separate destructive choice was explicitly authorized. Otherwise restore/preserve its contents as planned.
 4. Leave production and every Re-Deputy resource untouched.
 5. Redeploy the selected immutable staging image to `staging_app` and `staging_scheduler`.
-6. Verify startup migration reaches sole Alembic head `e8b5d1f2a740` from a blank database.
+6. Verify startup migration reaches sole Alembic head `f7a2c9d4e610` from a blank database (or the newer sole head recorded for the deliberately selected qualified candidate).
 7. Restart the application a second time and verify the repeated migration/startup is clean and idempotent.
 
 ## Bootstrap

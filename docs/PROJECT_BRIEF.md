@@ -7,3 +7,5 @@ On Track—not Deputy, a calendar feed, or a racing website—is authoritative. 
 The foundation prioritises correctness, server-side authorization, immutable publication history, fast employee reads, graceful external-service isolation, responsive Month/Day screens, direct Windows/Python development against PostgreSQL, and a low-complexity Compose deployment on the separate production server.
 
 This is not generic HR software. It has no payroll, leave bureaucracy, single mandatory job title, or automatic break deduction.
+
+For the current implemented boundary, qualification evidence, unresolved decisions, and next-work guidance, start with [PROJECT_HANDOVER.md](PROJECT_HANDOVER.md). This brief states enduring product intent, not deployment status.

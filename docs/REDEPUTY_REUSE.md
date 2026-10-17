@@ -2,6 +2,8 @@
 
 Reference examined read-only at local commit `20d65d9` (`Re-Deputy 0.5.5`) on 2026-09-09. Its working tree remained clean. No Re-Deputy data, configuration, secret, generated file, volume, or Git metadata entered On Track.
 
+> **Historical design review.** This records what was learned from a read-only reference at the stated date. It is not the current specification or an authorization to reconnect to Re-Deputy. Use `PROJECT_HANDOVER.md`, `DOMAIN_RULES.md`, `ARCHITECTURE.md`, and `BUILD_STATUS.md` for current behavior and status.
+
 | Area | Classification | On Track treatment |
 |---|---|---|
 | Month/List/Day/Settings visual language | Directly reuse where appropriate, then adapt | Re-Deputy's calendar/list, compact cards, mobile navigation, holiday marker, theme picker, published-Day detail hierarchy and crew table are adapted onto On Track read models. No Deputy state is referenced. |

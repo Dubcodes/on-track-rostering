@@ -2,6 +2,8 @@
 
 Read this before changing the repository.
 
+- For a new development conversation, begin with `docs/PROJECT_HANDOVER.md`, then read the current source-of-truth documents it links. Historical journals are evidence, not current requirements.
+
 - On Track is the authoritative roster. Manual entry must always work and external racing data must never block rostering.
 - Never modify, configure, deploy, or connect to Re-Deputy. It is a read-only behavioral reference only. The bounded, manually supplied transition-capture importer may retain idempotency references in its isolated transition table, but no live Deputy dependency, credential, cookie, token, authentication flow, database, secret, volume, or production file belongs here.
 - This Windows development machine is Docker-free. Never run, start, repair, install, or configure Docker or Docker Desktop here. Keep Compose files solely for deployment on the separate Docker/Portainer server.

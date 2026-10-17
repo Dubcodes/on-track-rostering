@@ -17,6 +17,20 @@ On Track is authoritative for rostering. Racing sources provide planning evidenc
 
 For the deliberate blank-environment rehearsal, follow [STAGING_RESET_REIMPORT.md](STAGING_RESET_REIMPORT.md) before executing the qualification matrix.
 
+## One-time real-data migration sequence
+
+The remaining real-data transition is an operator-reviewed staging exercise, not a new runtime integration:
+
+1. Pin one exact-head qualified immutable image and preserve the current isolated staging database and application-data volume.
+2. Reset only the explicitly authorized staging resources, migrate a blank PostgreSQL database to the recorded Alembic head, and create the bootstrap staging Admin.
+3. Preview and apply neutral structural master data first. Confirm global canonical Base Positions, exact Tracks/Regions, Crew Groups, Vehicles, addresses, travel defaults, presets, and provider mappings.
+4. Run Position convergence Preview. Any duplicates created by current import paths are a blocking defect; do not normalize them away to hide the evidence.
+5. Preview the manually supplied transition capture, resolve every Track/Position/Vehicle classification, then apply atomically. Existing On Track publications win and no User is created.
+6. Reconcile Person metadata through exact UUID worksheets. Create account setup links separately; never import or email credentials.
+7. Inspect representative published Workdays, capability history, Vehicle-as-Position conflicts, and source-event deduplication before running the complete staging qualification matrix.
+
+Actual staff files remain outside Git. This sequence does not authorize a staging reset, import, deployment, or production promotion.
+
 ## Portable files
 
 The neutral import bundle supports Regions, Tracks, Crew Groups, Positions, People, external events, and `external_track_mappings`. Mapping rows identify the canonical Track by Region and normalized Track name; they contain no database UUIDs.

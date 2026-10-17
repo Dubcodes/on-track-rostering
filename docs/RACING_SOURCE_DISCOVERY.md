@@ -2,6 +2,8 @@
 
 Discovery was performed against the official public sources on 21 September 2026. External data is planning evidence; On Track remains authoritative and manual rostering never depends on these sources.
 
+This document records the implemented adapter contract and the observed public-source behavior at that date; it is not a promise that an upstream website remains reachable. Current source health must be read from Administration/provider state. On Track never bypasses bot protection, supplies scraped credentials, or converts a failed public source into a roster blocker.
+
 ## Love Racing
 
 ### Race meetings and trials
@@ -87,3 +89,5 @@ HRNZ also documents an API at `https://harness.hrnz.co.nz/APIdoc/Version-1.1/`, 
 | HRNZ races | Official ICS; bounded official Racing Dates/programme-index fallback | Upstream HTTP 403 from local service client; reports race error while trials remain independent |
 | HRNZ trials | Official Trials Diary HTML | Live |
 | Future API | None | Not configured |
+
+These rows are implementation evidence, not current staging or production qualification. In particular, HRNZ race discovery may remain unavailable from a deployment network while HRNZ trials, Love Racing, and manual roster entry continue independently.
