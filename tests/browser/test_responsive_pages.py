@@ -2423,7 +2423,7 @@ def test_builder_capacity_applies_when_person_is_selected_after_vehicle(browser_
 
     def choose_existing_person() -> None:
         person_picker = target.locator('[data-picker-kind="person"]')
-        person_picker.locator("[data-picker-input]").fill("Browser Position Aware")
+        person_picker.locator("[data-picker-input]").fill("Unrelated Browser Crew")
         person_picker.locator(
             f'[data-picker-option][data-value="{values["position_aware_person_id"]}"]'
         ).click()
@@ -2454,7 +2454,7 @@ def test_builder_capacity_applies_when_person_is_selected_after_vehicle(browser_
         f'[data-picker-option][data-value="{values["head_on_position_id"]}"]'
     ).click()
     duplicate_person = duplicate.locator('[data-picker-kind="person"]')
-    duplicate_person.locator("[data-picker-input]").fill("Browser Position Aware")
+    duplicate_person.locator("[data-picker-input]").fill("Unrelated Browser Crew")
     duplicate_person.locator(
         f'[data-picker-option][data-value="{values["position_aware_person_id"]}"]'
     ).click()
