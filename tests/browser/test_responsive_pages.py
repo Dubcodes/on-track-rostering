@@ -2434,6 +2434,10 @@ def test_builder_capacity_applies_when_person_is_selected_after_vehicle(browser_
     original = page.locator(
         f'[data-assignment-row]:has([data-person-value][value="{values["position_aware_person_id"]}"])'
     )
+    original_assignment_id = original.locator('[name="assignment_id"]').input_value()
+    original = page.locator(
+        f'[data-assignment-row]:has([name="assignment_id"][value="{original_assignment_id}"])'
+    )
     capacity_dialog = page.locator("[data-vehicle-capacity-dialog]")
     choose_existing_person()
     assert capacity_dialog.is_visible()
