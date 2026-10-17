@@ -44,7 +44,7 @@ At the start of each staging qualification cycle, select a qualified candidate d
 
 All candidate-specific checks below refer to that selected qualified SHA and remain **PENDING** until the private staging stack is deliberately reset/redeployed and observed.
 
-**Current operator context at the time of writing:** `f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5` passed exact-head release-gate run `38785163018` with **307 PostgreSQL-backed tests** and **68 Playwright tests**. Its immutable image is `ghcr.io/dubcodes/on-track-rostering:sha-f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5`, digest `sha256:3998fc94439cc239e1523378868107d218cacff87d8ab641e17d0ef9cf00d59e`, with Alembic head `e8b5d1f2a740`. This is an example of an available qualified candidate, not a permanent invariant; re-resolve and record every field immediately before the cycle begins.
+**Current operator context at the time of writing:** `bfce766e5c1ffa73ca86845c688a7e6d78482fe1` passed exact-head release-gate run `38988181939` with **316 PostgreSQL-backed tests** and **72 Playwright tests**. Its immutable image is `ghcr.io/dubcodes/on-track-rostering:sha-bfce766e5c1ffa73ca86845c688a7e6d78482fe1`, digest `sha256:f40ae6c631ecf1a86613ba2051ef5d1ba0debda7486da1c8b86154ae8420f1cf`, with Alembic head `f7a2c9d4e610`. The staging environment is initialized, reachable and has its bootstrap Admin, but this candidate is not claimed as deployed and all unobserved candidate-specific rows remain PENDING. Re-resolve and record every field immediately before a qualification cycle begins.
 
 ## Infrastructure and persistence
 

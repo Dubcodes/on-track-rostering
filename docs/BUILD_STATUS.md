@@ -1,10 +1,10 @@
-# Build status — 2026-10-15
+# Build status — 2026-10-17
 
 ## Application-behavior qualification baseline and deployment boundary
 
-The latest checkpoint that changed application behavior is exact SHA `8180be5fcfcc28e01c4da04ca210fbb93cb84832` (release-gate run `38697891867`): **307 PostgreSQL-backed tests** and **68 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified production image was built and published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-8180be5fcfcc28e01c4da04ca210fbb93cb84832` with digest `sha256:5989096bfadb2604d4cc311541d9a1ccac63f867abd33d604d8e2ebac548fc73`. The sole Alembic head is `e8b5d1f2a740`.
+The current qualified implementation baseline is exact SHA `bfce766e5c1ffa73ca86845c688a7e6d78482fe1` (release-gate run `38988181939`): **316 PostgreSQL-backed tests** and **72 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-bfce766e5c1ffa73ca86845c688a7e6d78482fe1` with digest `sha256:f40ae6c631ecf1a86613ba2051ef5d1ba0debda7486da1c8b86154ae8420f1cf`. The sole Alembic head is `f7a2c9d4e610`.
 
-The immediately subsequent documentation-only SHA `f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5` also passed exact-head release-gate run `38785163018` with **307 PostgreSQL-backed tests** and **68 Playwright tests**. Its immutable image `ghcr.io/dubcodes/on-track-rostering:sha-f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5` was published at digest `sha256:3998fc94439cc239e1523378868107d218cacff87d8ab641e17d0ef9cf00d59e`. This documentation qualification does not change the application-behavior baseline, and neither recorded SHA is asserted to remain `origin/main`.
+Earlier SHA `8180be5fcfcc28e01c4da04ca210fbb93cb84832` and documentation SHA `f653f82d3c3e42ae199f8777b0a82b4b27f5a9a5` remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production.
 
 An operational deployment candidate is identified by all three of the following, resolved when the candidate is deliberately selected:
 
@@ -58,7 +58,7 @@ These are historical checkpoints, not the current qualification baseline.
 
 ## Outstanding product and operational backlog
 
-- **Next immediate milestone:** deliberate clean isolated-staging reset → migrate from a blank database → bootstrap → clean master/transition import → inspect resulting canonical data → execute the staging qualification matrix. Follow `STAGING_RESET_REIMPORT.md`; it requires separate explicit destructive authorization and is not performed by this checkpoint.
+- **Next immediate milestone:** the private staging environment is initialized, reachable, and has its bootstrap Admin, but the current candidate has not been redeployed or manually qualified there. Remaining work is a separately authorized clean isolated-staging reset/re-import, canonical real-data conversion and correction, then the still-pending operational qualification matrix. Follow `STAGING_RESET_REIMPORT.md`; no destructive staging action is authorized by this checkpoint.
 - Physical-device and operator staging qualification, including real passkey ceremonies, TOTP, and Web Push with deployment-owned VAPID configuration.
 - Complete role/direct-request/privacy/offline/restart/log qualification matrix.
 - Monitoring and alerting above the durable scheduler-heartbeat and health-endpoint foundation.
@@ -66,6 +66,10 @@ These are historical checkpoints, not the current qualification baseline.
 - Immutable production image promotion, production secrets and WebAuthn RP identity freeze/rotation, and operational governance.
 - More advanced historical/predictive Position suggestions beyond the implemented two-published-Workday eligibility rule and simple regional presets.
 - Exceptional Crew-Group-scoped Manager write authority remains unresolved. Existing Region authority stays authoritative: no group grant currently implies mixed-Workday, publication, Person, or account control outside an administered Region.
+- Full account-role management through the Crew Person surface remains a separate product decision; Accounts retains advanced recovery and reconciliation controls.
+- Global read-only Viewer accounts remain undecided; current Viewer access is explicitly Region-scoped.
+- Whether missing truck-driver designation should block Save & Preview or only Publish remains undecided; current behavior retains the qualified validation boundary.
+- Canonical real-data conversion, including correction of imported Vehicle-as-Position history, remains staging/import reconciliation work and is not inferred automatically.
 - Configurable Open Position auto-accept; current applications remain Manager-approved.
 - IV configuration / IV setup domain; the original operational design expected it, but no current implementation exists.
 
