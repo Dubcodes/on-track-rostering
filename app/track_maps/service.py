@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.catalog.models import Track, TrackMap
 from app.core.config import get_settings
 from app.core.time import utcnow
-from app.external_calendar.http import SourceHTTPClient
+from app.external_calendar.http import SourceHTTPClient, SourceHTTPError
 
 LOVE_RACING_ORIGIN = "https://loveracing.nz"
 MAX_MANUAL_MAP_BYTES = 15 * 1024 * 1024
@@ -51,17 +51,30 @@ class _CandidateParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.values: list[str] = []
+        self._links: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.lower(): value or "" for key, value in attrs}
+        if tag == "a":
+            href = values.get("href", "")
+            self._links.append(href)
+            if "racecourses/tracks" in unquote(href).casefold() or "/image.ashx" in href.casefold():
+                self.values.append(href)
+            return
         if tag == "meta" and values.get("property", "").lower() == "og:image":
-            self.values.append(values.get("content", ""))
-        if tag == "a" and values.get("href"):
-            self.values.append(values["href"])
+            candidate = values.get("content", "")
+            if "racecourses/tracks" in unquote(candidate).casefold():
+                self.values.append(candidate)
+            return
         if tag != "img":
             return
         joined = " ".join(values.values()).lower()
-        if "racecourses/tracks" not in joined and not ("onhorsefiles" in joined and "track" in joined):
+        credible = (
+            "track - 2d" in values.get("alt", "").casefold()
+            or "racecourses/tracks" in joined
+            or ("onhorsefiles" in joined and "track" in joined)
+        )
+        if not credible:
             return
         for key in ("src", "data-src", "data-original"):
             if values.get(key):
@@ -72,6 +85,12 @@ class _CandidateParser(HTMLParser):
                 for item in values.get(key, "").split(",")
                 if item.strip()
             )
+        if self._links and self._links[-1]:
+            self.values.append(self._links[-1])
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._links:
+            self._links.pop()
 
 
 def trusted_image_url(value: str, base_url: str) -> str | None:
@@ -93,6 +112,11 @@ def trusted_image_url(value: str, base_url: str) -> str | None:
             None,
         )
         return trusted_image_url(nested, absolute) if nested else None
+    path = unquote(parsed.path).casefold()
+    if "/onhorsefiles/racecourses/tracks/" not in path:
+        return None
+    if any(word in path for word in ("satellite", "aerial")):
+        return None
     return absolute
 
 
@@ -105,6 +129,13 @@ def image_candidates(html: str, course_url: str, fallback: str = "") -> list[str
         if candidate and candidate not in output:
             output.append(candidate)
     return output
+
+
+def _candidate_score(url: str, fallback_url: str | None, width: int, height: int) -> tuple[int, int, int]:
+    path = unquote(urlsplit(url).path).casefold()
+    known_fallback = 1 if fallback_url and url == fallback_url else 0
+    course_specific = 2 if "2d" in path else 1
+    return known_fallback, course_specific, width * height
 
 
 def image_kind(content: bytes) -> tuple[str, str]:
@@ -289,25 +320,40 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         row.automatic_error = "No official Love Racing automatic map is configured for this Track."
         return row
     course_url = urljoin(LOVE_RACING_ORIGIN, course[0])
+    fallback_url = trusted_image_url(course[1], course_url)
     try:
-        page = client.get(course_url, accept="text/html")
-        candidates = image_candidates(page.text, course_url, course[1])
-        images: list[tuple[int, int, int, bytes, str, str, str]] = []
+        try:
+            page = client.get(course_url, accept="text/html")
+        except SourceHTTPError:
+            candidates = [fallback_url] if fallback_url else []
+        else:
+            candidates = image_candidates(page.text, course_url, course[1])
+        images: list[tuple[tuple[int, int, int], int, bytes, str, str, str]] = []
         for candidate in candidates:
-            response = client.get(candidate, accept="image/jpeg,image/png,image/webp")
+            try:
+                response = client.get(candidate, accept="image/jpeg,image/png,image/webp")
+            except SourceHTTPError:
+                continue
             final_url = trusted_image_url(response.url, course_url)
             content_type, extension = image_kind(response.body)
             width, height = image_dimensions(response.body)
-            if final_url and content_type and width >= 200 and height >= 200:
+            declared_type = response.content_type.split(";", 1)[0].strip().casefold()
+            if (
+                final_url
+                and content_type
+                and declared_type == content_type
+                and width >= 200
+                and height >= 200
+            ):
                 images.append(
                     (
-                        width * height, min(width, height), len(response.body),
+                        _candidate_score(final_url, fallback_url, width, height), len(response.body),
                         response.body, content_type, extension, final_url,
                     )
                 )
         if not images:
             raise ValueError("No valid official map image was returned.")
-        _area, _short, size, content, content_type, extension, source_url = max(images)
+        _score, size, content, content_type, extension, source_url = max(images)
         width, height = image_dimensions(content)
         previous_score = (row.automatic_width or 0) * (row.automatic_height or 0)
         if _fully_valid_map(row, "automatic") and previous_score > width * height:
@@ -345,3 +391,68 @@ def due_tracks(db: Session) -> list[Track]:
         if canonical_track_name(track.map_reference or track.name) in COURSES
         and map_refresh_due(rows.get(track.id))
     ]
+
+
+def map_status(row: TrackMap | None) -> dict[str, object]:
+    """Return an operator-facing status without reading an entire cached image."""
+    if row is None:
+        return {
+            "code": "UNCHECKED",
+            "label": "Unchecked",
+            "detail": "No automatic map check has been recorded.",
+            "available": False,
+        }
+    available = effective_map(row)
+    if row.has_manual_override:
+        if available:
+            return {
+                "code": "MANUAL_OVERRIDE",
+                "label": "Manual override",
+                "detail": "The uploaded map is authoritative until deliberately reverted.",
+                "available": True,
+            }
+        return {
+            "code": "MISSING_MANUAL_FILE",
+            "label": "Manual file unavailable",
+            "detail": "The manual map metadata exists, but its file is missing or invalid.",
+            "available": False,
+        }
+    if available:
+        retained_after_failure = bool(row.automatic_error)
+        return {
+            "code": "SOURCE_FAILED_RETAINED" if retained_after_failure else "AVAILABLE",
+            "label": "Available · last refresh failed" if retained_after_failure else "Available",
+            "detail": (
+                "The last valid cached map is retained. " + row.automatic_error
+                if retained_after_failure
+                else "A validated Love Racing map is cached."
+            ),
+            "available": True,
+        }
+    if row.automatic_file_name:
+        return {
+            "code": "MISSING_FILE",
+            "label": "Cached file unavailable",
+            "detail": "Map metadata exists, but the cached file is missing or fails validation.",
+            "available": False,
+        }
+    if row.automatic_status == "UNAVAILABLE":
+        return {
+            "code": "UNAVAILABLE",
+            "label": "No automatic source",
+            "detail": row.automatic_error or "No official automatic map is configured.",
+            "available": False,
+        }
+    if row.automatic_status == "ERROR":
+        return {
+            "code": "SOURCE_FAILED",
+            "label": "Source failed",
+            "detail": row.automatic_error or "The official source did not return a valid map.",
+            "available": False,
+        }
+    return {
+        "code": "MISSING",
+        "label": "No map cached",
+        "detail": row.automatic_error or "The last check did not produce a usable map.",
+        "available": False,
+    }

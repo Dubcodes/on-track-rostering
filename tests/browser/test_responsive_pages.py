@@ -1160,11 +1160,16 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     if width == 320:
         suggested_return_id = suggested_record.get_attribute("id")
         assert suggested_return_id
+        original_url = page.url
+        history_length = page.evaluate("history.length")
         suggested.locator('select[name="track_id"]').select_option(values["track_id"])
+        assert suggested.get_by_text(f"Canonical Region: {values['region_name']}", exact=False).count() == 1
         suggested.get_by_role("button", name="Confirm mapping").click()
-        page.wait_for_url("**/admin/online-sources?mapped=1#*")
-        assert page.url.endswith(f"#{suggested_return_id}")
-        assert page.locator(f"#{suggested_return_id}").is_visible()
+        completed_record = page.locator(f"#{suggested_return_id}")
+        completed_record.get_by_text("Source mapping confirmed.", exact=False).wait_for()
+        assert page.url == original_url
+        assert page.evaluate("history.length") == history_length
+        assert completed_record.is_visible()
         assert page.locator(
             f'form:has(input[name="external_track_name"][value="{values["track_name"]}"])'
         ).count() == 0
@@ -1172,17 +1177,24 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
         'details.control-record:has(input[name="external_track_name"][value="Create Browser Venue"])'
     ).first
     create_record.locator(":scope > summary").click()
-    create_record.get_by_text("Create Track & Map", exact=True).first.click()
-    create_form = create_record.locator('form[action="/admin/online-sources/create-track-map"]')
+    create_record.get_by_text("Create missing Track", exact=True).first.click()
+    create_form = create_record.locator('form[action="/admin/online-sources/create-track"]')
     assert create_form.locator('select[name="region_id"]').count() == 1
+    assert create_form.locator('input[name="map_reference"]').count() == 0
     if width == 320:
         create_return_id = create_record.get_attribute("id")
         assert create_return_id
+        original_url = page.url
+        history_length = page.evaluate("history.length")
         create_form.locator('select[name="region_id"]').select_option(values["region_id"])
-        create_form.get_by_role("button", name="Create Track & Map").click()
-        page.wait_for_url("**/admin/online-sources?created_mapped=1#*")
-        assert page.url.endswith(f"#{create_return_id}")
-        assert page.locator(f"#{create_return_id}").is_visible()
+        create_form.get_by_role("button", name="Create Track and confirm mapping").click()
+        completed_record = page.locator(f"#{create_return_id}")
+        completed_record.get_by_text(
+            "Track created and source mapping confirmed.", exact=False
+        ).wait_for()
+        assert page.url == original_url
+        assert page.evaluate("history.length") == history_length
+        assert completed_record.is_visible()
     _assert_no_horizontal_overflow(page)
     _capture_page(page, f"online-sources-{width}.png")
 
@@ -1284,6 +1296,80 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     _capture_page(page, f"external-event-minimal-{width}.png")
     event_link.click()
     page.wait_for_url(f"**{event_href}")
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
+def test_routine_source_and_track_saves_preserve_context_and_history(
+    browser_site, width: int
+) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    source_name = f"In-place Source {width} {uuid.uuid4().hex[:6]}"
+    with SessionLocal() as db:
+        db.add(
+            ExternalEventObservation(
+                provider="LOVE_RACING",
+                source_track_name=source_name,
+                payload_hash=uuid.uuid4().hex,
+                parsed_facts={
+                    "event_date": local_today().isoformat(),
+                    "discipline": "THOROUGHBRED",
+                    "event_kind": "RACE",
+                    "venue_confidence": "EXPLICIT",
+                },
+                raw_payload={},
+                mapping_state="UNMATCHED",
+                reconciliation_state="REVIEW",
+            )
+        )
+        db.commit()
+
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["admin"])
+    page.goto(base_url + "/admin/online-sources")
+    record = page.locator(
+        f'details.control-record:has(input[name="external_track_name"][value="{source_name}"])'
+    )
+    record.locator(":scope > summary").click()
+    form = record.locator('form[action="/admin/online-sources/map"]')
+    form.locator('select[name="track_id"]').select_option(values["track_id"])
+    assert form.get_by_text(f"Canonical Region: {values['region_name']}", exact=False).is_visible()
+    assert form.get_by_role("link", name="Manage Track & map").get_attribute("href") == (
+        f"/manage/catalog#track-{values['track_id']}"
+    )
+    record.scroll_into_view_if_needed()
+    record_id = record.get_attribute("id")
+    assert record_id
+    top_before = record.bounding_box()["y"] - page.evaluate("scrollY")
+    url_before = page.url
+    history_before = page.evaluate("history.length")
+    form.get_by_role("button", name="Confirm mapping").click()
+    completed_record = page.locator(f"#{record_id}")
+    completed_record.get_by_text("Source mapping confirmed.", exact=False).wait_for()
+    assert page.locator("#confirmed-source-mappings").get_by_text(source_name, exact=False).count() == 1
+    top_after = completed_record.bounding_box()["y"] - page.evaluate("scrollY")
+    assert abs(top_after - top_before) < 120
+    assert page.url == url_before
+    assert page.evaluate("history.length") == history_before
+    assert completed_record.get_attribute("open") is not None
+
+    page.goto(base_url + f"/manage/catalog#track-{values['track_id']}")
+    track_record = page.locator(f"#track-{values['track_id']}")
+    if track_record.get_attribute("open") is None:
+        track_record.locator(":scope > summary").click()
+    track_form = track_record.locator(f'form[action="/manage/catalog/tracks/{values["track_id"]}"]')
+    history_before = page.evaluate("history.length")
+    catalog_url = page.url
+    for index in range(2):
+        track_form.locator('input[name="address"]').fill(f"In-place test address {width}-{index}")
+        track_form.get_by_role("button", name="Save track").click()
+        track_record.get_by_text("Track saved.", exact=True).wait_for()
+        assert track_record.get_attribute("open") is not None
+        assert page.url == catalog_url
+        assert page.evaluate("history.length") == history_before
+    page.go_back()
+    page.wait_for_url("**/admin/online-sources")
     context.close()
 
 

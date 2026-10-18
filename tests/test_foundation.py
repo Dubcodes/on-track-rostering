@@ -19,6 +19,7 @@ from app.core.enums import (
     WorkdayStatus,
 )
 from app.core.holidays import holiday_for_date
+from app.core.themes import DEFAULT_THEME, normalize_theme
 from app.core.time import local_today, worked_minutes
 from app.employee.read_models import day_assignments, month_items
 from app.identity.models import Person, RoleGrant, User, UserPersonLink
@@ -43,6 +44,16 @@ from app.rostering.service import (
     update_draft_details,
 )
 from app.unavailability.models import PersonUnavailability
+
+
+def test_aurora_is_default_without_overwriting_valid_or_legacy_preferences() -> None:
+    assert DEFAULT_THEME == "aurora"
+    assert normalize_theme(None) == "aurora"
+    assert normalize_theme("") == "aurora"
+    assert normalize_theme("not-a-theme") == "aurora"
+    assert normalize_theme("daylight") == "daylight"
+    assert normalize_theme("race-night") == "race-night"
+    assert normalize_theme("trackside") == "jade"
 
 
 def draft_details(draft: WorkdayRevision, **changes) -> DraftDetailsInput:  # type: ignore[no-untyped-def]

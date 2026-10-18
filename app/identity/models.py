@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.core.enums import Lifecycle, Role
+from app.core.themes import DEFAULT_THEME
 from app.core.time import utcnow
 
 
@@ -20,7 +21,7 @@ class User(Base):
     credential_kind: Mapped[str] = mapped_column(String(16), default="pin")
     credential_admin_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
-    theme: Mapped[str] = mapped_column(String(24), default="jade")
+    theme: Mapped[str] = mapped_column(String(24), default=DEFAULT_THEME)
     auth_epoch: Mapped[int] = mapped_column(default=1)
     contractor_manual_extension_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

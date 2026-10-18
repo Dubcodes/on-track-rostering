@@ -26,14 +26,15 @@
 </section>
 {% endmacro %}
 
-{% macro track_controls(tracks, archived_tracks, regions, csrf_token, map_by_track={}, effective_map_by_track={}) %}
+{% macro track_controls(tracks, archived_tracks, regions, csrf_token, map_by_track={}, effective_map_by_track={}, map_status_by_track={}) %}
 <section class="panel" id="tracks">
   <div class="section-heading"><div><p class="eyebrow">Venue master data</p><h2>Active Tracks</h2></div></div>
   {% for track in tracks %}
   {% set track_map = map_by_track.get(track.id) %}
   {% set available_map = effective_map_by_track.get(track.id) %}
+  {% set map_state = map_status_by_track.get(track.id) %}
   <details class="control-record" id="track-{{ track.id }}"><summary><span><i class="track-dot" data-presentation="{{ track.palette_slot|track_token }}"></i> <strong>{{ track.name }}</strong></span><span class="badge">Active</span></summary>
-    <form method="post" action="/manage/catalog/tracks/{{ track.id }}" class="form-grid">
+    <form method="post" action="/manage/catalog/tracks/{{ track.id }}" class="form-grid" data-inplace-save data-refresh-target="track-{{ track.id }}" data-success-message="Track saved.">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ACTIVE">
       <label>Name<input name="name" value="{{ track.name }}" required></label>
       <label>Physical address<input name="address" value="{{ track.address or '' }}" maxlength="500"></label>
@@ -41,15 +42,16 @@
       <details><summary>Advanced course identity</summary><label>Love Racing course identity override<input name="map_reference" value="{{ track.map_reference or '' }}"><small>Leave blank to use the canonical Track name. This is not an image field.</small></label></details><label>Default travel to Track (minutes)<input type="number" min="0" max="1440" name="default_travel_minutes" value="{{ track.default_travel_minutes if track.default_travel_minutes is not none else '' }}"><small>Used to calculate the default Race Day vehicle call time. Individual assignment Start times may still override it.</small></label><button>Save track</button>
     </form>
     <section class="map-admin-controls">
-      <h3>Track map</h3>
+      <div class="section-heading"><h3>Track map</h3>{% if map_state %}<span class="badge" data-map-status="{{ map_state.code }}">{{ map_state.label }}</span>{% endif %}</div>
+      {% if map_state %}<p class="muted map-status-detail">{{ map_state.detail }}{% if track_map and track_map.automatic_checked_at %} Last checked {{ track_map.automatic_checked_at|display_datetime }}.{% endif %}</p>{% endif %}
       {% if track_map and track_map.has_manual_override and available_map %}
         <p><span class="badge">Manual override</span> {{ track_map.manual_width }}×{{ track_map.manual_height }} · {{ track_map.manual_updated_at|display_datetime }}</p>
         <img class="track-map-admin-preview" src="/track-maps/{{ track.id }}" alt="{{ track.name }} track map preview" loading="lazy">
         <a class="button secondary" href="/track-maps/{{ track.id }}" target="_blank">View map</a>
-        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/reset"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Revert to Love Racing map</button></form>
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/reset" data-inplace-save data-refresh-target="track-{{ track.id }}" data-success-message="Manual override reverted."><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Revert to Love Racing map</button></form>
       {% elif track_map and track_map.has_manual_override %}
         <p class="muted"><span class="badge">Manual override</span> Map file unavailable. Upload a replacement or deliberately revert to the Love Racing map.</p>
-        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/reset"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Revert to Love Racing map</button></form>
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/reset" data-inplace-save data-refresh-target="track-{{ track.id }}" data-success-message="Manual override reverted."><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Revert to Love Racing map</button></form>
       {% elif available_map %}
         <p><span class="badge">Love Racing map</span> {{ track_map.automatic_width }}×{{ track_map.automatic_height }} · checked {{ track_map.automatic_checked_at|display_datetime }}</p>
         <img class="track-map-admin-preview" src="/track-maps/{{ track.id }}" alt="{{ track.name }} track map preview" loading="lazy">
@@ -60,8 +62,8 @@
         <p class="muted">Automatic {% if track_map %}{{ track_map.automatic_status|lower }}{% else %}unchecked{% endif %}{% if track_map and track_map.automatic_error %} · {{ track_map.automatic_error }}{% endif %}</p>
       {% endif %}
       <div class="action-row">
-        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/upload" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>JPEG, PNG or WebP up to 15 MB<input type="file" name="image" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" required></label><button>Upload better map</button></form>
-        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/refresh"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Refresh automatic</button></form>
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/upload" enctype="multipart/form-data" data-inplace-save data-refresh-target="track-{{ track.id }}" data-success-message="Manual map uploaded."><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>JPEG, PNG or WebP up to 15 MB<input type="file" name="image" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" required></label><button>Upload better map</button></form>
+        <form method="post" action="/manage/catalog/tracks/{{ track.id }}/map/refresh" data-inplace-save data-refresh-target="track-{{ track.id }}" data-success-message="Automatic map check completed."><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Refresh automatic</button></form>
       </div>
     </section>
     <div class="row-actions danger-actions"><form method="post" action="/manage/catalog/tracks/{{ track.id }}/lifecycle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lifecycle" value="ARCHIVED"><button class="secondary">Archive</button></form><form method="post" action="/manage/catalog/tracks/{{ track.id }}/remove-unused" onsubmit="return confirm('Permanently remove this unused Track?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm_remove" value="yes"><button class="secondary">Remove unused</button></form></div>

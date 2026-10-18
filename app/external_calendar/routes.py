@@ -18,7 +18,7 @@ from app.auth.policy import (
 from app.auth.security import verify_csrf
 from app.catalog.models import Region, Track
 from app.catalog.presentation import track_token
-from app.catalog.service import allocate_palette_slot, normalized_track_match
+from app.catalog.service import allocate_palette_slot, normalized_name
 from app.core.database import get_db
 from app.core.enums import Role
 from app.core.time import local_today
@@ -357,6 +357,8 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
     region_query = select(Region).where(Region.lifecycle == "ACTIVE").order_by(Region.name)
     if region_ids is not None:
         region_query = region_query.where(Region.id.in_(region_ids))
+    regions = list(db.scalars(region_query))
+    region_names = {region.id: region.name for region in regions}
     return templates.TemplateResponse(
         "online_sources.html",
         context(
@@ -367,7 +369,8 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
             unmatched=unmatched,
             conflicts=conflicts,
             tracks=tracks,
-            regions=list(db.scalars(region_query)),
+            regions=regions,
+            track_region_names={track.id: region_names.get(track.region_id, "Unknown Region") for track in tracks},
             confirmed_mappings=confirmed_mappings,
             recent_refreshes=recent_refreshes,
             refresh_result=refresh_result,
@@ -455,14 +458,14 @@ def map_track(
     return RedirectResponse(f"/admin/online-sources?mapped=1#{anchor}", status_code=303)
 
 
-@router.post("/admin/online-sources/create-track-map")
-def create_track_and_map(
+@router.post("/admin/online-sources/create-track")
+@router.post("/admin/online-sources/create-track-map", include_in_schema=False)
+def create_track_and_mapping(
     request: Request,
     provider: str = Form(...),
     external_track_name: str = Form(...),
     region_id: uuid.UUID = Form(...),
     track_name: str = Form(...),
-    map_reference: str = Form(""),
     return_to: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
@@ -481,25 +484,34 @@ def create_track_and_map(
     if inventory_item is None:
         raise HTTPException(404, "Unmatched source identity not found.")
     if inventory_item.club_only:
-        raise HTTPException(409, "Create Track & Map is unavailable for a club-only source identity.")
+        raise HTTPException(409, "Track creation is unavailable for a club-only source identity.")
     region = db.get(Region, region_id)
     if not region or region.lifecycle != "ACTIVE":
         raise HTTPException(400, "Select an active Region.")
     clean_name = " ".join(track_name.strip().split())
     if not 2 <= len(clean_name) <= 120:
         raise HTTPException(400, "Track name must be between 2 and 120 characters.")
-    duplicate = normalized_track_match(db, region.id, clean_name)
+    duplicate = next(
+        (
+            track
+            for track in db.scalars(select(Track).where(Track.lifecycle == "ACTIVE"))
+            if normalized_name(track.name) == normalized_name(clean_name)
+        ),
+        None,
+    )
     if duplicate:
+        duplicate_region = db.get(Region, duplicate.region_id)
         raise HTTPException(
             409,
-            f"{duplicate.name} already exists in {region.name}; map to the existing Track instead.",
+            f"{duplicate.name} already exists in "
+            f"{duplicate_region.name if duplicate_region else 'another Region'}; "
+            "map to the existing Track instead.",
         )
     try:
         track = Track(
             region_id=region.id,
             name=clean_name,
             palette_slot=allocate_palette_slot(db, region.id),
-            map_reference=map_reference.strip()[:500] or None,
         )
         db.add(track)
         db.flush()

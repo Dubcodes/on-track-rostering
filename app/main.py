@@ -125,8 +125,8 @@ def manifest(request: Request) -> JSONResponse:
             "short_name": name,
             "start_url": "/month",
             "display": "standalone",
-            "background_color": "#f4f7f4",
-            "theme_color": "#123b35",
+            "background_color": "#0b1020",
+            "theme_color": "#0b1020",
             "icons": [
                 {
                     "src": FAVICON_URL,

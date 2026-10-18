@@ -47,12 +47,8 @@ def main() -> int:
         print("PENDING dependency vulnerability audit: explicitly skipped", flush=True)
     else:
         run(python, "-m", "pip_audit", "--local")
-    run("node", "--check", "app/static/app.js")
-    run("node", "--check", "app/static/invite.js")
-    run("node", "--check", "app/static/passkeys.js")
-    run("node", "--check", "app/static/notifications.js")
-    run("node", "--check", "app/static/service-worker.js")
-    run("node", "--check", "app/static/builder.js")
+    for javascript in sorted((ROOT / "app" / "static").glob("*.js")):
+        run("node", "--check", str(javascript.relative_to(ROOT)))
     if os.environ.get("ONTRACK_RUN_BROWSER_TESTS") == "1":
         run(python, "-m", "pytest", "tests/browser")
     else:

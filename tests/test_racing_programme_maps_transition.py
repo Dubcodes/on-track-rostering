@@ -36,6 +36,7 @@ from app.track_maps.service import (
     image_candidates,
     image_dimensions,
     map_refresh_due,
+    map_status,
     refresh_automatic_map,
     reset_manual_map,
     save_manual_map,
@@ -132,6 +133,79 @@ def test_map_identity_keeps_cambridge_venues_distinct_and_unwraps_safe_image() -
         f'<a href="{wrapped}">Map</a>', "https://loveracing.nz/course"
     )
     assert candidates == ["https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Cambridge.jpg"]
+
+
+def test_ellerslie_html_failure_still_downloads_known_official_fallback(
+    db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: tmp_path.resolve())
+    _user, _region, track = _foundation(db)
+    track.name = "Ellerslie"
+    content = _png(900, 700)
+
+    class FallbackClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get(self, url: str, *, accept: str) -> HTTPResponse:
+            self.calls.append(url)
+            if url.endswith("/Racecourse.aspx"):
+                raise SourceHTTPError("Course page challenge.")
+            assert url.endswith("/OnHorseFiles/Racecourses/Tracks/Ellerslie_2025.png")
+            assert accept == "image/jpeg,image/png,image/webp"
+            return HTTPResponse(url=url, status=200, content_type="image/png", body=content)
+
+    client = FallbackClient()
+    row = refresh_automatic_map(db, track, client)  # type: ignore[arg-type]
+    assert row.automatic_status == "AVAILABLE"
+    assert row.automatic_source_url.endswith("Ellerslie_2025.png")
+    assert row.automatic_width == 900 and row.automatic_height == 700
+    assert (tmp_path / row.automatic_file_name).read_bytes() == content
+    assert map_status(row)["code"] == "AVAILABLE"
+    assert len(client.calls) == 2
+
+
+def test_cambridge_synthetic_candidates_exclude_artwork_and_satellite() -> None:
+    course_url = "https://loveracing.nz/RaceInfo/Clubs-And-Courses/7/Racecourse.aspx"
+    fallback = "/OnHorseFiles/Racecourses/Tracks/Cambridge-synthethic_2D.jpg"
+    html = """
+      <meta property="og:image" content="/OnHorseFiles/PageArtwork/cambridge.jpg">
+      <a href="/promotions/banner.jpg">Promotion</a>
+      <img alt="Satellite" src="/OnHorseFiles/Racecourses/Tracks/Cambridge-satellite.jpg">
+      <img alt="Track - 2D" src="/OnHorseFiles/Racecourses/Tracks/Cambridge-synthethic_2D.jpg">
+    """
+    assert image_candidates(html, course_url, fallback) == [
+        "https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Cambridge-synthethic_2D.jpg"
+    ]
+
+
+def test_known_course_map_wins_over_larger_unrelated_track_artwork(
+    db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: tmp_path.resolve())
+    _user, _region, track = _foundation(db)
+    track.name = "Ellerslie"
+    correct = _png(700, 500)
+    unrelated = _png(1600, 1200)
+
+    class CourseClient:
+        def get(self, url: str, *, accept: str) -> HTTPResponse:
+            if accept == "text/html":
+                return HTTPResponse(
+                    url=url,
+                    status=200,
+                    content_type="text/html",
+                    body=(
+                        b'<img alt="Track - 2D" src="/OnHorseFiles/Racecourses/Tracks/'
+                        b'Other-Venue-2D.png">'
+                    ),
+                )
+            body = correct if url.endswith("Ellerslie_2025.png") else unrelated
+            return HTTPResponse(url=url, status=200, content_type="image/png", body=body)
+
+    row = refresh_automatic_map(db, track, CourseClient())  # type: ignore[arg-type]
+    assert row.automatic_source_url.endswith("Ellerslie_2025.png")
+    assert (row.automatic_width, row.automatic_height) == (700, 500)
 
 
 def test_programme_cadence_and_backoff_are_deterministic() -> None:
@@ -406,6 +480,7 @@ def test_manual_map_precedes_automatic_and_reset_restores_it(db, monkeypatch, tm
     (map_directory / "auto.png").write_bytes(automatic)
     saved = save_manual_map(db, track, _png())
     assert effective_map(saved)["manual"] is True  # type: ignore[index]
+    assert map_status(saved)["code"] == "MANUAL_OVERRIDE"
     assert (map_directory / saved.manual_file_name).is_file()
     previous = reset_manual_map(db, saved)
     assert effective_map(saved)["manual"] is False  # type: ignore[index]
@@ -484,10 +559,12 @@ def test_refresh_failure_retains_only_a_usable_automatic_cache(
     refreshed = refresh_automatic_map(db, track, FailingClient())  # type: ignore[arg-type]
     assert refreshed.automatic_status == "AVAILABLE"
     assert effective_map(refreshed)["file_name"] == "last-good.png"  # type: ignore[index]
+    assert map_status(refreshed)["code"] == "SOURCE_FAILED_RETAINED"
     cached.unlink()
     refreshed = refresh_automatic_map(db, track, FailingClient())  # type: ignore[arg-type]
     assert refreshed.automatic_status == "ERROR"
     assert effective_map(refreshed) is None
+    assert map_status(refreshed)["code"] == "MISSING_FILE"
 
 
 def test_effective_map_uses_bounded_header_and_rejects_metadata_mismatch(

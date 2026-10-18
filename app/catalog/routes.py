@@ -36,7 +36,7 @@ from app.core.enums import DeclinePolicy, Lifecycle
 from app.core.forms import controlled_integrity, optional_uuid
 from app.positions.canonical import validate_position_identity
 from app.positions.ordering import catalog_position_order
-from app.track_maps.service import effective_map
+from app.track_maps.service import effective_map, map_status
 from app.web import context, templates
 
 router = APIRouter(prefix="/manage/catalog")
@@ -77,6 +77,9 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
     effective_map_by_track = {
         track_id: effective_map(row) for track_id, row in map_by_track.items()
     }
+    map_status_by_track = {
+        track.id: map_status(map_by_track.get(track.id)) for track in visible_tracks
+    }
     active_region_ids = {row.id for row in active_regions}
     vehicle_statement = select(Vehicle).order_by(Vehicle.name)
     if not request.state.actor.is_admin:
@@ -108,6 +111,7 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
             ],
             map_by_track=map_by_track,
             effective_map_by_track=effective_map_by_track,
+            map_status_by_track=map_status_by_track,
             groups=list(db.scalars(select(CrewGroup).order_by(CrewGroup.name))),
             positions=positions,
             active_positions=[row for row in positions if row.lifecycle == Lifecycle.ACTIVE.value],

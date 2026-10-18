@@ -36,6 +36,7 @@ from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
 from app.core.time import local_today, utcnow
 from app.error_reports.models import ErrorReport
+from app.external_calendar.http import HTTPResponse, SourceHTTPError
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
@@ -71,6 +72,7 @@ from app.rostering.models import (
     WorkdayRevision,
 )
 from app.system_settings.models import SystemSettings
+from app.track_maps.service import refresh_automatic_map
 from app.unavailability.models import PersonUnavailability
 
 
@@ -1028,6 +1030,16 @@ def _png_bytes(width: int, height: int, *, red: int = 18) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
 
 
+def _jpeg_bytes(width: int, height: int) -> bytes:
+    frame = (
+        b"\x08"
+        + height.to_bytes(2, "big")
+        + width.to_bytes(2, "big")
+        + b"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00"
+    )
+    return b"\xff\xd8\xff\xc0" + (len(frame) + 2).to_bytes(2, "big") + frame + b"\xff\xd9"
+
+
 def test_published_day_falls_back_when_map_metadata_points_to_missing_file(
     routed_db, monkeypatch, tmp_path
 ) -> None:  # type: ignore[no-untyped-def]
@@ -1100,6 +1112,71 @@ def test_published_day_falls_back_when_map_metadata_points_to_missing_file(
     catalog = manager.get("/manage/catalog")
     assert "Map file unavailable. Upload a replacement" in catalog.text
     assert f'src="/track-maps/{track_id}"' not in catalog.text
+
+
+@pytest.mark.parametrize("track_name", ["Ellerslie", "Cambridge Synthetic"])
+def test_official_map_refresh_persists_serves_and_renders_on_published_day(
+    routed_db, monkeypatch, tmp_path, track_name: str
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, position_id, person_id) = routed_db
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: tmp_path.resolve())
+    content = (
+        _png_bytes(720, 540) if track_name == "Ellerslie" else _jpeg_bytes(720, 540)
+    )
+
+    class OfficialFallbackClient:
+        def get(self, url: str, *, accept: str) -> HTTPResponse:
+            if accept == "text/html":
+                raise SourceHTTPError("Course HTML challenge.")
+            content_type = "image/png" if track_name == "Ellerslie" else "image/jpeg"
+            return HTTPResponse(url=url, status=200, content_type=content_type, body=content)
+
+    with factory() as db:
+        track = db.get(Track, track_id)
+        track.name = track_name
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        person = db.get(Person, person_id)
+        refreshed = refresh_automatic_map(db, track, OfficialFallbackClient())  # type: ignore[arg-type]
+        assert refreshed.automatic_status == "AVAILABLE"
+        workday = Workday(region_id=region_id, created_by_user_id=manager.id)
+        db.add(workday)
+        db.flush()
+        revision = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 11, 9),
+            track_id=track_id,
+            track_name_snapshot=track_name,
+            title=f"{track_name} race day",
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+            published_at=utcnow(),
+        )
+        db.add(revision)
+        db.flush()
+        db.add(
+            Assignment(
+                revision_id=revision.id,
+                base_position_id=position_id,
+                display_name_snapshot="CCU",
+                person_id=person.id,
+                person_name_snapshot=person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        workday.current_published_revision_id = revision.id
+        db.commit()
+        workday_id = workday.id
+
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+    image = employee.get(f"/track-maps/{track_id}")
+    assert image.status_code == 200 and image.content == content
+    day = employee.get(f"/day/{workday_id}")
+    assert day.status_code == 200
+    assert f'src="/track-maps/{track_id}"' in day.text
+    assert "pinch to zoom and drag to pan" in day.text
 
 
 def test_admin_can_create_regionless_person_but_manager_cannot(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -3112,6 +3189,46 @@ def test_create_track_and_map_rolls_back_when_mapping_fails(routed_db, monkeypat
         assert db.scalar(select(Track).where(Track.name == "Rollback Raceway")) is None
 
 
+def test_online_source_track_creation_rejects_cross_region_duplicate(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (_region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        other_region = db.scalar(select(Region).where(Region.name == "Southern"))
+        assert other_region is not None
+        db.add(
+            ExternalEventObservation(
+                provider="LOVE_RACING",
+                provider_event_id="duplicate-ellerslie",
+                payload_hash="duplicate-ellerslie",
+                source_track_name="Duplicate Ellerslie Source",
+                parsed_facts={
+                    "event_date": "2026-10-10",
+                    "discipline": "THOROUGHBRED",
+                    "event_kind": "RACE",
+                },
+                raw_payload={},
+            )
+        )
+        db.commit()
+        other_region_id = other_region.id
+
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    response = admin.post(
+        "/admin/online-sources/create-track",
+        data={
+            "provider": "LOVE_RACING",
+            "external_track_name": "Duplicate Ellerslie Source",
+            "region_id": str(other_region_id),
+            "track_name": "  ELLERSLIE  ",
+            "csrf_token": csrf,
+        },
+    )
+    assert response.status_code == 409
+    assert "already exists" in response.text
+    with factory() as db:
+        assert len(list(db.scalars(select(Track).where(Track.name == "Ellerslie")))) == 1
+
+
 def test_catalog_track_creation_rejects_normalized_duplicate(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, _position_id, _person_id) = routed_db
     manager = TestClient(app)
@@ -3611,7 +3728,7 @@ def test_month_contract_and_all_redeputy_themes(routed_db) -> None:  # type: ign
         )
         db.add(new_user)
         db.commit()
-        assert new_user.theme == "jade"
+        assert new_user.theme == "aurora"
     month = client.get("/month?year=2026&month=9&view=month")
     assert month.status_code == 200
     html = month.text
@@ -3808,6 +3925,8 @@ def test_global_product_branding_is_persistent_admin_only_and_escaped(routed_db)
     assert manifest.headers["cache-control"] == "no-store"
     assert manifest.json()["name"] == 'Track & "Crew"'
     assert manifest.json()["short_name"] == 'Track & "Crew"'
+    assert manifest.json()["background_color"] == "#0b1020"
+    assert manifest.json()["theme_color"] == "#0b1020"
 
     employee = TestClient(app)
     employee_csrf = _login(employee, "amy@example.test", "654321")

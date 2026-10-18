@@ -12,6 +12,7 @@
   }
   document.querySelectorAll('form[method="post" i]').forEach((form) => {
     form.addEventListener("submit", () => {
+      if (form.matches("[data-inplace-save]")) return;
       sessionStorage.setItem(scrollKey, JSON.stringify({
         path: window.location.pathname,
         y: window.scrollY,

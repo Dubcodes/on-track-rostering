@@ -11,7 +11,7 @@ from app.branding.service import DEFAULT_BRANDING
 from app.catalog.presentation import track_token
 from app.core.config import get_settings
 from app.core.holidays import holiday_info_for_date
-from app.core.themes import THEME_GROUPS, THEME_LABELS, THEME_VALUES, normalize_theme
+from app.core.themes import DEFAULT_THEME, THEME_GROUPS, THEME_LABELS, THEME_VALUES, normalize_theme
 from app.core.time import display_date, display_datetime, display_time, local_today
 from app.system_settings.service import DEFAULT_OPERATIONAL_SETTINGS
 
@@ -90,7 +90,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
         and (show_manage or show_regional_admin or show_hours_management or actor.is_admin)
     )
     user = getattr(request.state, "user", None)
-    current_theme = normalize_theme(user.theme if user else "jade")
+    current_theme = normalize_theme(user.theme if user else DEFAULT_THEME)
     return {
         "request": request,
         "user": user,

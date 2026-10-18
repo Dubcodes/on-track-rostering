@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+DEFAULT_THEME = "aurora"
+
 THEME_GROUPS = (
     {
         "id": "dark",
@@ -106,4 +108,4 @@ def normalize_theme(value: object) -> str:
     theme = str(value or "").strip().lower()
     if theme == "trackside":
         return "jade"
-    return theme if theme in THEME_VALUES else "jade"
+    return theme if theme in THEME_VALUES else DEFAULT_THEME
