@@ -14,7 +14,17 @@ External racing data is planning evidence, not roster authority. Provider observ
 
 ## Scheduled source refresh and persistent Track maps
 
-The deployment runs a scheduler process from the same application image. One dedicated PostgreSQL advisory-lock connection owns a whole cycle so ORM commits cannot release singleton ownership. Discovery, programme detail, and map refreshes have separate cadence and bounded failure backoff. Disabling a racing provider suppresses that provider's automatic discovery and programme-detail requests; Track-map refresh remains independent. Official maps are accepted only from trusted Love Racing hosts after full file-signature, dimension, size and hash validation. A regional Manager's manual image wins until reset. Last-good automatic files survive upstream failure, and `/app/data` is a named volume backed up with PostgreSQL. Ordinary catalogue/Day availability checks use persisted metadata, actual file size and a bounded header rather than repeatedly reading complete images; refresh recovery still fully validates the retained automatic file.
+The deployment runs a scheduler process from the same application image. One dedicated PostgreSQL advisory-lock connection owns a whole cycle so ORM commits cannot release singleton ownership. Discovery, programme detail, and map refreshes have separate cadence and bounded failure backoff. Disabling a racing provider suppresses that provider's automatic discovery and programme-detail requests; Track-map refresh remains independent. Official maps are accepted only from trusted Love Racing hosts after source-URL, declared-content-type, file-signature, dimension, size and hash validation. A blocked course HTML page does not prevent attempting its code-owned official image fallback, and that known course image takes precedence over unrelated page assets. A regional Manager's manual image wins until reset. Last-good automatic files survive upstream failure, and `/app/data` is a named volume backed up with PostgreSQL. Ordinary catalogue/Day availability checks use persisted metadata, actual file size and a bounded header rather than repeatedly reading complete images; refresh recovery still fully validates the retained automatic file.
+
+## Canonical Track ownership and routine administrative saves
+
+Track master data owns a venue's Region, name, physical address, advanced Love Racing course identity, cached automatic map and manual override. An external source mapping stores only the source identity-to-Track relationship. New Track creation is available only as an explicit missing-venue action; normalized active Track names are rejected across Regions so the shortcut cannot create a competing venue record.
+
+Routine Online Sources and Track/map saves may be enhanced in place, but this is only a presentation optimization over the same protected server routes. CSRF, policy, validation, audit and transaction behavior remain server-side, POST/303 remains the non-JavaScript fallback, duplicate submissions are disabled, and successful saves do not manufacture browser-history entries.
+
+## Default appearance
+
+Aurora is the fallback for new Users, anonymous rendering, offline shells, and missing or invalid saved theme values. Existing valid saved themes are preserved, including the legacy `trackside` compatibility mapping to Jade; no bulk rewrite is performed.
 
 ## Isolated one-time transition import
 

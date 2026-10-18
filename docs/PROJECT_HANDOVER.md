@@ -24,7 +24,9 @@ Detailed design: [ARCHITECTURE.md](ARCHITECTURE.md), [DOMAIN_RULES.md](DOMAIN_RU
 
 The current code includes immutable roster publication and history; multi-Position People with one synchronized travel plan; Race Day timing and generated Travel; Open Positions and decline; rescheduling; Person/day Hours; leave advisories; regional Crew/Manager workflows; invitation, Contractor, passkey, TOTP and credential-recovery lifecycles; notices and error reports; notifications from the scheduler; provider-neutral Love Racing/HRNZ evidence; trusted persistent Track maps; neutral master import; and bounded transition capture.
 
-Builder Vehicle capacity counts final distinct People. A one-for-one replacement does not prompt unless the replaced Person remains in that Vehicle through another Position; genuine additions retain Kick last, Keep and Cancel plus server validation and Preview warnings. Track-map upload/refresh fully validates content and hashes, while ordinary page checks use metadata, file size and a bounded header before streaming the file.
+Builder Vehicle capacity counts final distinct People. A one-for-one replacement does not prompt unless the replaced Person remains in that Vehicle through another Position; genuine additions retain Kick last, Keep and Cancel plus server validation and Preview warnings. Track-map upload/refresh fully validates trusted URL, declared type, content, dimensions, size and hashes. A blocked Love Racing course page still permits its known official image fallback; ordinary page checks use metadata, file size and a bounded header before streaming the file. Master data exposes explicit operator status and manual refresh, while matching published Days show the valid effective map at the bottom with a larger mobile-pan/zoom view.
+
+Online Sources maps evidence identities to one canonical Track UUID and inherits that Track's Region; it no longer presents a competing map editor. Routine source and Track/map saves are enhanced in place without adding history entries, while protected server POST/redirect behavior remains the fallback. Aurora is the default only for new, anonymous, unset or invalid theme state; valid saved preferences remain unchanged.
 
 The complete feature ledger and evidence boundary are in [IMPLEMENTATION_INVENTORY.md](IMPLEMENTATION_INVENTORY.md) and [BUILD_STATUS.md](BUILD_STATUS.md).
 
@@ -40,7 +42,7 @@ Do not describe any of these as complete. See [REAL_DATA_ONBOARDING.md](REAL_DAT
 
 ## Racing and map limitations
 
-Love Racing can return a bot challenge; HRNZ public race endpoints have returned HTTP 403 to the service client. On Track reports component health and retains last-good evidence without bypassing source controls. HRNZ club text is not automatically a physical Track. TAB is not configured. Automatic maps cover only the code-owned Love Racing course allowlist and refresh every 90 days; manual override remains authoritative until deliberate reset.
+Love Racing can return a bot challenge; HRNZ public race endpoints have returned HTTP 403 to the service client. On Track reports component health and retains last-good evidence without bypassing source controls. A map-page challenge can still use the separately trusted official image fallback, but upstream image blocking remains an honest source failure. HRNZ club text is not automatically a physical Track. TAB is not configured. Automatic maps cover only the code-owned Love Racing course allowlist and refresh every 90 days; manual override remains authoritative until deliberate reset.
 
 See [RACING_SOURCE_DISCOVERY.md](RACING_SOURCE_DISCOVERY.md) for the adapter contract and dated source observations.
 

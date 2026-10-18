@@ -8,8 +8,8 @@ On Track is authoritative for rostering. Racing sources provide planning evidenc
 2. In **Administration → Online Sources**, enable Love Racing and HRNZ.
 3. Refresh each source. A failed source component is reported without preventing manual rostering.
 4. Review the grouped **Unmatched source identities** inventory. Download the source mapping template when review outside the application is useful.
-5. Populate canonical Regions and Tracks through **Data Import**, **Master data**, or the explicit **Create Track & Map** action for confirmed physical venues.
-6. Confirm provider-to-Track mappings. Similarity suggestions are advisory and never write mappings automatically.
+5. Populate canonical Regions and Tracks through **Data Import**, **Master data**, or the explicit **Create missing Track** action for confirmed physical venues. Creating a Track does not guarantee that an official map is downloadable.
+6. Confirm provider-to-Track mappings. The selected Track supplies its Region automatically; similarity suggestions are advisory and never write mappings automatically.
 7. Refresh the sources again so pending observations reconcile through the canonical external-event service.
 8. Verify mapped external events appear on Month with the intended Region, Track, discipline, and event kind.
 9. Import People, Crew Group memberships, and capabilities only from explicitly prepared company data.
@@ -45,7 +45,7 @@ The source mapping template is a dedicated review format with observation metada
 
 - Data Import never imports authentication credentials.
 - Provider evidence never determines a Track's business Region automatically.
-- HRNZ club names are not automatically Tracks. A `CLUB_ONLY` source identity receives no fuzzy suggestion and cannot use Create Track & Map.
+- HRNZ club names are not automatically Tracks. A `CLUB_ONLY` source identity receives no fuzzy suggestion and cannot use Create missing Track.
 - No source refresh creates a canonical Track.
 - Confirmed mapping import is idempotent. A mapping that already targets another Track is a blocking conflict and is never silently repointed.
 - Mapping changes do not rewrite published Workday snapshots.

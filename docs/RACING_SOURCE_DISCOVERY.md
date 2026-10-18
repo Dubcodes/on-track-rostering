@@ -32,6 +32,12 @@ The scheduler owns bounded detail refresh for both Race and Trial meetings, incl
 
 Month presentation may associate independent same-Track/date/discipline Race and Trial rows when both first times are known and differ by no more than 180 minutes. This never merges source rows or authoritative Workdays.
 
+### Track maps
+
+Automatic Track maps are a separate quarterly lifecycle from calendar and programme refresh. Each supported canonical course has a code-owned Love Racing course page and trusted official image fallback. On Track attempts that image fallback even when the course HTML is blocked or unavailable. HTML discovery accepts only trusted course-map assets, rejects unrelated page artwork and aerial/satellite images, and prefers the known course image rather than choosing an incidental larger image.
+
+Every downloaded candidate must finish on the trusted Love Racing host and course-map path, declare the same JPEG/PNG/WebP type as its file signature, fit the configured response bound, and expose valid dimensions of at least 200 by 200. Refresh failure retains a fully valid cached automatic image. A manual upload remains authoritative until deliberate reversion. Master data reports unchecked, available, failed-with-retained-cache, missing-file, unavailable-source and manual-override states; a valid effective map is streamed on the matching published Day.
+
 ## Harness Racing New Zealand
 
 ### Race meetings
