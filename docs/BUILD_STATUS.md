@@ -1,10 +1,10 @@
-# Build status — 2026-10-19
+# Build status — 2026-10-20
 
 ## Application-behavior qualification baseline and deployment boundary
 
-The previous qualified source baseline is exact SHA `59ee06230264bda6223d064d9bdfe06bf78ecc89` (release-gate run `39157134291`): **329 PostgreSQL-backed tests** and **78 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-59ee06230264bda6223d064d9bdfe06bf78ecc89` with digest `sha256:f250a1c64461df34f8f57ff21b4ca8cb8bcd3dca54c68a9c481bb6dcc44a938c`. The sole Alembic head is `f7a2c9d4e610`. The map URL/retry/diagnostic correction is qualified only when paired with its own successful exact-head gate; final run identity and totals are release evidence rather than facts inherited from this older baseline.
+The current application-behavior baseline is exact SHA `03154a3be05fd60d79c30d01b126b3436581bb6f` (release-gate run `39304940178`): **335 PostgreSQL-backed tests** and **79 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-03154a3be05fd60d79c30d01b126b3436581bb6f` with digest `sha256:c882258974d741c04b7dbd98111075461dfcae77214bce21ad4080f842eae706`. The sole Alembic head is `f7a2c9d4e610`.
 
-Earlier SHAs, including `bfce766e5c1ffa73ca86845c688a7e6d78482fe1`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
+Earlier SHAs, including `394ec739cfeb00591254de009183b07926ef796b`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
 
 An operational deployment candidate is identified by all three of the following, resolved when the candidate is deliberately selected:
 
