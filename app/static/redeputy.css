@@ -1315,6 +1315,7 @@ select option { background: var(--input-bg); color: var(--text); }
 .inline-help:hover .inline-help-content, .inline-help:focus .inline-help-content, .inline-help:focus-within .inline-help-content { display: block; }
 @media (max-width: 620px) {
   .inline-help-content { top: calc(100% + .35rem); bottom: auto; width: min(240px, calc(100vw - 32px)); }
+  .builder-preset-controls .inline-help-content { right: 0; left: auto; }
 }
 .capability-table { display: grid; gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
 .capability-heading, .capability-row { display: grid; grid-template-columns: minmax(8rem, 1.5fr) minmax(6rem, 1fr) minmax(9rem, 1.2fr) auto; gap: .5rem; align-items: center; padding: .45rem .55rem; background: var(--surface); }
@@ -1365,6 +1366,19 @@ select option { background: var(--input-bg); color: var(--text); }
 }
 .assignment-conflict-dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .assignment-conflict-dialog h2 { margin-top: 0; }
+.reauth-dialog {
+  width: min(92vw, 32rem);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 45%);
+}
+.reauth-dialog::backdrop { background: rgb(0 0 0 / 58%); }
+.reauth-dialog h2 { margin: 0; }
+.field-error { display: block; color: var(--danger); font-weight: 700; }
+[aria-invalid="true"] { border-color: var(--danger); }
+.created-record { outline: 2px solid var(--ok); outline-offset: 2px; }
 
 /* Transition onboarding surfaces use theme-owned colours and compact metrics. */
 .alert {

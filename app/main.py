@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -85,8 +85,12 @@ async def fresh_auth_recovery(request: Request, exc: FreshAuthenticationRequired
         destination = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         if not is_safe_next(destination):
             destination = "/settings"
+        destination_parts = urlsplit(destination)
+        query = dict(parse_qsl(destination_parts.query, keep_blank_values=True))
+        query["reauth"] = "required"
         return RedirectResponse(
-            f"/settings?reauth=required&next={quote(destination, safe='')}", status_code=303
+            destination_parts.path + (f"?{urlencode(query)}" if query else ""),
+            status_code=303,
         )
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 

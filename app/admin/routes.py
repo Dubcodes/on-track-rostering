@@ -320,44 +320,74 @@ def create_user(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
-    if role not in {item.value for item in Role}:
-        raise HTTPException(400, "Invalid role")
-    if error := credential_error(credential, role):
-        raise HTTPException(400, error)
-    scoped_region = optional_uuid(region_id, "region")
-    if role != Role.ADMIN.value and scoped_region is None:
-        raise HTTPException(400, "A region is required for this role")
+    form_state = {
+        "display_name": display_name,
+        "email": email,
+        "role": role,
+        "region_id": region_id,
+        "person_id": person_id,
+    }
+    errors: dict[str, str] = {}
+    valid_roles = {item.value for item in Role}
+    if role not in valid_roles:
+        errors["role"] = "Choose a valid account role."
+    elif error := credential_error(credential, role):
+        errors["credential"] = error
+    try:
+        scoped_region = optional_uuid(region_id, "region")
+    except HTTPException as exc:
+        scoped_region = None
+        errors["region_id"] = str(exc.detail)
+    if role in valid_roles and role != Role.ADMIN.value and scoped_region is None:
+        errors["region_id"] = "Choose a Region for this role."
     if role == Role.ADMIN.value and scoped_region is not None:
-        raise HTTPException(400, "Admin is global and cannot carry a region scope")
+        errors["region_id"] = "Admin is global and cannot carry a Region."
     if scoped_region:
         region = db.get(Region, scoped_region)
         if not region or region.lifecycle != Lifecycle.ACTIVE.value:
-            raise HTTPException(400, "Select an active region.")
-    user_email = _email_or_400(email)
-    if db.scalar(select(User.id).where(User.email == user_email)):
-        raise HTTPException(409, "An account already uses that email.")
-    person = _active_reference(db, Person, person_id, "crew identity") if person_id else None
+            errors["region_id"] = "Select an active Region."
+    try:
+        user_email = validated_email(email)
+    except ValueError as exc:
+        user_email = ""
+        errors["email"] = str(exc)
+    if user_email and db.scalar(select(User.id).where(User.email == user_email)):
+        errors["email"] = "An account already uses that email."
+    clean_name = display_name.strip()
+    if not 2 <= len(clean_name) <= 120:
+        errors["display_name"] = "Account name must be between 2 and 120 characters."
+    person = None
+    if person_id:
+        try:
+            person = _active_reference(db, Person, person_id, "crew identity")
+        except HTTPException as exc:
+            errors["person_id"] = str(exc.detail)
     if role == Role.CONTRACTOR.value and person is None:
-        raise HTTPException(400, "Contractor access must be linked to a crew identity.")
+        errors["person_id"] = "Contractor access must be linked to a crew identity."
     if person:
         try:
             person_email = validated_email(person.email or "")
-        except ValueError as exc:
-            raise HTTPException(
-                409,
-                "That crew identity needs a valid work email before an account can be linked.",
-            ) from exc
-        if person_email != user_email:
-            raise HTTPException(
-                409,
-                "The account email must match the crew identity's normalized work email.",
-            )
+        except ValueError:
+            person_email = ""
+            errors["person_id"] = "That crew identity needs a valid work email before linking."
+        if person_email and user_email and person_email != user_email:
+            errors["email"] = "The account email must match the crew identity's work email."
     if person and db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
-        raise HTTPException(409, "That crew identity is already linked to an account.")
+        errors["person_id"] = "That crew identity is already linked to an account."
+    if errors:
+        from app.accounts.routes import accounts_response
+
+        return accounts_response(
+            request,
+            db,
+            direct_account=form_state,
+            direct_errors=errors,
+            status_code=422,
+        )
+    require_fresh_auth(request)
     user = User(
         email=user_email,
-        display_name=_name_or_400(display_name, "Account name", 120),
+        display_name=clean_name,
         credential_hash=hash_credential(credential),
         credential_kind="pin" if credential.isdigit() else "password",
         credential_admin_eligible=not bool(credential_error(credential, Role.ADMIN.value)),
@@ -392,7 +422,11 @@ def create_user(
             detail={"role": role},
         )
         db.commit()
-    return RedirectResponse("/manage/accounts#accounts", status_code=303)
+    if person:
+        return RedirectResponse(
+            f"/manage/crew/{person.id}?account=created#account", status_code=303
+        )
+    return RedirectResponse(f"/manage/accounts?created_user={user.id}#accounts", status_code=303)
 
 
 @router.post("/invitations")
@@ -409,6 +443,13 @@ def invite_user(
     _admin(request)
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
+    form_state = {
+        "display_name": display_name,
+        "email": email,
+        "role": role,
+        "region_id": region_id,
+        "person_id": person_id,
+    }
     try:
         _, raw = create_invitation(
             db,
@@ -420,13 +461,26 @@ def invite_user(
             actor_user_id=request.state.user.id,
         )
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        db.rollback()
+        from app.accounts.routes import accounts_response
+
+        return accounts_response(
+            request,
+            db,
+            invitation_form=form_state,
+            invitation_errors={"form": str(exc)},
+            status_code=422,
+        )
     return templates.TemplateResponse(
         "invitation_created.html",
         context(
             request,
             invitation_url=invitation_url(raw),
             destination="/manage/accounts#invitations",
+            destination_label="Return to invitations",
+            invitation_kind="Account setup invitation",
+            recipient_name=display_name,
+            recipient_email=email,
         ),
         headers={"Cache-Control": "no-store"},
     )

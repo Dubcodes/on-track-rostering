@@ -2,6 +2,7 @@
 {% set help_context = 'crew_management' %}
 {% block title %}{{ person.display_name }} · Crew{% endblock %}
 {% block content %}
+{% if request.query_params.get('account') == 'created' %}<div class="alert success" role="status"><strong>Account created and linked to {{ person.display_name }}.</strong> Manage access and security below.</div>{% elif request.query_params.get('account') == 'linked' %}<div class="alert success" role="status"><strong>Existing account linked to {{ person.display_name }}.</strong></div>{% endif %}
 <section class="page-head">
   <p class="eyebrow"><a href="/manage/crew">Crew</a> · Person</p>
   <h1>{{ person.display_name }}</h1>

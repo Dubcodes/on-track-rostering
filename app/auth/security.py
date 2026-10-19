@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 from argon2 import PasswordHasher
@@ -29,7 +29,7 @@ class FreshAuthenticationRequired(HTTPException):
     def __init__(self) -> None:
         super().__init__(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Recent authentication is required. Re-enter your credential in Settings.",
+            detail="Recent authentication is required. Confirm your credential and try again.",
         )
 
 
@@ -168,6 +168,22 @@ def require_fresh_auth(request: Request) -> None:
     cutoff = utcnow() - timedelta(minutes=get_settings().fresh_auth_minutes)
     if not authenticated_at or authenticated_at < cutoff:
         raise FreshAuthenticationRequired()
+
+
+def fresh_auth_expires_at(request: Request) -> datetime | None:
+    """Return the current device's fresh-authentication deadline, if any."""
+    device = getattr(request.state, "device", None)
+    authenticated_at = device.primary_authenticated_at if device else None
+    if not authenticated_at:
+        return None
+    if authenticated_at.tzinfo is None:
+        authenticated_at = authenticated_at.replace(tzinfo=UTC)
+    return authenticated_at + timedelta(minutes=get_settings().fresh_auth_minutes)
+
+
+def has_fresh_auth(request: Request) -> bool:
+    deadline = fresh_auth_expires_at(request)
+    return bool(deadline and deadline >= utcnow())
 
 
 def set_auth_cookies(

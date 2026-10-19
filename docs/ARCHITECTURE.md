@@ -40,6 +40,8 @@ Employees/Viewers with regional scope can use Crew View for that region. Contrac
 
 Current authority remains Region-based. Crew Group membership does not grant Manager write scope, Viewer is not global by default, and full role administration remains on the advanced Accounts surface rather than ordinary Crew editing. Crew-Group-scoped Manager authority, global read-only Viewer accounts, and moving complete role administration into Crew are unresolved product decisions rather than partially implemented behavior.
 
+Crew is the normal Person-centric staff entry point; Accounts is the advanced User recovery, reconciliation and system-wide administration surface. Phase A keeps that boundary while making filters live and keeping fresh authentication inside the initiating workflow without replaying a privileged POST. The proposed consolidation of Profile, Roster & capabilities, Account & access, and Security & history on Person detail is documented in [ACCOUNTS_CREW_UX.md](ACCOUNTS_CREW_UX.md) and requires approval before the larger navigation change.
+
 Contractor login access is temporary User state linked to the existing Person, not a parallel contractor identity. Its expiry is the later of the latest future scheduled current-published assigned Workday date or the manual-extension timestamp, plus the persisted inactivity period (30 days by default). Generated Travel does not independently extend the date, multiple positions collapse to one participating day, and refresh never shortens a later stored expiry. Invitation activation, publication, manual extension, and the bounded scheduler refresh this state. Expiry revokes access without deleting the User, Person, or roster history.
 
 ## Authoritative publication

@@ -52,8 +52,27 @@ def _regions(request: Request, db: Session) -> list[Region]:
     return list(db.scalars(query))
 
 
-@router.get("", response_class=HTMLResponse)
-def accounts_page(request: Request, db: Session = Depends(get_db)):
+def _invitation_status(invitation: Invitation, now) -> str:  # type: ignore[no-untyped-def]
+    if invitation.consumed_at:
+        return "Accepted"
+    if invitation.revoked_at:
+        return "Revoked"
+    expires_at = invitation.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=now.tzinfo)
+    return "Expired" if expires_at <= now else "Pending"
+
+
+def accounts_response(
+    request: Request,
+    db: Session,
+    *,
+    direct_account: dict[str, str] | None = None,
+    direct_errors: dict[str, str] | None = None,
+    invitation_form: dict[str, str] | None = None,
+    invitation_errors: dict[str, str] | None = None,
+    status_code: int = 200,
+):
     regions = _regions(request, db)
     region_ids = [region.id for region in regions]
     signup_query = select(SignupRequest).where(SignupRequest.status == "PENDING")
@@ -156,6 +175,30 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 ),
             }
         )
+    invitations = list(db.scalars(invitations_query))
+    created_user = None
+    created_user_id = request.query_params.get("created_user", "")
+    try:
+        parsed_created_user_id = uuid.UUID(created_user_id) if created_user_id else None
+    except ValueError:
+        parsed_created_user_id = None
+    if parsed_created_user_id and request.state.actor.is_admin:
+        created_user = db.get(User, parsed_created_user_id)
+    default_region = str(regions[0].id) if regions else ""
+    direct_account = direct_account or {
+        "display_name": "",
+        "email": "",
+        "role": Role.EMPLOYEE.value,
+        "region_id": default_region,
+        "person_id": "",
+    }
+    invitation_form = invitation_form or {
+        "display_name": "",
+        "email": "",
+        "role": Role.EMPLOYEE.value,
+        "region_id": default_region,
+        "person_id": "",
+    }
     return templates.TemplateResponse(
         "accounts.html",
         context(
@@ -170,16 +213,30 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
             ),
             users=users,
             account_q=account_q,
+            created_user=created_user,
             device_counts=(
                 {user.id: active_device_count(db, user.id) for user in users}
                 if request.state.actor.is_admin
                 else {}
             ),
-            invitations=list(db.scalars(invitations_query)),
+            invitations=invitations,
+            invitation_statuses={item.id: _invitation_status(item, now) for item in invitations},
             contractor_accounts=contractor_accounts,
             contractor_inactivity_days=request.state.system_settings.contractor_inactivity_days,
             unlinked_users=[user for user in users if db.get(UserPersonLink, user.id) is None],
-            account_roles=[role.value for role in Role],
+            account_roles=[
+                Role.EMPLOYEE.value,
+                Role.CASUAL.value,
+                Role.CONTRACTOR.value,
+                Role.SUB_MANAGER.value,
+                Role.MANAGER.value,
+                Role.VIEWER.value,
+                Role.ADMIN.value,
+            ],
+            direct_account=direct_account,
+            direct_errors=direct_errors or {},
+            invitation_form=invitation_form,
+            invitation_errors=invitation_errors or {},
             grants=list(db.scalars(grants_query.order_by(RoleGrant.granted_at.desc()))),
             grant_roles=(
                 [role.value for role in Role]
@@ -187,7 +244,13 @@ def accounts_page(request: Request, db: Session = Depends(get_db)):
                 else [Role.SUB_MANAGER.value]
             ),
         ),
+        status_code=status_code,
     )
+
+
+@router.get("", response_class=HTMLResponse)
+def accounts_page(request: Request, db: Session = Depends(get_db)):
+    return accounts_response(request, db)
 
 
 @router.get("/people-metadata.csv")
@@ -367,7 +430,9 @@ def link_existing_person(
         detail={"person_id": str(person.id)},
     )
     db.commit()
-    return RedirectResponse("/manage/accounts?linked=1", status_code=303)
+    return RedirectResponse(
+        f"/manage/crew/{person.id}?account=linked#account", status_code=303
+    )
 
 
 @router.post("/invitations")
@@ -388,6 +453,13 @@ def create_regional_invitation(
         raise HTTPException(403)
     if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
         raise HTTPException(403, "Regional invitations cannot grant that role.")
+    form_state = {
+        "display_name": display_name,
+        "email": email,
+        "role": role,
+        "region_id": str(region_id),
+        "person_id": person_id,
+    }
     linked_person_id = optional_uuid(person_id, "crew identity")
     if linked_person_id:
         person = db.get(Person, linked_person_id)
@@ -404,10 +476,25 @@ def create_regional_invitation(
             actor_user_id=request.state.user.id,
         )
     except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        db.rollback()
+        return accounts_response(
+            request,
+            db,
+            invitation_form=form_state,
+            invitation_errors={"form": str(exc)},
+            status_code=422,
+        )
     return templates.TemplateResponse(
         "invitation_created.html",
-        context(request, invitation_url=invitation_url(raw), destination="/manage/accounts"),
+        context(
+            request,
+            invitation_url=invitation_url(raw),
+            destination="/manage/accounts#regional-invitations",
+            destination_label="Return to regional invitations",
+            invitation_kind="Account setup invitation",
+            recipient_name=display_name,
+            recipient_email=email,
+        ),
         headers={"Cache-Control": "no-store"},
     )
 
@@ -450,6 +537,10 @@ def invite_contractor(
             request,
             invitation_url=invitation_url(raw),
             destination="/manage/accounts#contractor-access",
+            destination_label="Return to Contractor accounts",
+            invitation_kind="Contractor account setup invitation",
+            recipient_name=person.display_name,
+            recipient_email=email,
         ),
         headers={"Cache-Control": "no-store"},
     )
@@ -532,7 +623,7 @@ def revoke_regional_invitation(
         region_id=invitation.region_id,
     )
     db.commit()
-    return RedirectResponse("/manage/accounts#contractor-access", status_code=303)
+    return RedirectResponse("/manage/accounts#regional-invitations", status_code=303)
 
 
 @router.post("/signup-requests/{signup_id}/approve")
@@ -572,6 +663,10 @@ def approve_signup_request(
             request,
             invitation_url=invitation_url(raw),
             destination="/manage/accounts",
+            destination_label="Return to pending requests",
+            invitation_kind="Approved account setup invitation",
+            recipient_name=signup.display_name,
+            recipient_email=signup.email,
         ),
         headers={"Cache-Control": "no-store"},
     )

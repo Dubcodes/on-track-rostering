@@ -30,12 +30,15 @@ Online Sources maps evidence identities to one canonical Track UUID and inherits
 
 The complete feature ledger and evidence boundary are in [IMPLEMENTATION_INVENTORY.md](IMPLEMENTATION_INVENTORY.md) and [BUILD_STATUS.md](BUILD_STATUS.md).
 
+Accounts/Crew Phase A also provides reusable immediate/debounced GET filters, valid direct-account defaults with safe validation recovery, workflow-local fresh authentication without secret storage or POST replay, meaningful linked/unlinked success destinations, and explicit one-time invitation copy/status/return handling. The proposed Phase B Person-centric workflow and its still-open product decisions are recorded in [ACCOUNTS_CREW_UX.md](ACCOUNTS_CREW_UX.md); the navigation restructure is not implemented.
+
 ## Unfinished work and explicit decisions still open
 
 - The private staging stack is initialized and reachable with a bootstrap Admin, but the current candidate is not thereby deployed or operationally qualified.
 - A separately authorized clean staging reset/re-import, canonical real-data correction, full staging matrix, physical-device security/push checks, persistence/restart checks, and backup/restore rehearsal remain.
 - Production promotion, secrets/RP identity freeze, monitoring/alerting and operational governance remain pending.
 - Product decisions remain open for Crew-Group-scoped Manager authority, global read-only Viewer accounts, full role administration in Crew, and whether missing truck-driver designation blocks Save & Preview or only Publish.
+- The Phase B Accounts/Crew navigation and route-ownership proposal still requires approval, including the treatment of unlinked User detail, signup/bulk-onboarding ownership, and which grant controls remain exclusively advanced.
 - Canonical real-data conversion must explicitly resolve imported Vehicle-as-Position history. Configurable Open Position auto-accept and IV configuration are not implemented.
 
 Do not describe any of these as complete. See [REAL_DATA_ONBOARDING.md](REAL_DATA_ONBOARDING.md), [STAGING_RESET_REIMPORT.md](STAGING_RESET_REIMPORT.md), and [STAGING_QUALIFICATION.md](STAGING_QUALIFICATION.md).

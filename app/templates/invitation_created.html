@@ -2,10 +2,12 @@
 {% block title %}Invitation created · {{ branding.product_name }}{% endblock %}
 {% block content %}
 <section class="auth-card">
-  <p class="eyebrow">One-time reveal</p><h1>Invitation created</h1>
+  <p class="eyebrow">One-time reveal</p><h1>{{ invitation_kind|default('Invitation') }} created</h1>
   <div class="alert success">Copy this link now. It will not be shown again.</div>
+  {% if recipient_name or recipient_email %}<p><strong>{{ recipient_name|default('Recipient') }}</strong>{% if recipient_email %} · {{ recipient_email }}{% endif %}</p>{% endif %}
   <label>Invitation link<input readonly value="{{ invitation_url }}" data-invitation-link></label>
-  <p class="muted">The secret is carried in the browser fragment, not an HTTP request URL.</p>
-  <a class="button secondary" href="{{ destination }}">Done</a>
+  <button type="button" data-copy-invitation-link>Copy invitation link</button>
+  <p class="muted">The secret is carried in the browser fragment, not an HTTP request URL. Creating this link does not send an email; share it through an approved channel.</p>
+  <a class="button secondary" href="{{ destination }}">{{ destination_label|default('Done') }}</a>
 </section>
 {% endblock %}

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
-from app.auth.security import CSRF_COOKIE
+from app.auth.security import CSRF_COOKIE, fresh_auth_expires_at, has_fresh_auth
 from app.branding.service import DEFAULT_BRANDING
 from app.catalog.presentation import track_token
 from app.core.config import get_settings
@@ -91,6 +91,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
     )
     user = getattr(request.state, "user", None)
     current_theme = normalize_theme(user.theme if user else DEFAULT_THEME)
+    fresh_deadline = fresh_auth_expires_at(request) if user else None
     return {
         "request": request,
         "user": user,
@@ -111,6 +112,8 @@ def context(request: Request, **values: object) -> dict[str, object]:
         "asset_version": settings.build_id or settings.app_version,
         "current_theme": current_theme,
         "current_theme_label": THEME_LABELS[current_theme],
+        "fresh_auth": has_fresh_auth(request) if user else False,
+        "fresh_auth_expires_at": fresh_deadline.isoformat() if fresh_deadline else "",
         "theme_groups": THEME_GROUPS,
         "theme_values": THEME_VALUES,
         **values,

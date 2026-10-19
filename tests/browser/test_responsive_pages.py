@@ -1468,6 +1468,12 @@ def test_people_onboarding_and_one_time_links_are_responsive(
     assert onboarding.get_by_text(person_name, exact=True).is_visible()
     assert onboarding.locator("small", has_text="Ready To Invite").is_visible()
     assert onboarding.get_by_role("link", name="Export metadata worksheet").is_visible()
+    history_length = page.evaluate("history.length")
+    onboarding.locator('select[name="onboarding_state"]').select_option("READY_TO_INVITE")
+    page.wait_for_url("**onboarding_state=READY_TO_INVITE*", wait_until="domcontentloaded")
+    assert "onboarding_q=" in page.url
+    assert page.evaluate("history.length") == history_length
+    onboarding = page.locator("#people-onboarding")
     onboarding.locator(f'input[name="person_ids"][value="{person_id}"]').check()
     onboarding.locator('input[name="confirm"]').check()
     with page.expect_response(
@@ -1496,6 +1502,20 @@ def test_people_onboarding_and_one_time_links_are_responsive(
     assert manager_onboarding.get_by_role("link", name="Export metadata worksheet").count() == 0
     assert manager_onboarding.locator('input[name="person_ids"]').count() == 0
     _assert_no_horizontal_overflow(manager_page)
+    manager_page.goto(
+        base_url
+        + f"/manage/crew?region_id={values['region_id']}&q={person_name.replace(' ', '+')}"
+    )
+    crew_history_length = manager_page.evaluate("history.length")
+    manager_page.locator('select[name="account_type"]').select_option("NONE")
+    manager_page.wait_for_url("**account_type=NONE*", wait_until="domcontentloaded")
+    assert "q=Browser" in manager_page.url
+    assert manager_page.evaluate("history.length") == crew_history_length
+    manager_page.get_by_role("link", name=re.compile(person_name)).click()
+    manager_page.wait_for_url(f"**/manage/crew/{person_id}")
+    manager_page.go_back(wait_until="domcontentloaded")
+    assert manager_page.locator('select[name="account_type"]').input_value() == "NONE"
+    assert manager_page.get_by_text(person_name, exact=True).is_visible()
     manager_context.close()
 
 
@@ -2657,7 +2677,7 @@ def test_builder_capacity_applies_when_person_is_selected_after_vehicle(browser_
     context.close()
 
 
-@pytest.mark.parametrize("width", [1280, 320])
+@pytest.mark.parametrize("width", [1280, 375, 320])
 def test_trials_builder_edit_preview_publish_and_blank_row(browser_site, width: int) -> None:  # type: ignore[no-untyped-def]
     browser, base_url, values = browser_site
     context = browser.new_context(viewport={"width": width, "height": 900}, has_touch=width <= 760)
@@ -2912,20 +2932,34 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
         device.primary_authenticated_at = utcnow() - timedelta(hours=1)
         db.commit()
     page.goto(base_url + "/manage/accounts#invitations")
-    page.get_by_text("Send a one-time invitation", exact=True).click()
+    page.get_by_text("Create a one-time invitation", exact=True).click()
     invitation_form = page.locator('form[action="/admin/invitations"]')
-    invitation_form.locator('input[name="display_name"]').fill("Fresh auth candidate")
-    invitation_form.locator('input[name="email"]').fill(f"fresh-{width}@example.test")
+    candidate_name = f"Fresh auth candidate {width}"
+    invitation_form.locator('input[name="display_name"]').fill(candidate_name)
+    invitation_form.locator('input[name="email"]').fill(f"fresh-{width}@example.com")
     invitation_form.locator('select[name="role"]').select_option("EMPLOYEE")
     invitation_form.locator('select[name="region_id"]').select_option(values["region_id"])
     invitation_form.get_by_role("button", name="Create invitation").click()
-    page.wait_for_url("**/settings?reauth=required*", wait_until="domcontentloaded")
-    assert page.get_by_text("The privileged action will not be replayed automatically.").is_visible()
-    page.locator('#reauthenticate input[name="credential"]').fill(values["admin"][1])
-    page.locator("#reauthenticate button", has_text="Re-authenticate").click()
-    page.wait_for_url("**/manage/accounts", wait_until="domcontentloaded")
-    assert page.get_by_role("heading", name="Accounts & access").is_visible()
-    assert page.get_by_text("Fresh auth candidate", exact=True).count() == 0
+    assert page.url.endswith("/manage/accounts#invitations")
+    dialog = page.locator("[data-reauth-dialog]")
+    assert dialog.is_visible()
+    assert invitation_form.locator('input[name="display_name"]').input_value() == candidate_name
+    dialog.locator('input[name="credential"]').fill(values["admin"][1])
+    dialog.get_by_role("button", name="Confirm").click()
+    dialog.wait_for(state="hidden")
+    assert not dialog.is_visible()
+    assert page.get_by_text(candidate_name, exact=True).count() == 0
+    invitation_form.get_by_role("button", name="Create invitation").click()
+    page.wait_for_url("**/admin/invitations", wait_until="domcontentloaded")
+    created_heading = page.get_by_role("heading", name="Account setup invitation created")
+    created_heading.wait_for()
+    assert created_heading.is_visible()
+    assert page.get_by_text("Creating this link does not send an email", exact=False).is_visible()
+    admin_context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
+    page.get_by_role("button", name="Copy invitation link").click()
+    copied_button = page.get_by_role("button", name="Copied")
+    copied_button.wait_for()
+    assert copied_button.is_visible()
     assert not errors
     admin_context.close()
 

@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -34,6 +34,7 @@ from app.auth.security import (
 )
 from app.catalog.models import BasePosition, Region, Track, TrackMap
 from app.catalog.presentation import track_token
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Role, WorkdayCategory
 from app.core.holidays import holiday_info_for_date
@@ -1004,12 +1005,23 @@ def reauthenticate(
     verify_csrf(request, csrf_token)
     user = db.get(User, request.state.user.id)
     device = db.get(TrustedDevice, request.state.device.id)
+    wants_json = "application/json" in request.headers.get("accept", "")
     if not device or not _verify_fresh_credential(db, request, user, credential):
+        if wants_json:
+            return JSONResponse(
+                {"ok": False, "detail": "Credential could not be verified."},
+                status_code=400,
+            )
         raise HTTPException(400, "Credential could not be verified.")
     from app.core.time import utcnow
 
     device.primary_authenticated_at = utcnow()
     db.commit()
+    if wants_json:
+        deadline = device.primary_authenticated_at + timedelta(
+            minutes=get_settings().fresh_auth_minutes
+        )
+        return JSONResponse({"ok": True, "expires_at": deadline.isoformat()})
     destination = next if is_safe_next(next) else "/settings"
     return RedirectResponse(destination, status_code=303)
 

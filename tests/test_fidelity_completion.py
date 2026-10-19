@@ -96,6 +96,6 @@ def test_fresh_auth_html_redirects_without_replaying_post() -> None:
     )
     response = asyncio.run(fresh_auth_recovery(request, FreshAuthenticationRequired()))
     assert response.status_code == 303
-    assert response.headers["location"].startswith("/settings?reauth=required&next=")
+    assert response.headers["location"] == "/admin?tab=accounts&reauth=required"
     assert "csrf" not in response.headers["location"].lower()
     assert "credential" not in response.headers["location"].lower()

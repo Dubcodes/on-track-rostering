@@ -8,9 +8,9 @@
   <p class="lede">Choose a Person to manage their roster identity, account access and history.</p>
 </section>
 <section class="panel">
-  <form method="get" class="form-grid">
+  <form method="get" class="form-grid" data-live-filters>
     <label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
-    <label>Search<input type="search" name="q" value="{{ query }}" placeholder="Name or work email"></label>
+    <label>Search<input type="search" name="q" value="{{ query }}" placeholder="Name or work email" data-filter-search></label>
     <label>Account type<select name="account_type"><option value="">All</option><option value="NONE" {% if account_type == 'NONE' %}selected{% endif %}>No account</option>{% for role in filter_account_types %}<option value="{{ role }}" {% if account_type == role %}selected{% endif %}>{{ role|replace('_',' ')|title }}</option>{% endfor %}</select></label>
     <label>Crew Group<select name="crew_group_id"><option value="">All</option>{% for group in filter_groups %}<option value="{{ group.id }}" {% if selected_crew_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>{% endfor %}</select></label>
     <label>Position / capability<select name="position_id"><option value="">All</option>{% for position in filter_positions %}<option value="{{ position.id }}" {% if selected_position_id == position.id %}selected{% endif %}>{{ position.name }}</option>{% endfor %}</select></label>

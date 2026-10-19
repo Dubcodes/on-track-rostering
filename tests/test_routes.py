@@ -413,7 +413,7 @@ def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) 
                 "person_id": "",
                 "csrf_token": csrf,
             },
-            409,
+            422,
         ),
         (
             "/admin/users",
@@ -426,7 +426,7 @@ def test_admin_input_conflicts_and_invalid_references_are_controlled(routed_db) 
                 "person_id": str(person_id),
                 "csrf_token": csrf,
             },
-            409,
+            422,
         ),
         (
             "/admin/positions",
@@ -504,7 +504,7 @@ def test_archived_catalog_targets_are_rejected(routed_db) -> None:  # type: igno
             "csrf_token": csrf,
         },
         follow_redirects=False,
-    ).status_code == 400
+    ).status_code == 422
     assert client.post(
         "/manage/crew",
         data={
@@ -552,7 +552,10 @@ def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -
         },
         follow_redirects=False,
     )
-    assert repeated_create.status_code == 400
+    assert repeated_create.status_code == 422
+    assert "Invitation not created" in repeated_create.text
+    assert 'value="invitee@example.com"' in repeated_create.text
+    assert "#token=" not in repeated_create.text
     with factory() as db:
         invitation = db.scalar(select(Invitation).where(Invitation.email == "invitee@example.com"))
         assert invitation and invitation.token_hash == token_hash(raw)
@@ -4477,13 +4480,82 @@ def test_account_linking_requires_matching_email_and_flags_legacy_mismatch(route
         },
         follow_redirects=False,
     )
-    assert direct.status_code == 409
+    assert direct.status_code == 422
+    assert "Account not created" in direct.text
+    assert 'value="Direct Mismatch Account"' in direct.text
+    assert 'value="direct-login@example.com"' in direct.text
+    assert 'name="credential" required' in direct.text
+    assert 'value="246810"' not in direct.text
     directory = admin.get("/manage/crew?q=Legacy+Mismatch")
     assert directory.status_code == 200
     assert "Work/login email mismatch" in directory.text
     detail = admin.get(f"/manage/crew/{legacy_person_id}")
     assert detail.status_code == 200
     assert "Work/login email mismatch" in detail.text
+
+
+def test_direct_account_creation_returns_to_meaningful_context(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        person = Person(
+            display_name="Direct Linked Person",
+            email="direct-linked@example.com",
+            home_region_id=region_id,
+        )
+        db.add(person)
+        db.commit()
+        person_id = person.id
+
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    unlinked = admin.post(
+        "/admin/users",
+        data={
+            "display_name": "Recovery Only Account",
+            "email": "recovery-only@example.com",
+            "credential": "246810",
+            "role": Role.EMPLOYEE.value,
+            "region_id": str(region_id),
+            "person_id": "",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert unlinked.status_code == 303
+    assert unlinked.headers["location"].startswith("/manage/accounts?created_user=")
+    result = admin.get(unlinked.headers["location"])
+    assert "Account created for Recovery Only Account" in result.text
+    assert "No rosterable Person was created" in result.text
+
+    linked = admin.post(
+        "/admin/users",
+        data={
+            "display_name": "Direct Linked Person",
+            "email": "direct-linked@example.com",
+            "credential": "246810",
+            "role": Role.EMPLOYEE.value,
+            "region_id": str(region_id),
+            "person_id": str(person_id),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert linked.status_code == 303
+    assert linked.headers["location"] == f"/manage/crew/{person_id}?account=created#account"
+    detail = admin.get(linked.headers["location"])
+    assert "Account created and linked to Direct Linked Person" in detail.text
+    with factory() as db:
+        account_id = db.scalar(
+            select(UserPersonLink.user_id).where(UserPersonLink.person_id == person_id)
+        )
+        assert account_id
+        assert db.scalar(
+            select(RoleGrant.id).where(
+                RoleGrant.user_id == account_id,
+                RoleGrant.role == Role.EMPLOYEE.value,
+                RoleGrant.region_id == region_id,
+            )
+        )
 
 
 def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db) -> None:  # type: ignore[no-untyped-def]

@@ -595,6 +595,10 @@ def create_person_setup_link(
             request,
             invitation_url=invitation_url(raw),
             destination=f"/manage/crew/{person.id}",
+            destination_label=f"Return to {person.display_name}",
+            invitation_kind="Account setup invitation",
+            recipient_name=person.display_name,
+            recipient_email=person.email,
         ),
         headers={"Cache-Control": "no-store"},
     )

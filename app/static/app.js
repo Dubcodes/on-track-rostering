@@ -82,6 +82,51 @@
   document.querySelectorAll("[data-auto-submit]").forEach((element) => {
     element.addEventListener("change", () => element.form?.submit());
   });
+  const filterRestoreKey = "ontrack-live-filter-position";
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(filterRestoreKey) || "null");
+    if (saved && saved.url === `${window.location.pathname}${window.location.search}`) {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({top: saved.y, behavior: "instant"});
+        if (saved.name) document.querySelector(`[name="${CSS.escape(saved.name)}"]`)?.focus({preventScroll: true});
+      });
+      sessionStorage.removeItem(filterRestoreKey);
+    }
+  } catch (_) { sessionStorage.removeItem(filterRestoreKey); }
+  document.querySelectorAll("form[data-live-filters]").forEach((form) => {
+    let timer = 0;
+    const navigate = (replace = true) => {
+      const url = new URL(form.action || window.location.href, window.location.href);
+      url.search = "";
+      new FormData(form).forEach((value, key) => {
+        if (typeof value === "string" && value) url.searchParams.append(key, value);
+      });
+      url.hash = form.dataset.filterTarget || "";
+      const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      sessionStorage.setItem(filterRestoreKey, JSON.stringify({
+        url: `${url.pathname}${url.search}`,
+        y: window.scrollY,
+        name: focused?.getAttribute("name") || "",
+      }));
+      if (replace) window.location.replace(url);
+      else window.location.assign(url);
+    };
+    form.querySelectorAll("select, input[type='checkbox'], input[type='radio'], input[type='date']").forEach((control) => {
+      control.addEventListener("change", () => navigate(true));
+    });
+    form.querySelectorAll("input[type='search'], input[data-filter-search]").forEach((control) => {
+      control.addEventListener("input", () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => navigate(true), 350);
+      });
+      control.addEventListener("search", () => navigate(true));
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      window.clearTimeout(timer);
+      navigate(false);
+    });
+  });
   document.querySelectorAll("[data-live-search]").forEach((root) => {
     const input = root.querySelector("[data-live-search-input]") || document.querySelector("[data-live-search-input]");
     const items = [...root.querySelectorAll("[data-live-search-item]")];
@@ -164,6 +209,20 @@
   document.querySelectorAll("[data-copy-setup-link]").forEach((button) => {
     button.addEventListener("click", () => {
       navigator.clipboard.writeText(button.closest("article").dataset.url);
+    });
+  });
+  document.querySelectorAll("[data-copy-invitation-link]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const input = document.querySelector("[data-invitation-link]");
+      if (!input) return;
+      try {
+        await navigator.clipboard.writeText(input.value);
+        button.textContent = "Copied";
+      } catch (_) {
+        input.focus();
+        input.select();
+        button.textContent = "Select link to copy";
+      }
     });
   });
   document.querySelector("[data-download-setup-links]")?.addEventListener("click", () => {
@@ -316,4 +375,91 @@
     option.textContent = "Casual";
     employee?.insertAdjacentElement("afterend", option);
   });
+  document.querySelectorAll("[data-account-create]").forEach((form) => {
+    const role = form.querySelector('[name="role"]');
+    const region = form.querySelector('[name="region_id"]');
+    const person = form.querySelector('[name="person_id"]');
+    const refresh = () => {
+      const global = role?.value === "ADMIN";
+      const contractor = role?.value === "CONTRACTOR";
+      if (region) {
+        region.required = !global;
+        region.disabled = global;
+      }
+      if (person) person.required = contractor;
+      form.querySelector("[data-region-help]")?.toggleAttribute("hidden", !global);
+      form.querySelector("[data-person-help]")?.toggleAttribute("hidden", !contractor);
+    };
+    role?.addEventListener("change", refresh);
+    refresh();
+  });
+  const reauthDialog = document.querySelector("[data-reauth-dialog]");
+  const reauthForm = reauthDialog?.querySelector("[data-reauth-form]");
+  const reauthCredential = reauthDialog?.querySelector("[data-reauth-credential]");
+  const reauthError = reauthDialog?.querySelector("[data-reauth-error]");
+  let freshAuthTarget = null;
+  const freshAuthValid = () => {
+    const deadline = Date.parse(document.body.dataset.freshAuthExpiresAt || "");
+    return document.body.dataset.freshAuth === "true" && Number.isFinite(deadline) && deadline > Date.now();
+  };
+  const requestFreshAuth = (form = null) => {
+    if (!reauthDialog) return;
+    freshAuthTarget = form;
+    reauthError.hidden = true;
+    reauthError.textContent = "";
+    reauthCredential.value = "";
+    reauthDialog.showModal();
+    reauthCredential.focus();
+  };
+  const sensitiveAction = (form) => {
+    const path = new URL(form.action, window.location.href).pathname;
+    return /^\/admin\/(users|invitations)(\/|$)/.test(path)
+      || /^\/manage\/accounts\/(link-person|invitations|contractors|people-invitations|signup-requests|grants)(\/|$)/.test(path)
+      || /^\/manage\/crew\/[^/]+\/(setup-link|account-status|employment-type|credential-reset|devices\/revoke|sub-manager|notice-scope)(\/|$)/.test(path);
+  };
+  document.querySelectorAll('form[method="post" i]').forEach((form) => {
+    if (sensitiveAction(form)) form.dataset.freshAuth = "";
+  });
+  document.querySelectorAll("form[data-fresh-auth]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      if (freshAuthValid()) return;
+      event.preventDefault();
+      requestFreshAuth(form);
+    });
+  });
+  reauthForm?.addEventListener("submit", async (event) => {
+    if (event.submitter?.value === "cancel") return;
+    event.preventDefault();
+    const confirm = reauthForm.querySelector("[data-reauth-confirm]");
+    confirm.disabled = true;
+    reauthError.hidden = true;
+    try {
+      const payload = new FormData();
+      payload.set("credential", reauthCredential.value);
+      payload.set("csrf_token", document.querySelector('input[name="csrf_token"]')?.value || "");
+      payload.set("next", `${window.location.pathname}${window.location.search}`);
+      const response = await fetch("/settings/reauthenticate", {
+        method: "POST",
+        body: payload,
+        headers: {Accept: "application/json"},
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.detail || "Credential could not be verified.");
+      document.body.dataset.freshAuth = "true";
+      document.body.dataset.freshAuthExpiresAt = result.expires_at;
+      reauthCredential.value = "";
+      reauthDialog.close();
+      const submit = freshAuthTarget?.querySelector('button[type="submit"], button:not([type]), input[type="submit"]');
+      submit?.focus();
+      freshAuthTarget = null;
+    } catch (error) {
+      reauthError.textContent = error.message || "Credential could not be verified.";
+      reauthError.hidden = false;
+      reauthCredential.focus();
+      reauthCredential.select();
+    } finally {
+      confirm.disabled = false;
+    }
+  });
+  if (new URLSearchParams(window.location.search).get("reauth") === "required") requestFreshAuth();
 })();
