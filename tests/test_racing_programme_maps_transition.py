@@ -118,21 +118,98 @@ def test_trial_heat_programme_uses_same_strict_sequence_contract() -> None:
     assert "Heat 1 has conflicting scheduled starts." in partial.diagnostics
 
 
-def test_map_identity_keeps_cambridge_venues_distinct_and_unwraps_safe_image() -> None:
+def test_map_identity_keeps_cambridge_venues_distinct_and_preserves_safe_image_handler() -> None:
     assert canonical_track_name("Cambridge Synthetic") == "cambridge synthetic"
     assert canonical_track_name("Cambridge Harness") == "cambridge harness"
     wrapped = (
-        "https://loveracing.nz/Image.ashx?path="
-        "%2FOnHorseFiles%2FRacecourses%2FTracks%2FCambridge.jpg"
+        "https://loveracing.nz/Common/Image.ashx?path="
+        "%2FOnHorseFiles%2FRacecourses%2FTracks%2FCambridge-synthethic_2D.jpg"
+        "&version=3.191&w=400"
     )
-    assert trusted_image_url(wrapped, "https://loveracing.nz/course") == (
-        "https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Cambridge.jpg"
-    )
+    assert trusted_image_url(wrapped, "https://loveracing.nz/course") == wrapped
     assert trusted_image_url("https://example.test/map.jpg", "https://loveracing.nz") is None
     candidates = image_candidates(
         f'<a href="{wrapped}">Map</a>', "https://loveracing.nz/course"
     )
-    assert candidates == ["https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Cambridge.jpg"]
+    assert candidates == [wrapped]
+
+
+def test_official_map_urls_are_encoded_once_and_reject_malformed_paths() -> None:
+    base = "https://loveracing.nz/RaceInfo/Clubs-And-Courses/35/Racecourse.aspx"
+    te_aroha = "/OnHorseFiles/Racecourses/Tracks/2D with updated Logo/Te-Aroha_new.jpg"
+    encoded = "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Te-Aroha_new.jpg"
+    expected = f"https://loveracing.nz{encoded}"
+    assert trusted_image_url(te_aroha, base) == expected
+    assert trusted_image_url(encoded, base) == expected
+    assert trusted_image_url(
+        "/OnHorseFiles/Racecourses/Tracks/Ellerslie_2025.png?version=3.191", base
+    ) == "https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Ellerslie_2025.png?version=3.191"
+    assert trusted_image_url(te_aroha + "\r\nX-Test: unsafe", base) is None
+    assert trusted_image_url(encoded.replace("%20", "%0d", 1), base) is None
+    assert trusted_image_url(encoded.replace("%20", "%ZZ", 1), base) is None
+
+
+def test_te_aroha_image_handler_keeps_query_and_validates_nested_map_path() -> None:
+    base = "https://loveracing.nz/RaceInfo/Clubs-And-Courses/35/Racecourse.aspx"
+    handler = (
+        "/Common/Image.ashx?p=%2FOnHorseFiles%2FRacecourses%2FTracks%2F"
+        "2D+with+updated+Logo%2FTe-Aroha_new.jpg&version=3.191&w=400"
+    )
+    expected = (
+        "https://loveracing.nz/Common/Image.ashx?p=%2FOnHorseFiles%2FRacecourses%2FTracks%2F"
+        "2D%20with%20updated%20Logo%2FTe-Aroha_new.jpg&version=3.191&w=400"
+    )
+    assert trusted_image_url(handler, base) == expected
+    assert trusted_image_url(
+        "/Common/Image.ashx?p=https%3A%2F%2Fexample.test%2Fmap.jpg&w=400", base
+    ) is None
+    assert trusted_image_url(
+        "/Common/Image.ashx?p=%2FOnHorseFiles%2FRacecourses%2FTracks%2FTe-Aroha_new.jpg"
+        "&p=%2FOnHorseFiles%2FRacecourses%2FTracks%2FEllerslie_2025.png",
+        base,
+    ) is None
+
+
+def test_te_aroha_handler_succeeds_when_direct_image_is_unavailable(
+    db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: tmp_path.resolve())
+    _user, _region, track = _foundation(db)
+    track.name = "Te Aroha"
+    content = _png(640, 480)
+
+    class HandlerClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get(self, url: str, *, accept: str) -> HTTPResponse:
+            self.calls.append(url)
+            if accept == "text/html":
+                return HTTPResponse(
+                    url=url,
+                    status=200,
+                    content_type="text/html",
+                    body=(
+                        b'<a href="/Common/Image.ashx?p=%2FOnHorseFiles%2FRacecourses%2FTracks%2F'
+                        b'2D+with+updated+Logo%2FTe-Aroha_new.jpg&amp;version=3.191&amp;w=400">'
+                        b'<img alt="Track - 2D" src="/Common/Image.ashx?p=%2FOnHorseFiles%2F'
+                        b'Racecourses%2FTracks%2F2D+with+updated+Logo%2FTe-Aroha_new.jpg&amp;w=400">'
+                        b"</a>"
+                    ),
+                )
+            if "/Common/Image.ashx" not in url:
+                raise SourceHTTPError("Source returned HTTP 404.")
+            assert "2D%20with%20updated%20Logo" in url
+            return HTTPResponse(url=url, status=200, content_type="image/png", body=content)
+
+    client = HandlerClient()
+    row = refresh_automatic_map(db, track, client)  # type: ignore[arg-type]
+    assert row.automatic_status == "AVAILABLE"
+    assert row.automatic_error is None
+    assert "/Common/Image.ashx" in row.automatic_source_url
+    assert (tmp_path / row.automatic_file_name).read_bytes() == content
+    assert any("/Common/Image.ashx" in call for call in client.calls)
+    assert any("2D%20with%20updated%20Logo/Te-Aroha_new.jpg" in call for call in client.calls)
 
 
 def test_ellerslie_html_failure_still_downloads_known_official_fallback(
@@ -488,15 +565,23 @@ def test_manual_map_precedes_automatic_and_reset_restores_it(db, monkeypatch, tm
     previous.unlink()
 
 
-def test_track_map_refresh_is_quarterly_and_preserves_last_good_cache() -> None:
+def test_track_map_refresh_is_quarterly_after_success_and_daily_after_failure() -> None:
     checked_at = datetime(2026, 1, 1, tzinfo=UTC)
-    row = TrackMap(
+    successful = TrackMap(
         automatic_checked_at=checked_at,
         automatic_file_name="last-good.png",
-        automatic_status="ERROR",
+        automatic_status="AVAILABLE",
     )
-    assert not map_refresh_due(row, now=checked_at + timedelta(days=89))
-    assert map_refresh_due(row, now=checked_at + timedelta(days=90))
+    assert not map_refresh_due(successful, now=checked_at + timedelta(days=89))
+    assert map_refresh_due(successful, now=checked_at + timedelta(days=90))
+    failed = TrackMap(
+        automatic_checked_at=checked_at,
+        automatic_file_name="last-good.png",
+        automatic_status="AVAILABLE",
+        automatic_error="HTTP/source failure: Source returned HTTP 403.",
+    )
+    assert not map_refresh_due(failed, now=checked_at + timedelta(hours=23))
+    assert map_refresh_due(failed, now=checked_at + timedelta(days=1))
 
 
 def test_scheduled_map_discovery_uses_effective_course_override(db) -> None:  # type: ignore[no-untyped-def]
@@ -558,6 +643,7 @@ def test_refresh_failure_retains_only_a_usable_automatic_cache(
 
     refreshed = refresh_automatic_map(db, track, FailingClient())  # type: ignore[arg-type]
     assert refreshed.automatic_status == "AVAILABLE"
+    assert refreshed.automatic_error.startswith("HTTP/source failure:")
     assert effective_map(refreshed)["file_name"] == "last-good.png"  # type: ignore[index]
     assert map_status(refreshed)["code"] == "SOURCE_FAILED_RETAINED"
     cached.unlink()
@@ -565,6 +651,56 @@ def test_refresh_failure_retains_only_a_usable_automatic_cache(
     assert refreshed.automatic_status == "ERROR"
     assert effective_map(refreshed) is None
     assert map_status(refreshed)["code"] == "MISSING_FILE"
+    assert "HTTP/source failure:" in map_status(refreshed)["detail"]
+
+
+def test_map_refresh_reports_invalid_url_image_and_storage_failures(
+    db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: tmp_path.resolve())
+    _user, _region, track = _foundation(db)
+
+    class UnexpectedClient:
+        def get(self, _url: str, *, accept: str):  # type: ignore[no-untyped-def]
+            raise AssertionError(f"No request expected for {accept}.")
+
+    monkeypatch.setitem(
+        __import__("app.track_maps.service", fromlist=["COURSES"]).COURSES,
+        "te rapa",
+        ("/RaceInfo/Clubs-And-Courses/38/Racecourse.aspx", "/bad%ZZ/map.jpg"),
+    )
+    invalid_url = refresh_automatic_map(db, track, UnexpectedClient())  # type: ignore[arg-type]
+    assert invalid_url.automatic_error.startswith("Invalid URL or image path:")
+
+    monkeypatch.setitem(
+        __import__("app.track_maps.service", fromlist=["COURSES"]).COURSES,
+        "te rapa",
+        (
+            "/RaceInfo/Clubs-And-Courses/38/Racecourse.aspx",
+            "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Te%20Rapa%20copy.jpg",
+        ),
+    )
+
+    class InvalidImageClient:
+        def get(self, url: str, *, accept: str) -> HTTPResponse:
+            if accept == "text/html":
+                raise SourceHTTPError("Course page challenge.")
+            return HTTPResponse(url=url, status=200, content_type="text/html", body=b"not an image")
+
+    invalid_image = refresh_automatic_map(db, track, InvalidImageClient())  # type: ignore[arg-type]
+    assert invalid_image.automatic_error.startswith("Invalid or unsupported image:")
+
+    class ValidImageClient:
+        def get(self, url: str, *, accept: str) -> HTTPResponse:
+            if accept == "text/html":
+                raise SourceHTTPError("Course page challenge.")
+            return HTTPResponse(url=url, status=200, content_type="image/png", body=_png())
+
+    monkeypatch.setattr(Path, "write_bytes", lambda self, content: (_ for _ in ()).throw(PermissionError()))
+    storage_failure = refresh_automatic_map(db, track, ValidImageClient())  # type: ignore[arg-type]
+    assert storage_failure.automatic_error == (
+        "File permission/storage failure: the Track-map cache is not writable."
+    )
 
 
 def test_effective_map_uses_bounded_header_and_rejects_metadata_mismatch(

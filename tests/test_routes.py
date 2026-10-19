@@ -1114,7 +1114,7 @@ def test_published_day_falls_back_when_map_metadata_points_to_missing_file(
     assert f'src="/track-maps/{track_id}"' not in catalog.text
 
 
-@pytest.mark.parametrize("track_name", ["Ellerslie", "Cambridge Synthetic"])
+@pytest.mark.parametrize("track_name", ["Ellerslie", "Cambridge Synthetic", "Te Aroha"])
 def test_official_map_refresh_persists_serves_and_renders_on_published_day(
     routed_db, monkeypatch, tmp_path, track_name: str
 ) -> None:  # type: ignore[no-untyped-def]

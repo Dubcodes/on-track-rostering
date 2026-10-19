@@ -8,7 +8,7 @@ from datetime import timedelta
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urljoin, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +21,11 @@ from app.external_calendar.http import SourceHTTPClient, SourceHTTPError
 LOVE_RACING_ORIGIN = "https://loveracing.nz"
 MAX_MANUAL_MAP_BYTES = 15 * 1024 * 1024
 MAP_HEADER_BYTES = 64 * 1024
+SUCCESSFUL_MAP_REFRESH_INTERVAL = timedelta(days=90)
+FAILED_MAP_REFRESH_INTERVAL = timedelta(days=1)
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
+_IMAGE_PATH = re.compile(r"\.(?:jpe?g|png|webp)$", re.IGNORECASE)
 COURSES: dict[str, tuple[str, str]] = {
     "rotorua": ("/RaceInfo/Clubs-And-Courses/1/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Arawa%20Park%20copy.jpg"),
     "avondale": ("/RaceInfo/Clubs-And-Courses/4/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Avondale%202.jpg"),
@@ -31,7 +36,7 @@ COURSES: dict[str, tuple[str, str]] = {
     "ruakaka": ("/RaceInfo/Clubs-And-Courses/32/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Ruakaka%20copy.jpg"),
     "taupo": ("/RaceInfo/Clubs-And-Courses/34/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Taupo%20copy.jpg"),
     "tauranga": ("/RaceInfo/Clubs-And-Courses/41/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/Tauranga-2D_new.jpg"),
-    "te aroha": ("/RaceInfo/Clubs-And-Courses/35/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/Te-Aroha_new.jpg"),
+    "te aroha": ("/RaceInfo/Clubs-And-Courses/35/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Te-Aroha_new.jpg"),
     "te rapa": ("/RaceInfo/Clubs-And-Courses/38/Racecourse.aspx", "/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Te%20Rapa%20copy.jpg"),
 }
 
@@ -93,31 +98,75 @@ class _CandidateParser(HTMLParser):
             self._links.pop()
 
 
+def _normalized_https_url(value: str, base_url: str) -> str | None:
+    raw = unescape(value.strip())
+    if not raw or _CONTROL_CHARACTERS.search(raw) or _INVALID_PERCENT_ESCAPE.search(raw):
+        return None
+    try:
+        parsed = urlsplit(urljoin(base_url, raw))
+        port = parsed.port
+        decoded_path = unquote(parsed.path, errors="strict")
+        query_pairs = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            encoding="utf-8",
+            errors="strict",
+        )
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or parsed.fragment
+        or _CONTROL_CHARACTERS.search(decoded_path)
+        or any(
+            _CONTROL_CHARACTERS.search(key) or _CONTROL_CHARACTERS.search(item)
+            for key, item in query_pairs
+        )
+    ):
+        return None
+    normalized_path = quote(decoded_path, safe="/!$&'()*+,;=:@-._~")
+    normalized_query = urlencode(query_pairs, doseq=True, quote_via=quote, safe="")
+    host = parsed.hostname.casefold()
+    netloc = host if port in (None, 443) else f"{host}:{port}"
+    return urlunsplit(("https", netloc, normalized_path, normalized_query, ""))
+
+
+def _trusted_direct_image_url(absolute: str) -> bool:
+    parsed = urlsplit(absolute)
+    host = (parsed.hostname or "").casefold()
+    if host != "loveracing.nz" and not host.endswith(".loveracing.nz"):
+        return False
+    path = unquote(parsed.path).casefold()
+    if not _IMAGE_PATH.search(path) or "/onhorsefiles/racecourses/tracks/" not in path:
+        return False
+    return not any(word in path for word in ("satellite", "aerial"))
+
+
 def trusted_image_url(value: str, base_url: str) -> str | None:
-    absolute = urljoin(base_url, unescape(value.strip()))
+    absolute = _normalized_https_url(value, base_url)
+    if not absolute:
+        return None
     parsed = urlsplit(absolute)
     host = (parsed.hostname or "").casefold()
     if host != "loveracing.nz" and not host.endswith(".loveracing.nz"):
         return None
-    if not re.search(r"\.(?:jpe?g|png|webp)$", unquote(parsed.path), re.IGNORECASE):
-        if not parsed.path.casefold().endswith("/image.ashx"):
-            return None
-        nested = next(
-            (
-                candidate
-                for values in parse_qs(parsed.query).values()
-                for candidate in values
-                if re.search(r"\.(?:jpe?g|png|webp)$", unquote(candidate), re.IGNORECASE)
-            ),
-            None,
-        )
-        return trusted_image_url(nested, absolute) if nested else None
-    path = unquote(parsed.path).casefold()
-    if "/onhorsefiles/racecourses/tracks/" not in path:
+    if _trusted_direct_image_url(absolute):
+        return absolute
+    if parsed.path.casefold() != "/common/image.ashx":
         return None
-    if any(word in path for word in ("satellite", "aerial")):
+    nested_values = [
+        item
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.casefold() in {"p", "path"}
+    ]
+    if len(nested_values) != 1:
         return None
-    return absolute
+    nested = _normalized_https_url(nested_values[0], LOVE_RACING_ORIGIN)
+    return absolute if nested and _trusted_direct_image_url(nested) else None
 
 
 def image_candidates(html: str, course_url: str, fallback: str = "") -> list[str]:
@@ -132,7 +181,17 @@ def image_candidates(html: str, course_url: str, fallback: str = "") -> list[str
 
 
 def _candidate_score(url: str, fallback_url: str | None, width: int, height: int) -> tuple[int, int, int]:
-    path = unquote(urlsplit(url).path).casefold()
+    parsed = urlsplit(url)
+    path = unquote(parsed.path).casefold()
+    if path == "/common/image.ashx":
+        path = next(
+            (
+                item.casefold()
+                for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+                if key.casefold() in {"p", "path"}
+            ),
+            path,
+        )
     known_fallback = 1 if fallback_url and url == fallback_url else 0
     course_specific = 2 if "2d" in path else 1
     return known_fallback, course_specific, width * height
@@ -301,11 +360,30 @@ def reset_manual_map(db: Session, row: TrackMap) -> Path | None:
 
 def map_refresh_due(row: TrackMap | None, *, now=None) -> bool:  # type: ignore[no-untyped-def]
     now = now or utcnow()
-    return (
-        row is None
-        or row.automatic_checked_at is None
-        or now - row.automatic_checked_at >= timedelta(days=90)
+    if row is None or row.automatic_checked_at is None:
+        return True
+    interval = (
+        FAILED_MAP_REFRESH_INTERVAL
+        if row.automatic_error or row.automatic_status == "ERROR"
+        else SUCCESSFUL_MAP_REFRESH_INTERVAL
     )
+    return now - row.automatic_checked_at >= interval
+
+
+class _MapRefreshFailure(RuntimeError):
+    pass
+
+
+def _refresh_error(exc: Exception) -> str:
+    if isinstance(exc, _MapRefreshFailure):
+        return str(exc)[:500]
+    if isinstance(exc, SourceHTTPError):
+        return f"HTTP/source failure: {exc}"[:500]
+    if isinstance(exc, PermissionError):
+        return "File permission/storage failure: the Track-map cache is not writable."
+    if isinstance(exc, OSError):
+        return "File permission/storage failure: the Track-map cache could not be updated."
+    return f"Map refresh failed safely ({type(exc).__name__})."
 
 
 def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -> TrackMap:
@@ -322,37 +400,57 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
     course_url = urljoin(LOVE_RACING_ORIGIN, course[0])
     fallback_url = trusted_image_url(course[1], course_url)
     try:
+        if not fallback_url:
+            raise _MapRefreshFailure("Invalid URL or image path: the configured official map path is unsafe.")
         try:
             page = client.get(course_url, accept="text/html")
         except SourceHTTPError:
-            candidates = [fallback_url] if fallback_url else []
+            candidates = [fallback_url]
         else:
             candidates = image_candidates(page.text, course_url, course[1])
+        if not candidates:
+            raise _MapRefreshFailure("Invalid URL or image path: no trusted official map URL was found.")
         images: list[tuple[tuple[int, int, int], int, bytes, str, str, str]] = []
+        failures: list[_MapRefreshFailure] = []
         for candidate in candidates:
             try:
                 response = client.get(candidate, accept="image/jpeg,image/png,image/webp")
-            except SourceHTTPError:
+            except SourceHTTPError as exc:
+                failures.append(_MapRefreshFailure(f"HTTP/source failure: {exc}"))
                 continue
             final_url = trusted_image_url(response.url, course_url)
+            if not final_url:
+                failures.append(
+                    _MapRefreshFailure(
+                        "Invalid URL or image path: the source redirected outside the trusted map boundary."
+                    )
+                )
+                continue
             content_type, extension = image_kind(response.body)
             width, height = image_dimensions(response.body)
             declared_type = response.content_type.split(";", 1)[0].strip().casefold()
-            if (
-                final_url
-                and content_type
-                and declared_type == content_type
-                and width >= 200
-                and height >= 200
-            ):
-                images.append(
-                    (
-                        _candidate_score(final_url, fallback_url, width, height), len(response.body),
-                        response.body, content_type, extension, final_url,
+            if not content_type or declared_type != content_type:
+                failures.append(
+                    _MapRefreshFailure(
+                        "Invalid or unsupported image: the source type did not match JPEG, PNG or WebP content."
                     )
                 )
+                continue
+            if width < 200 or height < 200:
+                failures.append(
+                    _MapRefreshFailure("Invalid or unsupported image: dimensions were smaller than 200×200.")
+                )
+                continue
+            images.append(
+                (
+                    _candidate_score(final_url, fallback_url, width, height), len(response.body),
+                    response.body, content_type, extension, final_url,
+                )
+            )
         if not images:
-            raise ValueError("No valid official map image was returned.")
+            raise failures[-1] if failures else _MapRefreshFailure(
+                "Invalid or unsupported image: no usable official map image was returned."
+            )
         _score, size, content, content_type, extension, source_url = max(images)
         width, height = image_dimensions(content)
         previous_score = (row.automatic_width or 0) * (row.automatic_height or 0)
@@ -377,9 +475,12 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         row.automatic_error = None
     except Exception as exc:
         row.automatic_checked_at = now
-        automatic_available = _fully_valid_map(row, "automatic")
+        try:
+            automatic_available = _fully_valid_map(row, "automatic")
+        except OSError:
+            automatic_available = False
         row.automatic_status = "AVAILABLE" if automatic_available else "ERROR"
-        row.automatic_error = f"{type(exc).__name__}: {str(exc)[:400]}"
+        row.automatic_error = _refresh_error(exc)
     return row
 
 
@@ -433,7 +534,10 @@ def map_status(row: TrackMap | None) -> dict[str, object]:
         return {
             "code": "MISSING_FILE",
             "label": "Cached file unavailable",
-            "detail": "Map metadata exists, but the cached file is missing or fails validation.",
+            "detail": (
+                "Map metadata exists, but the cached file is missing or fails validation. "
+                + (row.automatic_error or "")
+            ).strip(),
             "available": False,
         }
     if row.automatic_status == "UNAVAILABLE":
