@@ -1,10 +1,10 @@
-# Build status — 2026-10-20
+# Build status — 2026-10-21
 
 ## Application-behavior qualification baseline and deployment boundary
 
-The current application-behavior baseline is exact SHA `397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d` (release-gate run `39348170205`): **336 PostgreSQL-backed tests** and **79 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d` with digest `sha256:8350f45cc0e8bd9a9fafdb217a295d9b6ba646b0ec95c2d8b3d2007689e2ee08`. The sole Alembic head is `f7a2c9d4e610`.
+The current application-behavior baseline is exact SHA `f512ebf2854698a2b19327a553e056f99296ca06` (release-gate run `39479481412`): **343 PostgreSQL-backed tests** and **79 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-f512ebf2854698a2b19327a553e056f99296ca06` with digest `sha256:3161989fb3da984275bdb9b1dbe9f9c550c43803fa0fd191a124d780105fdab3`. The sole Alembic head is `f7a2c9d4e610`.
 
-Earlier SHAs, including `5c0d1785e2ef26c1f33c552c27611514ffa1cb6c`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
+Earlier SHAs, including `397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
 
 An operational deployment candidate is identified by all three of the following, resolved when the candidate is deliberately selected:
 
