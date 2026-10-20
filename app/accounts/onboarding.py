@@ -19,6 +19,11 @@ ONBOARDING_STATES = {
     "INVITATION_EXPIRED", "ACCOUNT_LINKED", "ARCHIVED",
 }
 
+ONBOARDING_STATE_ORDER = (
+    "NEEDS_REGION", "NEEDS_EMAIL", "READY_TO_INVITE", "INVITATION_PENDING",
+    "INVITATION_EXPIRED", "ACCOUNT_LINKED", "ARCHIVED",
+)
+
 
 @dataclass(frozen=True)
 class MetadataRow:
@@ -55,6 +60,42 @@ def onboarding_state(db: Session, person: Person) -> str:
             expires_at = expires_at.replace(tzinfo=UTC)
         return "INVITATION_PENDING" if expires_at > utcnow() else "INVITATION_EXPIRED"
     return "READY_TO_INVITE"
+
+
+def onboarding_records(
+    db: Session,
+    *,
+    allowed_region_ids: set[uuid.UUID] | None,
+    query: str = "",
+    region: str = "",
+    state: str = "",
+) -> list[dict[str, object]]:
+    """Return the scoped, filtered Person onboarding view shared by Crew workflows."""
+    statement = select(Person)
+    if allowed_region_ids is not None:
+        statement = statement.where(Person.home_region_id.in_(allowed_region_ids))
+    records: list[dict[str, object]] = [
+        {"person": person, "state": onboarding_state(db, person)}
+        for person in db.scalars(statement.order_by(Person.display_name))
+    ]
+    term = query.strip().casefold()
+    selected_region = region.strip()
+    selected_state = state.strip().upper()
+    if term:
+        records = [
+            item for item in records
+            if term in item["person"].display_name.casefold()
+            or term in (item["person"].email or "").casefold()
+        ]
+    if selected_region:
+        records = [
+            item for item in records
+            if (selected_region == "NONE" and item["person"].home_region_id is None)
+            or str(item["person"].home_region_id) == selected_region
+        ]
+    if selected_state:
+        records = [item for item in records if item["state"] == selected_state]
+    return records
 
 
 def parse_metadata_csv(db: Session, raw: str, allowed_region_ids: set[uuid.UUID] | None) -> list[MetadataRow]:

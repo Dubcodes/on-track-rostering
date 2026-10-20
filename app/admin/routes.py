@@ -315,6 +315,7 @@ def create_user(
     role: str = Form(...),
     region_id: str = Form(""),
     person_id: str = Form(""),
+    return_person_id: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -375,6 +376,17 @@ def create_user(
     if person and db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
         errors["person_id"] = "That crew identity is already linked to an account."
     if errors:
+        if return_person_id and return_person_id == person_id and person:
+            from app.crew.routes import crew_person_response
+
+            return crew_person_response(
+                person.id,
+                request,
+                db,
+                direct_account=form_state,
+                direct_errors=errors,
+                status_code=422,
+            )
         from app.accounts.routes import accounts_response
 
         return accounts_response(

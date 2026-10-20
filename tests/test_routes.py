@@ -505,7 +505,7 @@ def test_archived_catalog_targets_are_rejected(routed_db) -> None:  # type: igno
         },
         follow_redirects=False,
     ).status_code == 422
-    assert client.post(
+    invalid_person = client.post(
         "/manage/crew",
         data={
             "display_name": "Bad Region",
@@ -514,7 +514,9 @@ def test_archived_catalog_targets_are_rejected(routed_db) -> None:  # type: igno
             "csrf_token": csrf,
         },
         follow_redirects=False,
-    ).status_code == 400
+    )
+    assert invalid_person.status_code == 422
+    assert "Select an active Region" in invalid_person.text
 
 
 def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -1197,7 +1199,8 @@ def test_admin_can_create_regionless_person_but_manager_cannot(routed_db) -> Non
         follow_redirects=False,
     )
     assert created.status_code == 303, created.text
-    assert created.headers["location"] == "/manage/crew#needs-setup"
+    assert created.headers["location"].startswith("/manage/crew/")
+    assert created.headers["location"].endswith("?created=1#profile")
     with factory() as db:
         person = db.scalar(select(Person).where(Person.email == "pending@example.com"))
         assert person is not None and person.home_region_id is None
@@ -1217,7 +1220,8 @@ def test_admin_can_create_regionless_person_but_manager_cannot(routed_db) -> Non
             "csrf_token": manager_csrf,
         },
     )
-    assert denied.status_code == 400
+    assert denied.status_code == 422
+    assert "Person not added" in denied.text
     with factory() as db:
         assert db.scalar(
             select(Person).where(Person.email == "manager-regionless@example.com")
@@ -4558,6 +4562,56 @@ def test_direct_account_creation_returns_to_meaningful_context(routed_db) -> Non
         )
 
 
+def test_phase_b_crew_workspace_is_person_first_and_accounts_stays_advanced(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, person_id) = routed_db
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+
+    directory = admin.get(f"/manage/crew?region_id={region_id}")
+    assert directory.status_code == 200
+    assert 'href="/manage/crew/onboarding"' in directory.text
+    assert "Search first to avoid duplicate People" in directory.text
+
+    detail = admin.get(f"/manage/crew/{person_id}")
+    assert detail.status_code == 200
+    for section in ("Profile", "Roster &amp; capabilities", "Account &amp; access", "Security &amp; history"):
+        assert section in detail.text
+    assert 'aria-label="Person sections"' in detail.text
+
+    advanced = admin.get("/manage/accounts")
+    assert advanced.status_code == 200
+    assert "<h1>Advanced Accounts</h1>" in advanced.text
+    assert 'href="/manage/crew/onboarding"' in advanced.text
+    assert 'action="/manage/accounts/people-invitations"' not in advanced.text
+    assert "Invite a Contractor Person" not in advanced.text
+    assert 'action="/admin/users"' in advanced.text
+
+    with factory() as db:
+        existing = Person(
+            display_name="Existing Duplicate Guard",
+            email="existing-duplicate@example.com",
+            home_region_id=region_id,
+        )
+        db.add(existing)
+        db.commit()
+        before = db.scalar(select(func.count()).select_from(Person))
+    duplicate = admin.post(
+        "/manage/crew",
+        data={
+            "display_name": "Duplicate Person",
+            "email": "existing-duplicate@example.com",
+            "region_id": str(region_id),
+            "csrf_token": csrf,
+        },
+    )
+    assert duplicate.status_code == 422, duplicate.text
+    assert "Find and manage them in Crew" in duplicate.text
+    assert 'value="Duplicate Person"' in duplicate.text
+    assert 'value="existing-duplicate@example.com"' in duplicate.text
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(Person)) == before
+
+
 def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, _position_id, _person_id) = routed_db
     with factory() as db:
@@ -4608,7 +4662,33 @@ def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db)
     detail_page = admin.get(f"/manage/crew/{person_id}")
     assert "Ready for setup" in detail_page.text
     assert "Create setup link" in detail_page.text
-    assert "Imported Regionless Crew" in admin.get("/manage/accounts").text
+    assert '<option value="CASUAL">Casual</option>' in detail_page.text
+    assert "Create a direct account instead" in detail_page.text
+    assert f'name="person_id" value="{person_id}"' in detail_page.text
+    failed_direct = admin.post(
+        "/admin/users",
+        data={
+            "display_name": "Imported Regionless Crew",
+            "email": "regionless@example.com",
+            "credential": "123",
+            "role": "CASUAL",
+            "region_id": str(region_id),
+            "person_id": str(person_id),
+            "return_person_id": str(person_id),
+            "csrf_token": admin_csrf,
+        },
+    )
+    assert failed_direct.status_code == 422
+    assert "Imported Regionless Crew" in failed_direct.text
+    assert "Account not created" in failed_direct.text
+    assert '<option value="CASUAL" selected>Casual</option>' in failed_direct.text
+    assert 'value="123"' not in failed_direct.text
+    advanced_accounts = admin.get("/manage/accounts")
+    assert "Advanced Accounts" in advanced_accounts.text
+    assert 'action="/manage/accounts/people-invitations"' not in advanced_accounts.text
+    onboarding = admin.get("/manage/crew/onboarding?onboarding_q=Regionless")
+    assert onboarding.status_code == 200
+    assert "Imported Regionless Crew" in onboarding.text
 
     invited = admin.post(
         f"/manage/crew/{person_id}/setup-link",

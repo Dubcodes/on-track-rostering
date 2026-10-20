@@ -6,7 +6,9 @@
   <p class="eyebrow">Staff directory</p>
   <h1>Crew</h1>
   <p class="lede">Choose a Person to manage their roster identity, account access and history.</p>
+  <div class="action-row"><a class="button secondary" href="/manage/crew/onboarding">Bulk onboarding</a></div>
 </section>
+{% if request.query_params.get('metadata') %}<div class="alert success" role="status">Saved setup details for {{ request.query_params.get('metadata') }} Person record(s).</div>{% endif %}
 <section class="panel">
   <form method="get" class="form-grid" data-live-filters>
     <label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
@@ -19,12 +21,14 @@
   </form>
 </section>
 <section class="panel">
-  <details><summary>Add Person</summary>
+  <details{% if add_errors %} open{% endif %}><summary>Add Person</summary>
+    <p class="muted">Search first to avoid duplicate People. After adding the Person, continue on their profile to set roster capabilities and create a one-time account setup invitation.</p>
+    {% if add_errors %}<div class="alert error" role="alert"><strong>Person not added.</strong> Review the highlighted fields.</div>{% endif %}
     <form method="post" action="/manage/crew" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Name<input name="display_name" required maxlength="120"></label>
-      <label>Work email<input name="email" type="email"></label>
-      <label>Primary Region<select name="region_id" {% if not actor.is_admin %}required{% endif %}>{% if actor.is_admin %}<option value="">No Primary Region yet</option>{% endif %}{% for region in regions %}<option value="{{ region.id }}" {% if not actor.is_admin and region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+      <label>Name<input name="display_name" value="{{ add_person.display_name }}" required maxlength="120" aria-invalid="{{ 'true' if add_errors.display_name else 'false' }}">{% if add_errors.display_name %}<small class="field-error">{{ add_errors.display_name }}</small>{% endif %}</label>
+      <label>Work email<input name="email" type="email" value="{{ add_person.email }}" aria-invalid="{{ 'true' if add_errors.email else 'false' }}">{% if add_errors.email %}<small class="field-error">{{ add_errors.email }}</small>{% endif %}</label>
+      <label>Primary Region<select name="region_id" {% if not actor.is_admin %}required{% endif %} aria-invalid="{{ 'true' if add_errors.region_id else 'false' }}">{% if actor.is_admin %}<option value="">No Primary Region yet</option>{% endif %}{% for region in regions %}<option value="{{ region.id }}" {% if add_person.region_id == region.id|string %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select>{% if add_errors.region_id %}<small class="field-error">{{ add_errors.region_id }}</small>{% endif %}</label>
       <button>Add Person</button>
     </form>
   </details>

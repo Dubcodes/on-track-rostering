@@ -8,7 +8,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.accounts.onboarding import onboarding_state
+from app.accounts.onboarding import (
+    ONBOARDING_STATE_ORDER,
+    onboarding_records,
+    onboarding_state,
+)
 from app.audit.models import AuditEvent
 from app.audit.service import record_audit
 from app.auth.links import credential_reset_url, invitation_url
@@ -80,16 +84,19 @@ def _person_in_scope(
     return person
 
 
-@router.get("", response_class=HTMLResponse)
-def crew_management(
+def crew_management_response(
     request: Request,
+    db: Session,
+    *,
     region_id: uuid.UUID | None = None,
     q: str = "",
     account_type: str = "",
     crew_group_id: str = "",
     position_id: str = "",
     show_archived: bool = False,
-    db: Session = Depends(get_db),
+    add_person: dict[str, str] | None = None,
+    add_errors: dict[str, str] | None = None,
+    status_code: int = 200,
 ):
     regions = _regions(db, request)
     if not regions:
@@ -257,15 +264,81 @@ def crew_management(
             filter_groups=list(db.scalars(select(CrewGroup).where(CrewGroup.lifecycle == "ACTIVE").order_by(CrewGroup.name))),
             filter_positions=list(db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name))),
             show_archived=show_archived,
+            add_person=add_person or {
+                "display_name": "",
+                "email": "",
+                "region_id": "" if request.state.actor.is_admin else str(selected.id),
+            },
+            add_errors=add_errors or {},
+        ),
+        status_code=status_code,
+    )
+
+
+@router.get("", response_class=HTMLResponse)
+def crew_management(
+    request: Request,
+    region_id: uuid.UUID | None = None,
+    q: str = "",
+    account_type: str = "",
+    crew_group_id: str = "",
+    position_id: str = "",
+    show_archived: bool = False,
+    db: Session = Depends(get_db),
+):
+    return crew_management_response(
+        request,
+        db,
+        region_id=region_id,
+        q=q,
+        account_type=account_type,
+        crew_group_id=crew_group_id,
+        position_id=position_id,
+        show_archived=show_archived,
+    )
+
+
+@router.get("/onboarding", response_class=HTMLResponse)
+def crew_onboarding(
+    request: Request,
+    onboarding_q: str = "",
+    onboarding_region: str = "",
+    onboarding_state: str = "",
+    db: Session = Depends(get_db),
+):
+    regions = _regions(db, request)
+    if not regions:
+        raise HTTPException(403, "Regional roster authority required")
+    allowed_region_ids = None if request.state.actor.is_admin else {row.id for row in regions}
+    records = onboarding_records(
+        db,
+        allowed_region_ids=allowed_region_ids,
+        query=onboarding_q,
+        region=onboarding_region,
+        state=onboarding_state,
+    )
+    return templates.TemplateResponse(
+        "crew_onboarding.html",
+        context(
+            request,
+            regions=regions,
+            onboarding_people=records,
+            onboarding_states=ONBOARDING_STATE_ORDER,
+            onboarding_q=onboarding_q,
+            onboarding_region=onboarding_region,
+            onboarding_state_filter=onboarding_state,
         ),
     )
 
 
-@router.get("/{person_id}", response_class=HTMLResponse)
-def crew_person_detail(
+def crew_person_response(
     person_id: uuid.UUID,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session,
+    *,
+    direct_account: dict[str, str] | None = None,
+    direct_errors: dict[str, str] | None = None,
+    status_code: int = 200,
 ):
     person = _person_in_operational_scope(db, request, person_id)
     regions = _regions(db, request)
@@ -380,8 +453,20 @@ def crew_person_detail(
                 and person.home_region_id
                 and can_assist_user(db, request.state.actor, account, person.home_region_id)
             ),
+            direct_account=direct_account or {"role": Role.EMPLOYEE.value},
+            direct_errors=direct_errors or {},
         ),
+        status_code=status_code,
     )
+
+
+@router.get("/{person_id}", response_class=HTMLResponse)
+def crew_person_detail(
+    person_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    return crew_person_response(person_id, request, db)
 
 
 @router.post("/{person_id}")
@@ -900,22 +985,51 @@ def create_crew_member(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    parsed_region_id = optional_uuid(region_id, "Primary Region")
+    form_state = {"display_name": display_name, "email": email, "region_id": region_id}
+    errors: dict[str, str] = {}
+    try:
+        parsed_region_id = optional_uuid(region_id, "Primary Region")
+    except HTTPException as exc:
+        parsed_region_id = None
+        errors["region_id"] = str(exc.detail)
     if parsed_region_id:
         region = db.get(Region, parsed_region_id)
         if not region or region.lifecycle != Lifecycle.ACTIVE.value:
-            raise HTTPException(400, "Select an active region.")
-        if not can_administer_region(request.state.actor, parsed_region_id):
+            errors["region_id"] = "Select an active Region."
+        elif not can_administer_region(request.state.actor, parsed_region_id):
             raise HTTPException(403, "Regional administration authority required.")
     elif not request.state.actor.is_admin:
-        raise HTTPException(400, "Select an active region.")
+        errors["region_id"] = "Select an active Region."
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
-        raise HTTPException(400, "Enter a crew name between 2 and 120 characters.")
+        errors["display_name"] = "Enter a crew name between 2 and 120 characters."
     try:
         clean_email = validated_email(email) if email.strip() else None
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        clean_email = None
+        errors["email"] = str(exc)
+    duplicate_filters = [func.lower(Person.display_name) == clean_name.casefold()]
+    if parsed_region_id:
+        duplicate_filters.append(Person.home_region_id == parsed_region_id)
+    if not errors.get("email") and clean_email and db.scalar(
+        select(Person.id).where(func.lower(Person.email) == clean_email).limit(1)
+    ):
+        errors["email"] = "A Person already uses that work email. Find and manage them in Crew."
+    if not errors.get("display_name") and db.scalar(
+        select(Person.id).where(*duplicate_filters).limit(1)
+    ):
+        errors["display_name"] = (
+            "A Person with that name already exists in this Region. Find and manage them in Crew."
+        )
+    if errors:
+        return crew_management_response(
+            request,
+            db,
+            region_id=parsed_region_id,
+            add_person=form_state,
+            add_errors=errors,
+            status_code=422,
+        )
     person = Person(display_name=clean_name, email=clean_email, home_region_id=parsed_region_id)
     db.add(person)
     db.flush()
@@ -929,7 +1043,7 @@ def create_crew_member(
         detail={"display_name": clean_name},
     )
     db.commit()
-    destination = f"/manage/crew?region_id={parsed_region_id}" if parsed_region_id else "/manage/crew#needs-setup"
+    destination = f"/manage/crew/{person.id}?created=1#profile"
     return RedirectResponse(destination, status_code=303)
 
 

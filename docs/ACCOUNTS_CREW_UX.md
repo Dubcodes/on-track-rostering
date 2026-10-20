@@ -1,6 +1,6 @@
 # Accounts and Crew workflow
 
-This document records the confirmed Phase A defects, the implemented correction, and the proposed Phase B information architecture. It does not change authorization policy. The code and `app/auth/policy.py` remain authoritative.
+This document records the implemented Phase A interaction corrections and Phase B information architecture. Neither phase changes authorization policy. The code and `app/auth/policy.py` remain authoritative.
 
 ## Phase A: confirmed defects and correction
 
@@ -21,29 +21,24 @@ Phase A keeps the existing permissions and corrects those interactions:
 
 Accounts remains an advanced surface in Phase A. No route or capability has been removed, and no Crew-Group Manager, global Viewer, or Person employment-classification semantics have been added.
 
-## Phase B: proposed page and workflow map
+## Phase B: implemented page and workflow map
 
 The normal staff workflow should begin at **Management → Crew** and reuse the existing Person identity before creating authentication state.
 
-| Surface | Proposed responsibility | Existing behavior to retain or move |
+| Surface | Responsibility | Implemented behavior |
 |---|---|---|
-| Crew directory | Find/reuse a Person, consistent search and filters, onboarding state, Add Person | Keep Person creation, batch onboarding entry and directory filters here; make duplicate discovery the first step |
-| Person → Profile | Name, contact and operational home data | Keep current Person editing and Region/Crew Group membership |
-| Person → Roster & capabilities | Position capability, truck qualification, leave/availability links and roster context | Keep current Person-centric capability workflow and links |
-| Person → Account & access | Linked User status, create account, create invitation, ordinary scoped role/Region access | Move the normal single-person account/invitation entry point here; retain server policy checks |
-| Person → Security & history | Credential reset/setup handoff, device/session state where authorized, safe audit links | Consolidate existing bounded security actions; do not expose secrets or broaden who may control privileged accounts |
-| Advanced Accounts | Exceptional recovery, unlinked User reconciliation, privileged/global grants, pending requests, invitation oversight and system-wide search | Keep `/manage/accounts`; reduce its prominence for normal Person onboarding but retain every recovery/reconciliation route |
-| Bulk onboarding | Secondary nationwide/imported-People workflow | Keep metadata preview/apply and one-time setup-link CSV; link from Crew rather than making it the normal Accounts task |
+| Crew directory | Find/reuse a Person, consistent search and filters, onboarding state, Add Person | Search-first guidance, duplicate guards, Person creation returning to that Person, and a secondary bulk-onboarding entry |
+| Person → Profile | Name, contact and operational home data | Existing continuous-save Person and Primary Region editing |
+| Person → Roster & capabilities | Crew Groups, truck qualification and Position capability | Existing Person-centric controls, collected behind a stable section link |
+| Person → Account & access | Linked User status and ordinary scoped account setup | One-time setup invitation is the recommended path; Admin direct creation remains an explicitly exceptional collapsed path using the existing account route |
+| Person → Security & history | Credential/device controls where authorized, audit history and Person lifecycle | Existing policy-checked controls and fresh-authentication requirements, grouped without changing authority |
+| Advanced Accounts | Exceptional recovery, unlinked User reconciliation, privileged/global grants, pending requests, invitation oversight and system-wide search | `/manage/accounts` remains bookmark-compatible and preserves routes; ordinary batch onboarding and Contractor invitation entry move to Crew/Person context |
+| Bulk onboarding | Secondary nationwide/imported-People workflow | `/manage/crew/onboarding` owns filters and entry; existing metadata and batch invitation POST routes remain service endpoints and return to Crew |
 
-The main duplication to remove in a later approved implementation is offering equivalent ordinary create/invite/link decisions in both a Person workflow and the top-level Accounts workspace. Advanced Accounts should link to the canonical Person when one exists; Person detail should link back to advanced recovery only when exceptional work is needed.
+Existing account, invitation, recovery, grant and Contractor lifecycle endpoints remain intact for bookmarks and security behavior. Linked Contractor results point to their Person; temporary-access extension stays advanced. Existing unlinked accounts remain focused search/reconciliation results rather than receiving a new detail page.
 
-## Decisions required before Phase B implementation
+## Decisions deliberately left open
 
-Approval is required before changing navigation or route ownership because the migration must preserve bookmarks, audit meaning and every existing recovery path. Product decisions also remain open for:
+Full role/grant administration remains in Advanced Accounts. Signup-request review also remains there, while bulk onboarding is secondary Crew work. No dedicated unlinked-account page was needed.
 
-- whether full role/grant administration belongs on Person detail or stays exclusively in Advanced Accounts;
-- whether an intentionally unlinked User receives a dedicated detail page or remains a focused Accounts search/result;
-- the final ownership and prominence of signup requests and bulk onboarding;
-- Crew-Group-scoped Manager authority, global Viewer semantics, and Person-level employment classification.
-
-The last three permission concepts are deliberately outside Phase A and must be designed and authorized separately.
+Crew-Group-scoped Manager authority, global Viewer semantics and employment-classification policy remain unresolved. Phase B does not alter `RoleGrant`, regional policy, Contractor exclusivity, Viewer scope or fresh-authentication boundaries.

@@ -1462,9 +1462,33 @@ def test_people_onboarding_and_one_time_links_are_responsive(
     page = context.new_page()
     errors = _watch_browser_errors(page)
     _login(page, base_url, values["admin"])
-    page.goto(base_url + f"/manage/accounts?onboarding_q={person_name.replace(' ', '+')}")
+    added_name = f"Browser Added Person {width}"
+    page.goto(base_url + f"/manage/crew?region_id={values['region_id']}")
+    add_person = page.locator("details", has_text="Add Person")
+    add_person.locator("summary").click()
+    add_person.locator('input[name="display_name"]').fill(added_name)
+    add_person.locator('input[name="email"]').fill(
+        f"browser-added-{width}-{uuid.uuid4().hex[:8]}@example.com"
+    )
+    add_person.locator('select[name="region_id"]').select_option(values["region_id"])
+    add_person.get_by_role("button", name="Add Person").click()
+    page.wait_for_url(re.compile(r"/manage/crew/[0-9a-f-]+\?created=1#profile"))
+    assert page.get_by_role("heading", name=added_name).is_visible()
+    section_nav = page.get_by_role("navigation", name="Person sections")
+    for label in ("Profile", "Roster & capabilities", "Account & access", "Security & history"):
+        assert section_nav.get_by_role("link", name=label).is_visible()
+    assert page.get_by_text("Create setup link", exact=True).is_visible()
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(base_url + "/manage/accounts")
+    assert page.get_by_role("heading", name="Advanced Accounts", exact=True).is_visible()
+    assert page.get_by_role("link", name="Open bulk onboarding").is_visible()
+    assert page.locator('form[action="/manage/accounts/people-invitations"]').count() == 0
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(base_url + f"/manage/crew/onboarding?onboarding_q={person_name.replace(' ', '+')}")
     onboarding = page.locator("#people-onboarding")
-    assert onboarding.get_by_role("heading", name="People onboarding").is_visible()
+    assert onboarding.get_by_role("heading", name="Onboarding queue").is_visible()
     assert onboarding.get_by_text(person_name, exact=True).is_visible()
     assert onboarding.locator("small", has_text="Ready To Invite").is_visible()
     assert onboarding.get_by_role("link", name="Export metadata worksheet").is_visible()
@@ -1496,7 +1520,7 @@ def test_people_onboarding_and_one_time_links_are_responsive(
     manager_context = browser.new_context(viewport={"width": width, "height": 900})
     manager_page = manager_context.new_page()
     _login(manager_page, base_url, values["manager"])
-    manager_page.goto(base_url + f"/manage/accounts?onboarding_q={person_name.replace(' ', '+')}")
+    manager_page.goto(base_url + f"/manage/crew/onboarding?onboarding_q={person_name.replace(' ', '+')}")
     manager_onboarding = manager_page.locator("#people-onboarding")
     assert manager_onboarding.get_by_text(person_name, exact=True).is_visible()
     assert manager_onboarding.get_by_role("link", name="Export metadata worksheet").count() == 0

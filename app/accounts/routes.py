@@ -111,32 +111,6 @@ def accounts_response(
     if not request.state.actor.is_admin:
         people_query = people_query.where(Person.home_region_id.in_(region_ids))
     people = list(db.scalars(people_query.order_by(Person.display_name)))
-    onboarding_query = select(Person)
-    if not request.state.actor.is_admin:
-        onboarding_query = onboarding_query.where(Person.home_region_id.in_(region_ids))
-    onboarding_records = [
-        {"person": person, "state": onboarding_state(db, person)}
-        for person in db.scalars(onboarding_query.order_by(Person.display_name))
-    ]
-    onboarding_q = request.query_params.get("onboarding_q", "").strip().casefold()
-    onboarding_region = request.query_params.get("onboarding_region", "").strip()
-    onboarding_state_filter = request.query_params.get("onboarding_state", "").strip().upper()
-    if onboarding_q:
-        onboarding_records = [
-            item for item in onboarding_records
-            if onboarding_q in item["person"].display_name.casefold()
-            or onboarding_q in (item["person"].email or "").casefold()
-        ]
-    if onboarding_region:
-        onboarding_records = [
-            item for item in onboarding_records
-            if (onboarding_region == "NONE" and item["person"].home_region_id is None)
-            or str(item["person"].home_region_id) == onboarding_region
-        ]
-    if onboarding_state_filter:
-        onboarding_records = [
-            item for item in onboarding_records if item["state"] == onboarding_state_filter
-        ]
     invitations_query = select(Invitation)
     if not request.state.actor.is_admin:
         invitations_query = invitations_query.where(Invitation.region_id.in_(region_ids))
@@ -206,11 +180,6 @@ def accounts_response(
             regions=regions,
             signup_requests=list(db.scalars(signup_query.order_by(SignupRequest.created_at))),
             people=people,
-            onboarding_people=onboarding_records,
-            onboarding_states=(
-                "NEEDS_REGION", "NEEDS_EMAIL", "READY_TO_INVITE", "INVITATION_PENDING",
-                "INVITATION_EXPIRED", "ACCOUNT_LINKED", "ARCHIVED",
-            ),
             users=users,
             account_q=account_q,
             created_user=created_user,
@@ -318,7 +287,7 @@ def apply_people_metadata(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
-    return RedirectResponse(f"/manage/accounts?metadata={count}", status_code=303)
+    return RedirectResponse(f"/manage/crew/onboarding?metadata={count}", status_code=303)
 
 
 @router.post("/people-invitations", response_class=HTMLResponse)

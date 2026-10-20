@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% set help_context = 'crew_management' %}
+{% block title %}Bulk onboarding · Crew{% endblock %}
+{% block content %}
+<section class="page-head">
+  <p class="eyebrow"><a href="/manage/crew">Crew</a> · Secondary workflow</p>
+  <h1>Bulk onboarding</h1>
+  <p class="lede">Review imported People, complete metadata in batches, and create one-time setup links. Everyday Person and account work stays in Crew.</p>
+</section>
+{% if request.query_params.get('metadata') %}<div class="alert success" role="status">Updated {{ request.query_params.get('metadata') }} Person record(s).</div>{% endif %}
+<section class="panel" id="people-onboarding">
+  <div class="section-heading"><div><p class="eyebrow">Imported People</p><h2>Onboarding queue</h2></div>{% if actor.is_admin %}<a class="button secondary" href="/manage/accounts/people-metadata.csv">Export metadata worksheet</a>{% endif %}</div>
+  <form method="get" action="/manage/crew/onboarding" class="form-grid" data-live-filters data-filter-target="people-onboarding">
+    <label>Search<input type="search" name="onboarding_q" value="{{ onboarding_q }}" placeholder="Person or email" data-filter-search></label>
+    <label>Primary Region<select name="onboarding_region"><option value="">All in scope</option>{% if actor.is_admin %}<option value="NONE" {% if onboarding_region == 'NONE' %}selected{% endif %}>No Primary Region</option>{% endif %}{% for region in regions %}<option value="{{ region.id }}" {% if onboarding_region == region.id|string %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+    <label>Setup state<select name="onboarding_state"><option value="">All states</option>{% for state in onboarding_states %}<option value="{{ state }}" {% if onboarding_state_filter == state %}selected{% endif %}>{{ state|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+    <button class="secondary">Filter onboarding</button>
+  </form>
+  {% if actor.is_admin %}<p class="muted">Person UUID is the exact machine key. Applying a worksheet updates Person email and Primary Region only; it never creates an account or credential.</p><details><summary>Preview a completed worksheet</summary><form method="post" action="/manage/accounts/people-metadata/preview"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>CSV worksheet<textarea name="worksheet" rows="10" required></textarea></label><button>Preview</button></form></details>{% endif %}
+  <form method="post" action="/manage/accounts/people-invitations"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="account-list">{% for item in onboarding_people %}<label class="preference-row"><span><a href="/manage/crew/{{ item.person.id }}"><strong>{{ item.person.display_name }}</strong></a><small>{{ item.person.email or 'No email' }} · {{ item.state|replace('_',' ')|title }}</small></span>{% if actor.is_admin and item.state == 'READY_TO_INVITE' %}<input type="checkbox" name="person_ids" value="{{ item.person.id }}" data-ready-person aria-label="Select {{ item.person.display_name }} for invitation">{% endif %}</label>{% else %}<p class="muted">No People match these onboarding filters.</p>{% endfor %}</div>{% if actor.is_admin %}<label><input type="checkbox" data-select-ready> Select all READY in this filtered view</label><label><input type="checkbox" name="confirm" value="true" required> I confirm these People should receive new one-time setup links</label><button>Create setup links for selected ready People</button>{% endif %}</form>
+</section>
+{% endblock %}
