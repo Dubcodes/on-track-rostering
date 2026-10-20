@@ -133,7 +133,7 @@ def test_postgres_credential_reset_token_has_exactly_one_consumer(pg_factory) ->
 
 def test_postgres_person_email_advisory_lock_serializes_concurrent_creation(pg_factory) -> None:  # type: ignore[no-untyped-def]
     suffix = uuid.uuid4().hex[:10]
-    email = f"person-lock-{suffix}@example.test"
+    email = f"person-lock-{suffix}@example.com"
     barrier = threading.Barrier(2)
     outcomes: list[str] = []
 
