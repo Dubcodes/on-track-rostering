@@ -31,7 +31,7 @@ def management_hub(request: Request, db: Session = Depends(get_db)):
     can_build = any(can_manage_region(actor, region.id) for region in regions)
     can_manage_people = any(can_administer_region(actor, region.id) for region in regions)
     can_team_hours = actor.is_admin or any(
-        roles & {Role.MANAGER.value, Role.SUB_MANAGER.value, Role.VIEWER.value}
+        roles & {Role.MANAGER.value, Role.SUB_MANAGER.value}
         for roles in actor.regional_roles.values()
     )
     notice_region_ids = permitted_notice_region_ids(db, actor)

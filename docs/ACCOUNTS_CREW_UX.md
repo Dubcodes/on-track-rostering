@@ -35,6 +35,10 @@ The normal staff workflow should begin at **Management → Crew** and reuse the 
 | Advanced Accounts | Exceptional recovery, unlinked User reconciliation, privileged/global grants, pending requests, invitation oversight and system-wide search | `/manage/accounts` remains bookmark-compatible and preserves routes; ordinary batch onboarding and Contractor invitation entry move to Crew/Person context |
 | Bulk onboarding | Secondary nationwide/imported-People workflow | `/manage/crew/onboarding` owns filters and entry; existing metadata and batch invitation POST routes remain service endpoints and return to Crew |
 
+Sub-Managers keep their established operational roster authority and ordinary linked-account assistance. Their Crew views are server-filtered as well as visually simplified: no Person creation/profile/capability mutation, account-type/security summary, role grants, trusted devices, audit history, setup invitation, direct account creation, or privilege escalation is loaded or offered. Manager/Admin boundaries remain unchanged.
+
+Person work email uses one normalized identity rule across ordinary create/edit, account linking and invitation, signup approval, batch metadata and import. Active People are unique case-insensitively across Regions and linked Person/User emails stay aligned. A matching unlinked User is shown for deliberate Advanced Accounts reconciliation; it is never auto-linked or merged. Authorized Crew pages flag legacy duplicates and mismatches without rewriting them. PostgreSQL serializes competing normalized-email writes; adding a database partial unique constraint remains a later convergence step after production legacy conflicts are reviewed.
+
 Existing account, invitation, recovery, grant and Contractor lifecycle endpoints remain intact for bookmarks and security behavior. Linked Contractor results point to their Person; temporary-access extension stays advanced. Existing unlinked accounts remain focused search/reconciliation results rather than receiving a new detail page.
 
 ## Decisions deliberately left open

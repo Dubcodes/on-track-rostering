@@ -344,8 +344,8 @@ Use two independent browser profiles or sessions on the same Workday.
 |---|---|---|
 | Event-only Contractor Day | PENDING | Own assignment only. |
 | Employee Crew View | PENDING | Correct regional scope. |
-| Viewer management detail | PENDING | Read-only. |
-| Private assignment note | PENDING | Assigned person and authorized Manager/SubManager/Viewer only. |
+| Viewer published roster | PENDING | Region-scoped published rows remain readable; drafts and management surfaces remain unavailable. |
+| Private assignment note/address | PENDING | Assigned Person and authorized Manager/Sub-Manager only; confirm Viewer cannot read another Person's private note or accommodation address. |
 | Normal Day note | PENDING | Visible according to documented Day policy. |
 | Human Change History | PENDING | No unrelated crew disclosure to event-only users. |
 | Cross-region one-event access | PENDING | Does not become permanent region access. |

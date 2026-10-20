@@ -31,6 +31,7 @@ from app.core.time import local_today, utcnow
 from app.external_calendar.detail_refresh import due_love_racing_events
 from app.external_calendar.models import ExternalCalendarEvent, ExternalEventObservation
 from app.external_calendar.service import adopt_external_event
+from app.identity.email import validate_person_work_email
 from app.identity.models import CredentialReset, Person, RecoveryCode, RoleGrant, User, UserPersonLink
 from app.main import app
 from app.notifications.models import NotificationDelivery, NotificationEvent, PushSubscription
@@ -128,6 +129,37 @@ def test_postgres_credential_reset_token_has_exactly_one_consumer(pg_factory) ->
     assert failures == [CREDENTIAL_RESET_UNAVAILABLE]
     with pg_factory() as db:
         assert db.get(CredentialReset, reset_id).consumed_at is not None
+
+
+def test_postgres_person_email_advisory_lock_serializes_concurrent_creation(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    email = f"person-lock-{suffix}@example.test"
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def create(name: str) -> None:
+        with pg_factory() as db:
+            barrier.wait(timeout=10)
+            try:
+                normalized = validate_person_work_email(db, email)
+                db.add(Person(display_name=name, email=normalized))
+                db.commit()
+                outcomes.append("created")
+            except ValueError:
+                db.rollback()
+                outcomes.append("duplicate")
+
+    threads = [threading.Thread(target=create, args=(name,)) for name in ("One", "Two")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert not any(thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["created", "duplicate"]
+    with pg_factory() as db:
+        assert db.scalar(
+            select(func.count()).select_from(Person).where(Person.email == email)
+        ) == 1
 
 
 def test_postgres_programme_queries_deduplicate_json_events(pg_factory) -> None:  # type: ignore[no-untyped-def]

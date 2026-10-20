@@ -5,14 +5,21 @@ import struct
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.request import Request
 from zoneinfo import ZoneInfo
 
+import pytest
 from sqlalchemy import func, select
 
 from app.auth.policy import Actor
 from app.catalog.models import BasePosition, Region, Track, TrackMap
 from app.external_calendar.detail_refresh import due_love_racing_events, refresh_love_racing_programme
-from app.external_calendar.http import HTTPResponse, SourceHTTPError
+from app.external_calendar.http import (
+    HTTPResponse,
+    SourceHTTPClient,
+    SourceHTTPError,
+    _ValidatedRedirectHandler,
+)
 from app.external_calendar.models import ExternalEventObservation, TransitionSourceReference
 from app.external_calendar.programme import (
     failure_backoff,
@@ -55,6 +62,147 @@ def _foundation(db):  # type: ignore[no-untyped-def]
     db.flush()
     confirm_track_mapping(db, "LOVE_RACING", "Te Rapa", track.id, user.id)
     return user, region, track
+
+
+def test_source_client_rejects_untrusted_redirect_before_contact(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    contacted: list[str] = []
+
+    class FakeOpener:
+        def __init__(self, handler) -> None:  # type: ignore[no-untyped-def]
+            self.handler = handler
+
+        def open(self, request, *, timeout):  # type: ignore[no-untyped-def]
+            contacted.append(request.full_url)
+            self.handler.redirect_request(
+                request, None, 302, "Found", {}, "http://127.0.0.1/internal"
+            )
+            raise AssertionError("The rejected destination must not be contacted.")
+
+    monkeypatch.setattr(
+        "app.external_calendar.http.build_opener",
+        lambda handler: FakeOpener(handler),
+    )
+    client = SourceHTTPClient(timeout=1, max_bytes=1024)
+    with pytest.raises(SourceHTTPError, match="trusted destination"):
+        client.get("https://loveracing.nz/start", accept="text/html")
+    assert contacted == ["https://loveracing.nz/start"]
+
+
+def test_source_client_allows_bounded_valid_official_redirect(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    contacted: list[str] = []
+
+    class Headers:
+        @staticmethod
+        def get_content_type() -> str:
+            return "image/png"
+
+    class Response:
+        status = 200
+        headers = Headers()
+
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args):  # type: ignore[no-untyped-def]
+            return False
+
+        def read(self, _limit: int) -> bytes:
+            return b"image"
+
+        def geturl(self) -> str:
+            return self.url
+
+    class FakeOpener:
+        def __init__(self, handler) -> None:  # type: ignore[no-untyped-def]
+            self.handler = handler
+
+        def open(self, request, *, timeout):  # type: ignore[no-untyped-def]
+            contacted.append(request.full_url)
+            if len(contacted) == 1:
+                redirected = self.handler.redirect_request(
+                    request,
+                    None,
+                    302,
+                    "Found",
+                    {},
+                    "https://www.loveracing.nz/OnHorseFiles/Racecourses/Tracks/Ellerslie_2025.png",
+                )
+                return self.open(redirected, timeout=timeout)
+            return Response(request.full_url)
+
+    monkeypatch.setattr(
+        "app.external_calendar.http.build_opener",
+        lambda handler: FakeOpener(handler),
+    )
+    client = SourceHTTPClient(timeout=1, max_bytes=1024)
+    response = client.get(
+        "https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Ellerslie_2025.png",
+        accept="image/png",
+        destination_validator=lambda url: trusted_image_url(
+            url, "https://loveracing.nz/course"
+        ) is not None,
+    )
+    assert response.url.startswith("https://www.loveracing.nz/OnHorseFiles/")
+    assert len(contacted) == 2
+
+
+def test_source_client_stops_at_explicit_redirect_limit(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    contacted: list[str] = []
+
+    class FakeOpener:
+        def __init__(self, handler) -> None:  # type: ignore[no-untyped-def]
+            self.handler = handler
+
+        def open(self, request, *, timeout):  # type: ignore[no-untyped-def]
+            contacted.append(request.full_url)
+            redirected = self.handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {},
+                f"https://loveracing.nz/redirect/{len(contacted)}",
+            )
+            return self.open(redirected, timeout=timeout)
+
+    monkeypatch.setattr(
+        "app.external_calendar.http.build_opener",
+        lambda handler: FakeOpener(handler),
+    )
+    client = SourceHTTPClient(timeout=1, max_bytes=1024, max_redirects=2)
+    with pytest.raises(SourceHTTPError, match="redirect limit"):
+        client.get("https://loveracing.nz/start", accept="text/html")
+    assert len(contacted) == 3
+
+
+def test_source_redirect_does_not_forward_sensitive_headers() -> None:
+    handler = _ValidatedRedirectHandler(lambda _url: True, max_redirects=3)
+    request = Request(
+        "https://loveracing.nz/start",
+        headers={
+            "Accept": "text/html",
+            "Authorization": "secret",
+            "Cookie": "private",
+            "User-Agent": "OnTrackRostering/test",
+        },
+    )
+    redirected = handler.redirect_request(
+        request,
+        None,
+        302,
+        "Found",
+        {},
+        "https://www.loveracing.nz/next",
+    )
+    assert redirected is not None
+    forwarded = {key.casefold(): value for key, value in redirected.header_items()}
+    assert forwarded == {
+        "accept": "text/html",
+        "user-agent": "OnTrackRostering/test",
+    }
 
 
 def test_programme_parser_handles_love_racing_clocks_and_meeting_heading() -> None:

@@ -29,13 +29,13 @@ from app.auth.service import (
     create_invitation,
     grant_role,
     revoke_role_grant,
-    validated_email,
 )
 from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region
 from app.core.database import get_db
 from app.core.enums import CapabilitySignal, Lifecycle, Role
 from app.core.forms import optional_uuid
 from app.core.time import utcnow
+from app.identity.email import person_email_issues, validate_person_work_email
 from app.identity.models import Invitation, Person, RoleGrant, TrustedDevice, User, UserPersonLink
 from app.notices.models import NoticePublishingScope, NoticePublishingScopeRegion
 from app.notices.service import set_notice_publishing_scope
@@ -104,13 +104,14 @@ def crew_management_response(
     selected_crew_group_id = optional_uuid(crew_group_id, "Crew Group")
     selected_position_id = optional_uuid(position_id, "Position")
     selected = next((region for region in regions if region.id == region_id), regions[0])
+    can_administer_people = can_administer_region(request.state.actor, selected.id)
     statement = select(Person).where(Person.home_region_id == selected.id)
     if not show_archived:
         statement = statement.where(Person.lifecycle == Lifecycle.ACTIVE.value)
     if q.strip():
         term = f"%{q.strip()}%"
         statement = statement.where(or_(Person.display_name.ilike(term), Person.email.ilike(term)))
-    if account_type:
+    if account_type and can_administer_people:
         if account_type == "NONE":
             statement = statement.where(
                 Person.id.not_in(select(UserPersonLink.person_id))
@@ -185,10 +186,17 @@ def crew_management_response(
         account_ids = [account.id for account in accounts.values()]
         roles_by_user: dict[uuid.UUID, set[str]] = {account_id: set() for account_id in account_ids}
         last_seen_by_user: dict[uuid.UUID, object] = {}
-        if account_ids:
+        visible_security_account_ids = [
+            account.id
+            for person_id, account in accounts.items()
+            if (person := next((row for row in visible_people if row.id == person_id), None))
+            and person.home_region_id
+            and can_administer_user(db, request.state.actor, account, person.home_region_id)
+        ]
+        if visible_security_account_ids:
             for user_id, role in db.execute(
                 select(RoleGrant.user_id, RoleGrant.role).where(
-                    RoleGrant.user_id.in_(account_ids), RoleGrant.status == "ACTIVE"
+                    RoleGrant.user_id.in_(visible_security_account_ids), RoleGrant.status == "ACTIVE"
                 )
             ):
                 roles_by_user[user_id].add(role)
@@ -196,7 +204,7 @@ def crew_management_response(
                 db.execute(
                     select(TrustedDevice.user_id, func.max(TrustedDevice.last_seen_at))
                     .where(
-                        TrustedDevice.user_id.in_(account_ids),
+                        TrustedDevice.user_id.in_(visible_security_account_ids),
                         TrustedDevice.revoked_at.is_(None),
                     )
                     .group_by(TrustedDevice.user_id)
@@ -239,11 +247,16 @@ def crew_management_response(
                 "last_seen": last_seen_by_user.get(account.id) if account else None,
                 "contractor": Role.CONTRACTOR.value in roles,
                 "contractor_expires_at": (
-                    account.contractor_access_expires_at if account else None
+                    account.contractor_access_expires_at
+                    if account and account.id in visible_security_account_ids
+                    else None
                 ),
                 "email_mismatch": bool(
-                    account and (person.email or "").casefold() != account.email.casefold()
+                    account
+                    and account.id in visible_security_account_ids
+                    and (person.email or "").casefold() != account.email.casefold()
                 ),
+                "identity_issues": person_email_issues(db, person) if can_administer_people else (),
             }
     return templates.TemplateResponse(
         "crew_management.html",
@@ -260,7 +273,7 @@ def crew_management_response(
             account_type=account_type,
             selected_crew_group_id=selected_crew_group_id,
             selected_position_id=selected_position_id,
-            filter_account_types=[role.value for role in Role],
+            filter_account_types=[role.value for role in Role] if can_administer_people else [],
             filter_groups=list(db.scalars(select(CrewGroup).where(CrewGroup.lifecycle == "ACTIVE").order_by(CrewGroup.name))),
             filter_positions=list(db.scalars(select(BasePosition).where(BasePosition.lifecycle == "ACTIVE").order_by(BasePosition.name))),
             show_archived=show_archived,
@@ -270,6 +283,7 @@ def crew_management_response(
                 "region_id": "" if request.state.actor.is_admin else str(selected.id),
             },
             add_errors=add_errors or {},
+            can_administer_people=can_administer_people,
         ),
         status_code=status_code,
     )
@@ -338,10 +352,16 @@ def crew_person_response(
     *,
     direct_account: dict[str, str] | None = None,
     direct_errors: dict[str, str] | None = None,
+    profile_values: dict[str, str] | None = None,
+    profile_errors: dict[str, str] | None = None,
     status_code: int = 200,
 ):
     person = _person_in_operational_scope(db, request, person_id)
     regions = _regions(db, request)
+    can_edit_person = bool(
+        person.home_region_id
+        and can_administer_region(request.state.actor, person.home_region_id)
+    ) or bool(person.home_region_id is None and request.state.actor.is_admin)
     groups = list(
         db.scalars(select(CrewGroup).where(CrewGroup.lifecycle == "ACTIVE").order_by(CrewGroup.name))
     )
@@ -365,34 +385,48 @@ def crew_person_response(
     account = db.scalar(
         select(User).join(UserPersonLink).where(UserPersonLink.person_id == person.id)
     )
+    can_control_account = bool(
+        account
+        and person.home_region_id
+        and can_administer_user(db, request.state.actor, account, person.home_region_id)
+    )
+    can_assist_account = bool(
+        account
+        and person.home_region_id
+        and can_assist_user(db, request.state.actor, account, person.home_region_id)
+    )
     grants = list(
         db.scalars(
             select(RoleGrant)
             .where(RoleGrant.user_id == account.id, RoleGrant.status != "REVOKED")
             .order_by(RoleGrant.granted_at)
         )
-    ) if account else []
+    ) if account and can_control_account else []
     devices = list(
         db.scalars(
             select(TrustedDevice)
             .where(TrustedDevice.user_id == account.id)
             .order_by(TrustedDevice.last_seen_at.desc())
         )
-    ) if account else []
+    ) if account and can_control_account else []
     invitation = db.scalar(
         select(Invitation)
         .where(Invitation.person_id == person.id)
         .order_by(Invitation.created_at.desc())
         .limit(1)
+    ) if can_edit_person else None
+    notice_override = (
+        db.get(NoticePublishingScope, account.id)
+        if account and request.state.actor.is_admin
+        else None
     )
-    notice_override = db.get(NoticePublishingScope, account.id) if account else None
     notice_scope_ids = set(
         db.scalars(
             select(NoticePublishingScopeRegion.region_id).where(
                 NoticePublishingScopeRegion.user_id == account.id
             )
         )
-    ) if account and notice_override else set()
+    ) if account and request.state.actor.is_admin and notice_override else set()
     history = list(
         db.scalars(
             select(AuditEvent)
@@ -400,7 +434,7 @@ def crew_person_response(
             .order_by(AuditEvent.occurred_at.desc())
             .limit(30)
         )
-    )
+    ) if can_edit_person else []
     setup_state = onboarding_state(db, person)
     setup_label = {
         "NEEDS_REGION": "Needs Primary Region",
@@ -443,16 +477,16 @@ def crew_person_response(
             history=history,
             notice_override=notice_override,
             notice_scope_ids=notice_scope_ids,
-            can_control_account=bool(
-                account
-                and person.home_region_id
-                and can_administer_user(db, request.state.actor, account, person.home_region_id)
-            ),
-            can_assist_account=bool(
-                account
-                and person.home_region_id
-                and can_assist_user(db, request.state.actor, account, person.home_region_id)
-            ),
+            can_control_account=can_control_account,
+            can_assist_account=can_assist_account,
+            can_edit_person=can_edit_person,
+            identity_issues=person_email_issues(db, person) if can_edit_person else (),
+            profile_values=profile_values or {
+                "display_name": person.display_name,
+                "email": person.email or "",
+                "home_region_id": str(person.home_region_id or ""),
+            },
+            profile_errors=profile_errors or {},
             direct_account=direct_account or {"role": Role.EMPLOYEE.value},
             direct_errors=direct_errors or {},
         ),
@@ -498,11 +532,41 @@ def save_crew_person(
         raise HTTPException(403, "Admin authority is required to leave Primary Region blank.")
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
-        raise HTTPException(400, "Enter a crew name between 2 and 120 characters.")
+        message = "Enter a crew name between 2 and 120 characters."
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse(
+                {"status": "error", "errors": {"display_name": message}},
+                status_code=422,
+            )
+        return crew_person_response(
+            person.id,
+            request,
+            db,
+            profile_values={
+                "display_name": display_name,
+                "email": email,
+                "home_region_id": home_region_id,
+            },
+            profile_errors={"display_name": message},
+            status_code=422,
+        )
     try:
-        clean_email = validated_email(email) if email.strip() else None
+        clean_email = validate_person_work_email(db, email, person_id=person.id)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"status": "error", "errors": {"email": str(exc)}}, status_code=422)
+        return crew_person_response(
+            person.id,
+            request,
+            db,
+            profile_values={
+                "display_name": display_name,
+                "email": email,
+                "home_region_id": home_region_id,
+            },
+            profile_errors={"email": str(exc)},
+            status_code=422,
+        )
     allowed_groups = set(
         db.scalars(
             select(CrewGroup.id).where(
@@ -572,19 +636,9 @@ def update_onboarding_metadata(
         ):
             raise HTTPException(409, "Batch metadata is limited to active unlinked People.")
         try:
-            clean_email = validated_email(email) if email.strip() else None
+            clean_email = validate_person_work_email(db, email, person_id=person.id)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if clean_email and (
-            db.scalar(
-                select(Person.id).where(
-                    func.lower(Person.email) == clean_email,
-                    Person.id != person.id,
-                ).limit(1)
-            )
-            or db.scalar(select(User.id).where(func.lower(User.email) == clean_email).limit(1))
-        ):
-            raise HTTPException(409, f"Work email for {person.display_name} is already in use.")
         normalized.append(clean_email)
     supplied_emails = [email for email in normalized if email is not None]
     if len(set(supplied_emails)) != len(supplied_emails):
@@ -1004,17 +1058,13 @@ def create_crew_member(
     if not 2 <= len(clean_name) <= 120:
         errors["display_name"] = "Enter a crew name between 2 and 120 characters."
     try:
-        clean_email = validated_email(email) if email.strip() else None
+        clean_email = validate_person_work_email(db, email)
     except ValueError as exc:
         clean_email = None
         errors["email"] = str(exc)
     duplicate_filters = [func.lower(Person.display_name) == clean_name.casefold()]
     if parsed_region_id:
         duplicate_filters.append(Person.home_region_id == parsed_region_id)
-    if not errors.get("email") and clean_email and db.scalar(
-        select(Person.id).where(func.lower(Person.email) == clean_email).limit(1)
-    ):
-        errors["email"] = "A Person already uses that work email. Find and manage them in Crew."
     if not errors.get("display_name") and db.scalar(
         select(Person.id).where(*duplicate_filters).limit(1)
     ):
@@ -1066,11 +1116,35 @@ def update_crew_profile(
         raise HTTPException(403, "Regional administration authority required.")
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
-        raise HTTPException(400, "Enter a crew name between 2 and 120 characters.")
+        return crew_person_response(
+            person.id,
+            request,
+            db,
+            profile_values={
+                "display_name": display_name,
+                "email": email,
+                "home_region_id": str(home_region_id),
+            },
+            profile_errors={
+                "display_name": "Enter a crew name between 2 and 120 characters."
+            },
+            status_code=422,
+        )
     try:
-        clean_email = validated_email(email) if email.strip() else None
+        clean_email = validate_person_work_email(db, email, person_id=person.id)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        return crew_person_response(
+            person.id,
+            request,
+            db,
+            profile_values={
+                "display_name": display_name,
+                "email": email,
+                "home_region_id": str(home_region_id),
+            },
+            profile_errors={"email": str(exc)},
+            status_code=422,
+        )
     previous = {
         "display_name": person.display_name,
         "email": person.email,

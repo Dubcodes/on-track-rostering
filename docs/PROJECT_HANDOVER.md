@@ -32,12 +32,15 @@ The complete feature ledger and evidence boundary are in [IMPLEMENTATION_INVENTO
 
 Accounts/Crew Phase A provides reusable immediate/debounced GET filters, valid direct-account defaults with safe validation recovery, workflow-local fresh authentication without secret storage or POST replay, meaningful linked/unlinked success destinations, and explicit one-time invitation copy/status/return handling. Phase B makes Crew the normal Person-first staff workspace, structures Person detail as Profile, Roster & capabilities, Account & access, and Security & history, moves batch onboarding entry to `/manage/crew/onboarding`, and narrows Advanced Accounts to exceptional/recovery work without removing its routes. See [ACCOUNTS_CREW_UX.md](ACCOUNTS_CREW_UX.md).
 
+The current remediation keeps regional Viewer published-roster access while removing management detail, Team Hours, leave administration, another Person's private assignment note and accommodation address. Sub-Managers retain roster operations and bounded ordinary linked-account assistance, but Crew no longer loads or exposes Person/account creation, profile/capability mutation, grant/device/audit detail, or escalation controls to them. Person work email is normalized through one service with global active-Person uniqueness, linked User alignment, explicit unlinked-User reconciliation, legacy diagnostics, and PostgreSQL concurrency locking; no records are merged automatically. Outbound racing/map HTTP validates official HTTPS destinations before the initial request and every bounded redirect, including provider/path rules, and filters redirected headers.
+
 ## Unfinished work and explicit decisions still open
 
 - The private staging stack is initialized and reachable with a bootstrap Admin, but the current candidate is not thereby deployed or operationally qualified.
 - A separately authorized clean staging reset/re-import, canonical real-data correction, full staging matrix, physical-device security/push checks, persistence/restart checks, and backup/restore rehearsal remain.
 - Production promotion, secrets/RP identity freeze, monitoring/alerting and operational governance remain pending.
 - Product decisions remain open for Crew-Group-scoped Manager authority, global read-only Viewer accounts, full role administration in Crew, and whether missing truck-driver designation blocks Save & Preview or only Publish.
+- Legacy normalized Person-email duplicates/mismatches must be reconciled deliberately before a partial database unique constraint is added; this release reports them and prevents new service-path conflicts without silently merging identity.
 - Accounts/Crew Phase B is implemented within existing authority: unlinked Users remain focused Advanced Accounts results, signup review and full grant controls remain advanced, and bulk onboarding is secondary Crew work.
 - Canonical real-data conversion must explicitly resolve imported Vehicle-as-Position history. Configurable Open Position auto-accept and IV configuration are not implemented.
 

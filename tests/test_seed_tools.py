@@ -66,7 +66,7 @@ def test_staging_account_provision_is_idempotent(db) -> None:  # type: ignore[no
             "people": [
                 {
                     "display_name": "Staging Person",
-                    "email": "staging.person@example.invalid",
+                    "email": "staging.person@example.com",
                     "home_region": "Northern",
                     "crew_groups": ["Camera Crew"],
                     "capabilities": [
@@ -81,10 +81,10 @@ def test_staging_account_provision_is_idempotent(db) -> None:  # type: ignore[no
 
     assert provision(
         db, bundle=bundle, pin="123456", actor=actor, limit=5, reset_existing_pin=False
-    ) == [("staging.person@example.invalid", "created")]
+    ) == [("staging.person@example.com", "created")]
     assert provision(
         db, bundle=bundle, pin="654321", actor=actor, limit=5, reset_existing_pin=False
-    ) == [("staging.person@example.invalid", "existing")]
+    ) == [("staging.person@example.com", "existing")]
     assert db.scalar(select(func.count()).select_from(UserPersonLink)) == 1
     assert (
         db.scalar(

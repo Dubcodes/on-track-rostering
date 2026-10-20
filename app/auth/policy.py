@@ -198,10 +198,10 @@ def external_calendar_region_ids(db: Session, actor: Actor) -> set[uuid.UUID] | 
 
 
 def can_view_management_detail(actor: Actor, region_id: uuid.UUID) -> bool:
-    """Read-only operational/HR detail, independent from roster write authority."""
+    """Sensitive operational detail reserved for roster management authority."""
     if actor.is_contractor:
         return False
-    allowed = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value}
+    allowed = {Role.SUB_MANAGER.value, Role.MANAGER.value}
     return actor.is_admin or bool(actor.roles_for(region_id) & allowed)
 
 

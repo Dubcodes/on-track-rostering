@@ -86,7 +86,7 @@ def management_hours(
     if request.state.actor.is_contractor or (
         not request.state.actor.is_admin
         and not any(
-            {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
+            {"MANAGER", "SUB_MANAGER"} & set(roles)
             for roles in request.state.actor.regional_roles.values()
         )
     ):
@@ -109,7 +109,7 @@ def management_hours(
     if not request.state.actor.is_admin:
         visible_regions = {
             region_id for region_id, roles in request.state.actor.regional_roles.items()
-            if {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
+            if {"MANAGER", "SUB_MANAGER"} & set(roles)
         }
         leave_statement = leave_statement.where(Person.home_region_id.in_(visible_regions))
     leave_rows = list(db.execute(leave_statement))
@@ -133,7 +133,7 @@ def management_hours(
         else {
             region_key
             for region_key, roles in request.state.actor.regional_roles.items()
-            if {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles)
+            if {"MANAGER", "SUB_MANAGER"} & set(roles)
         }
     )
     region_statement = select(Region).where(Region.lifecycle == "ACTIVE")

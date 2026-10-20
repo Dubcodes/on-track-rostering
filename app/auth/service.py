@@ -5,7 +5,6 @@ import secrets
 import uuid
 from datetime import UTC, timedelta
 
-from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
@@ -15,6 +14,7 @@ from app.auth.security import credential_error, hash_credential, throttle_keys, 
 from app.catalog.models import Region
 from app.core.enums import Role
 from app.core.time import utcnow
+from app.identity.email import validate_person_work_email, validated_email
 from app.identity.models import (
     CredentialReset,
     Invitation,
@@ -168,13 +168,6 @@ def reset_credential_from_cli(db: Session, user: User, secret: str) -> None:
     db.commit()
 
 
-def validated_email(email: str) -> str:
-    try:
-        return validate_email(email, check_deliverability=False).normalized.casefold()
-    except EmailNotValidError as exc:
-        raise ValueError("Enter a valid email address.") from exc
-
-
 def create_invitation(
     db: Session,
     *,
@@ -207,7 +200,8 @@ def create_invitation(
             raise ValueError("The selected crew identity is archived.")
         if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person_id)):
             raise ValueError("The selected crew identity is already linked to an account.")
-        if not person.email or validated_email(person.email) != email:
+        person_email = validate_person_work_email(db, person.email, person_id=person.id)
+        if not person_email or person_email != email:
             raise ValueError(
                 "Invitation email must match the selected Person's normalized work email."
             )
@@ -433,9 +427,10 @@ def approve_signup(
     if create_person == bool(person_id):
         raise ValueError("Choose exactly one: link an existing person or create a new person.")
     if create_person:
+        person_email = validate_person_work_email(db, signup.email)
         person = Person(
             display_name=signup.display_name,
-            email=signup.email,
+            email=person_email,
             home_region_id=region_id,
         )
         db.add(person)

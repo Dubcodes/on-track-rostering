@@ -22,6 +22,7 @@ from app.external_calendar.service import (
     normalized_key,
     reconcile_observation,
 )
+from app.identity.email import validate_person_work_email, validated_email
 from app.identity.models import Person
 from app.positions.canonical import (
     AmbiguousPositionError,
@@ -408,9 +409,21 @@ def apply_bundle(db: Session, bundle: dict[str, object], actor_user_id) -> Impor
         )
     db.flush()
     for row in bundle.get("people", []):
-        email = str(row.get("email", "")).strip().casefold() or None
-        person = db.scalar(select(Person).where(func.lower(Person.email) == email)) if email else None
+        raw_email = str(row.get("email", "")).strip()
+        email = validated_email(raw_email) if raw_email else None
+        matches = list(
+            db.scalars(
+                select(Person).where(
+                    Person.lifecycle == "ACTIVE", func.lower(Person.email) == email
+                )
+            )
+        ) if email else []
+        if len(matches) > 1:
+            raise ValueError("Imported work email matches multiple active People; reconcile them first.")
+        person = matches[0] if matches else None
         if not person:
+            if email:
+                email = validate_person_work_email(db, email)
             home = (
                 db.scalar(
                     select(Region).where(

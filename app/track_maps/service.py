@@ -386,6 +386,23 @@ def _refresh_error(exc: Exception) -> str:
     return f"Map refresh failed safely ({type(exc).__name__})."
 
 
+def _source_get(
+    client: SourceHTTPClient,
+    url: str,
+    *,
+    accept: str,
+    destination_validator,
+) -> object:  # type: ignore[no-untyped-def]
+    """Keep narrow test adapters compatible while production enforces preflight redirects."""
+    if isinstance(client, SourceHTTPClient):
+        return client.get(
+            url,
+            accept=accept,
+            destination_validator=destination_validator,
+        )
+    return client.get(url, accept=accept)
+
+
 def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -> TrackMap:
     row = db.get(TrackMap, track.id) or TrackMap(track_id=track.id)
     db.add(row)
@@ -403,7 +420,15 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         if not fallback_url:
             raise _MapRefreshFailure("Invalid URL or image path: the configured official map path is unsafe.")
         try:
-            page = client.get(course_url, accept="text/html")
+            page = _source_get(
+                client,
+                course_url,
+                accept="text/html",
+                destination_validator=lambda url: (
+                    (parsed := urlsplit(url)).scheme.casefold() == "https"
+                    and (parsed.hostname or "").casefold() in {"loveracing.nz", "www.loveracing.nz"}
+                ),
+            )
         except SourceHTTPError:
             candidates = [fallback_url]
         else:
@@ -414,7 +439,12 @@ def refresh_automatic_map(db: Session, track: Track, client: SourceHTTPClient) -
         failures: list[_MapRefreshFailure] = []
         for candidate in candidates:
             try:
-                response = client.get(candidate, accept="image/jpeg,image/png,image/webp")
+                response = _source_get(
+                    client,
+                    candidate,
+                    accept="image/jpeg,image/png,image/webp",
+                    destination_validator=lambda url: trusted_image_url(url, course_url) is not None,
+                )
             except SourceHTTPError as exc:
                 failures.append(_MapRefreshFailure(f"HTTP/source failure: {exc}"))
                 continue

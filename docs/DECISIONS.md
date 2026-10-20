@@ -136,6 +136,10 @@ Vehicle capacity counts distinct People including the driver. Capacity is nullab
 
 Sub-Manager account assistance is limited to existing ordinary linked People in an operationally managed Region and never authorizes account creation/deletion, role escalation, or control of an active Manager/Admin. An exceptional Crew-Group Manager model is not inferred from Crew Group membership. Until its write boundaries for mixed Workdays, publication, People and accounts are explicitly decided, the existing Region boundary remains the restrictive authority.
 
+Viewer's broad Region read means the current published roster only. It is not management-detail authority: Team Hours, leave administration, drafts, another Person's private assignment note and assignment accommodation address remain unavailable. This privacy correction does not make Viewer global and does not alter its read-only character.
+
+Normalized Person work email integrity is a shared service rule: active-Person uniqueness is global and case-insensitive, linked Person/User emails align, and matching unlinked Users remain explicit reconciliation candidates. PostgreSQL advisory transaction locks serialize competing writes before a database constraint can safely exist. Legacy duplicates/mismatches are diagnosed without automatic merge; a partial unique constraint is deferred until operational data is reconciled.
+
 ## Persistent Track-map ownership
 
 The container entrypoint runs briefly with image root authority only to create and repair ownership of `/app/data/track_maps`, including retained named-volume files, then permanently execs the app or scheduler as `ontrack`. It does not recursively weaken unrelated paths. Successful automatic map checks are due after 90 days and failed attempts after one day; refresh failures retain the last valid local cache, while manual overrides remain authoritative until explicit reversion.

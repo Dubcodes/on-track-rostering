@@ -108,7 +108,7 @@ def test_import_preview_is_read_only_idempotent_and_allocates_palette(db):  # ty
     db.add(user)
     db.flush()
     bundle = parse_bundle(
-        '{"version":"1","regions":[{"name":"Central"}],"tracks":[{"name":"Awapuni","region":"Central"}],"crew_groups":[{"name":"Cameras"}],"positions":[{"name":"Side 1","crew_group":"Cameras"}],"people":[{"display_name":"Alex Crew","email":"alex@example.test","home_region":"Central","crew_groups":["Cameras"],"capabilities":[{"crew_group":"Cameras","position":"Side 1"}]}]}'
+        '{"version":"1","regions":[{"name":"Central"}],"tracks":[{"name":"Awapuni","region":"Central"}],"crew_groups":[{"name":"Cameras"}],"positions":[{"name":"Side 1","crew_group":"Cameras"}],"people":[{"display_name":"Alex Crew","email":"alex@example.com","home_region":"Central","crew_groups":["Cameras"],"capabilities":[{"crew_group":"Cameras","position":"Side 1"}]}]}'
     )
     before = len(db.new), db.scalar(select(func.count()).select_from(Region))
     plan = preview_bundle(db, bundle)

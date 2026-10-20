@@ -80,7 +80,7 @@ def context(request: Request, **values: object) -> dict[str, object]:
         and (
             actor.is_admin
             or any(
-                {"MANAGER", "SUB_MANAGER", "VIEWER"} & set(roles) for roles in actor.regional_roles.values()
+                {"MANAGER", "SUB_MANAGER"} & set(roles) for roles in actor.regional_roles.values()
             )
         )
     )

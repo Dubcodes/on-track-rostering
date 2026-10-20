@@ -13,14 +13,14 @@
   <form method="get" class="form-grid" data-live-filters>
     <label>Region<select name="region_id">{% for region in regions %}<option value="{{ region.id }}" {% if region.id == selected_region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
     <label>Search<input type="search" name="q" value="{{ query }}" placeholder="Name or work email" data-filter-search></label>
-    <label>Account type<select name="account_type"><option value="">All</option><option value="NONE" {% if account_type == 'NONE' %}selected{% endif %}>No account</option>{% for role in filter_account_types %}<option value="{{ role }}" {% if account_type == role %}selected{% endif %}>{{ role|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+    {% if can_administer_people %}<label>Account type<select name="account_type"><option value="">All</option><option value="NONE" {% if account_type == 'NONE' %}selected{% endif %}>No account</option>{% for role in filter_account_types %}<option value="{{ role }}" {% if account_type == role %}selected{% endif %}>{{ role|replace('_',' ')|title }}</option>{% endfor %}</select></label>{% endif %}
     <label>Crew Group<select name="crew_group_id"><option value="">All</option>{% for group in filter_groups %}<option value="{{ group.id }}" {% if selected_crew_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>{% endfor %}</select></label>
     <label>Position / capability<select name="position_id"><option value="">All</option>{% for position in filter_positions %}<option value="{{ position.id }}" {% if selected_position_id == position.id %}selected{% endif %}>{{ position.name }}</option>{% endfor %}</select></label>
     <label class="check"><input type="checkbox" name="show_archived" value="true" {% if show_archived %}checked{% endif %}> Show archived</label>
     <button>Filter</button>
   </form>
 </section>
-<section class="panel">
+{% if can_administer_people %}<section class="panel">
   <details{% if add_errors %} open{% endif %}><summary>Add Person</summary>
     <p class="muted">Search first to avoid duplicate People. After adding the Person, continue on their profile to set roster capabilities and create a one-time account setup invitation.</p>
     {% if add_errors %}<div class="alert error" role="alert"><strong>Person not added.</strong> Review the highlighted fields.</div>{% endif %}
@@ -32,7 +32,7 @@
       <button>Add Person</button>
     </form>
   </details>
-</section>
+</section>{% endif %}
 {% if actor.is_admin and needs_setup_people %}
 <section class="panel" id="needs-setup">
   <div class="section-head"><div><p class="eyebrow">Onboarding queue</p><h2>Needs setup</h2></div><span class="badge">{{ needs_setup_people|length }}</span></div>
@@ -57,7 +57,7 @@
 <section class="panel">
   <div class="record-list">
     {% for person in people %}
-    {% set summary = directory_summaries[person.id] %}<a href="/manage/crew/{{ person.id }}" class="preference-row"><span><strong>{{ person.display_name }}{% if summary.contractor %} <span class="badge">Contractor</span>{% endif %}</strong><small>{{ region_names.get(person.home_region_id, 'No Primary Region') }} · {{ person.email or 'No work email' }} · {{ summary.setup }} · {{ person.lifecycle|title }}{% if summary.email_mismatch %} · Work/login email mismatch{% endif %}{% if summary.contractor_expires_at %} · Access until {{ summary.contractor_expires_at|display_datetime }}{% endif %}</small><small>{{ memberships[person.id]|length }} Crew group{{ '' if memberships[person.id]|length == 1 else 's' }}{% if summary.roles %} · {{ summary.roles }}{% endif %}{% if summary.last_seen %} · Last seen {{ summary.last_seen|display_datetime }}{% endif %}</small></span><span aria-hidden="true">→</span></a>
+    {% set summary = directory_summaries[person.id] %}<a href="/manage/crew/{{ person.id }}" class="preference-row"><span><strong>{{ person.display_name }}{% if summary.contractor %} <span class="badge">Contractor</span>{% endif %}</strong><small>{{ region_names.get(person.home_region_id, 'No Primary Region') }} · {{ person.email or 'No work email' }} · {{ summary.setup }} · {{ person.lifecycle|title }}{% if summary.email_mismatch %} · Work/login email mismatch{% endif %}{% if summary.identity_issues %} · Identity review needed{% endif %}{% if summary.contractor_expires_at %} · Access until {{ summary.contractor_expires_at|display_datetime }}{% endif %}</small><small>{{ memberships[person.id]|length }} Crew group{{ '' if memberships[person.id]|length == 1 else 's' }}{% if summary.roles %} · {{ summary.roles }}{% endif %}{% if summary.last_seen %} · Last seen {{ summary.last_seen|display_datetime }}{% endif %}</small></span><span aria-hidden="true">→</span></a>
     {% else %}<p class="muted">No People match this filter.</p>{% endfor %}
   </div>
 </section>

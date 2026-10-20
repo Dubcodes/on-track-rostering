@@ -32,7 +32,7 @@ def test_neutral_import_reuses_global_canonical_position_and_is_idempotent(db) -
     db.flush()
     bundle = parse_bundle(
         '{"positions":[{"name":" side   1 ","crew_group":"Operational Crew"}],'
-        '"people":[{"display_name":"Imported Crew","email":"imported@example.test",'
+            '"people":[{"display_name":"Imported Crew","email":"imported@example.com",'
         '"home_region":"Northern","crew_groups":["Operational Crew"],'
         '"capabilities":[{"crew_group":"Operational Crew","position":"SIDE 1"}]}]}'
     )
@@ -40,7 +40,7 @@ def test_neutral_import_reuses_global_canonical_position_and_is_idempotent(db) -
     assert plan.valid and plan.counts["positions"] == {"match": 1}
     apply_bundle(db, bundle, user.id)
     db.flush()
-    person = db.scalar(select(Person).where(Person.email == "imported@example.test"))
+    person = db.scalar(select(Person).where(Person.email == "imported@example.com"))
     capability = db.scalar(
         select(PositionCapability).where(PositionCapability.person_id == person.id)
     )

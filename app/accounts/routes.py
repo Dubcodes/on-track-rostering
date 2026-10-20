@@ -31,6 +31,7 @@ from app.core.enums import Role
 from app.core.forms import optional_uuid
 from app.core.time import utcnow
 from app.identity.contractor_access import refresh_contractor_access
+from app.identity.email import validate_person_work_email
 from app.identity.models import Invitation, Person, RoleGrant, SignupRequest, User, UserPersonLink
 from app.web import context, templates
 
@@ -376,7 +377,7 @@ def link_existing_person(
     if not can_administer_user(db, request.state.actor, user, region_id):
         raise HTTPException(403, "The account is outside this regional scope.")
     try:
-        person_email = validated_email(person.email or "")
+        person_email = validate_person_work_email(db, person.email, person_id=person.id)
         user_email = validated_email(user.email)
     except ValueError as exc:
         raise HTTPException(

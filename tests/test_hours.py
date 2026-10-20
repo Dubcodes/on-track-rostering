@@ -249,7 +249,7 @@ def test_hours_use_full_published_span_and_allowances_do_not_change_total(db) ->
     assert [row["date"] for row in after_cancel] == [date(2026, 10, 27)]
 
 
-def test_management_hours_are_region_scoped_for_viewer(db) -> None:  # type: ignore[no-untyped-def]
+def test_management_hours_exclude_viewer_from_sensitive_team_data(db) -> None:  # type: ignore[no-untyped-def]
     north, south = Region(name="Northern"), Region(name="Southern")
     creator = User(
         email="creator@example.test",
@@ -294,7 +294,7 @@ def test_management_hours_are_region_scoped_for_viewer(db) -> None:  # type: ign
         end=date(2026, 9, 13),
         management=True,
     )
-    assert [row["person"] for row in rows] == ["Amy"]
+    assert rows == []
 
 
 def test_personal_hours_depend_on_person_link_not_role(db) -> None:  # type: ignore[no-untyped-def]

@@ -2220,7 +2220,12 @@ def test_manager_publish_employee_visibility_and_route_authorization(routed_db) 
     viewer_client = TestClient(app)
     _login(viewer_client, "viewer@example.test", "112233")
     viewer_day = viewer_client.get(f"/day/{workday_id}")
-    assert "Private transport" in viewer_day.text
+    assert viewer_day.status_code == 200
+    assert "Ellerslie Race Day" in viewer_day.text
+    assert "Private transport" not in viewer_day.text
+    assert 'href="/manage"' not in viewer_day.text
+    assert 'href="/manage/hours"' not in viewer_day.text
+    assert viewer_client.get("/manage/hours").status_code == 403
     assert "Edit private draft" not in viewer_day.text
     assert viewer_client.get(workday_path).status_code == 403
 
@@ -4236,7 +4241,7 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
         f"/manage/crew/{person_id}/profile",
         data={
             "display_name": "Amy Crew",
-            "email": "",
+            "email": "amy@example.test",
             "home_region_id": str(southern_id),
             "csrf_token": admin_csrf,
         },
@@ -4258,7 +4263,7 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
         f"/manage/crew/{person_id}/profile",
         data={
             "display_name": "Amy Crew",
-            "email": "",
+            "email": "amy@example.test",
             "home_region_id": str(region_id),
             "csrf_token": manager_csrf,
         },
@@ -4610,6 +4615,186 @@ def test_phase_b_crew_workspace_is_person_first_and_accounts_stays_advanced(rout
     assert 'value="existing-duplicate@example.com"' in duplicate.text
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(Person)) == before
+
+
+def test_submanager_crew_surface_matches_existing_assistance_authority(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    submanager = TestClient(app)
+    csrf = _login(submanager, "submanager@example.test", "445566")
+
+    directory = submanager.get(f"/manage/crew?region_id={region_id}")
+    assert directory.status_code == 200
+    assert "Add Person" not in directory.text
+    assert "Last seen" not in directory.text
+    assert "Account type" not in directory.text
+
+    detail = submanager.get(f"/manage/crew/{person_id}")
+    assert detail.status_code == 200
+    assert "Account assistance" in detail.text
+    assert "Reset PIN/password" in detail.text
+    assert "Add capability decision" not in detail.text
+    assert "Create setup link" not in detail.text
+    assert "trusted devices" not in detail.text.casefold()
+    assert "Recent history" not in detail.text
+    assert "Make Sub-manager" not in detail.text
+    assert f'/capabilities/{position_id}' not in detail.text
+
+    denied_profile = submanager.post(
+        f"/manage/crew/{person_id}/profile",
+        data={
+            "display_name": "Unauthorized edit",
+            "email": "amy@example.test",
+            "home_region_id": str(region_id),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert denied_profile.status_code == 403
+    assert submanager.post(
+        f"/manage/crew/{person_id}/setup-link",
+        data={"role": "EMPLOYEE", "csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 403
+    assert submanager.post(
+        f"/manage/crew/{person_id}/devices/revoke",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    ).status_code == 403
+
+    assisted = submanager.post(
+        f"/manage/crew/{person_id}/account-status",
+        data={"account_status": "DISABLED", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert assisted.status_code == 303
+    with factory() as db:
+        account = db.scalar(
+            select(User).join(UserPersonLink).where(UserPersonLink.person_id == person_id)
+        )
+        assert account.status == "DISABLED"
+        outside_person_id = db.scalar(
+            select(Person.id).where(Person.email == "private-south@example.test")
+        )
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+    assert manager.get(f"/manage/crew/{outside_person_id}").status_code == 403
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+    assert admin.get(f"/manage/crew/{outside_person_id}").status_code == 200
+
+
+def test_person_work_email_integrity_is_global_link_aware_and_non_destructive(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, person_id) = routed_db
+    with factory() as db:
+        other_region = db.scalar(select(Region).where(Region.id != region_id))
+        collision = Person(
+            display_name="Cross Region Collision",
+            email="collision@example.com",
+            home_region_id=other_region.id,
+        )
+        unlinked = User(
+            email="reconcile@example.com",
+            display_name="Unlinked reconciliation account",
+            credential_hash=hash_credential("123456"),
+            credential_kind="pin",
+        )
+        aligned_user = User(
+            email="aligned@example.com",
+            display_name="Aligned account",
+            credential_hash=hash_credential("123456"),
+            credential_kind="pin",
+        )
+        aligned_person = Person(
+            display_name="Aligned Person",
+            email="aligned@example.com",
+            home_region_id=region_id,
+        )
+        db.add_all([collision, unlinked, aligned_user, aligned_person])
+        db.flush()
+        db.add(UserPersonLink(user_id=aligned_user.id, person_id=aligned_person.id))
+        db.commit()
+        unlinked_id = unlinked.id
+        aligned_person_id = aligned_person.id
+
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    aligned = admin.post(
+        f"/manage/crew/{aligned_person_id}",
+        data={
+            "display_name": "Aligned Case Normalized",
+            "email": "ALIGNED@example.com",
+            "home_region_id": str(region_id),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert aligned.status_code == 303
+    linked_mismatch = admin.post(
+        f"/manage/crew/{person_id}",
+        data={
+            "display_name": "Amy Renamed Safely",
+            "email": "different@example.com",
+            "home_region_id": str(region_id),
+            "csrf_token": csrf,
+        },
+    )
+    assert linked_mismatch.status_code == 422
+    assert "Profile not saved" in linked_mismatch.text
+    assert "must match this Person" in linked_mismatch.text
+    assert 'value="different@example.com"' in linked_mismatch.text
+
+    cross_region = admin.post(
+        "/manage/crew",
+        data={
+            "display_name": "Duplicate Elsewhere",
+            "email": "COLLISION@example.com",
+            "region_id": str(region_id),
+            "csrf_token": csrf,
+        },
+    )
+    assert cross_region.status_code == 422
+    assert "Another active Person already uses that work email" in cross_region.text
+
+    reconciliation_person = admin.post(
+        "/manage/crew",
+        data={
+            "display_name": "Reconciliation Person",
+            "email": "RECONCILE@example.com",
+            "region_id": str(region_id),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert reconciliation_person.status_code == 303
+    with factory() as db:
+        created = db.scalar(select(Person).where(Person.email == "reconcile@example.com"))
+        assert created is not None
+        assert db.get(UserPersonLink, unlinked_id) is None
+        original = db.get(Person, person_id)
+        assert original.display_name == "Amy Crew"
+        assert original.email == "amy@example.test"
+        aligned_person = db.get(Person, aligned_person_id)
+        assert aligned_person.display_name == "Aligned Case Normalized"
+        assert aligned_person.email == "aligned@example.com"
+
+        legacy_duplicate = Person(
+            display_name="Legacy Duplicate",
+            email="COLLISION@example.com",
+            home_region_id=region_id,
+        )
+        db.add(legacy_duplicate)
+        db.commit()
+        legacy_duplicate_id = legacy_duplicate.id
+    diagnostic = admin.get(f"/manage/crew/{legacy_duplicate_id}")
+    assert diagnostic.status_code == 200
+    assert "Identity review needed" in diagnostic.text
+    assert "Another active Person uses this work email" in diagnostic.text
+    with factory() as db:
+        assert db.scalar(
+            select(func.count()).select_from(Person).where(
+                func.lower(Person.email) == "collision@example.com"
+            )
+        ) == 2
 
 
 def test_admin_onboards_regionless_person_then_invites_exact_identity(routed_db) -> None:  # type: ignore[no-untyped-def]

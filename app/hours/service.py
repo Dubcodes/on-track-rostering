@@ -44,7 +44,7 @@ def format_minutes(minutes: int) -> str:
 def _visible_regions(actor: Actor) -> set[uuid.UUID] | None:
     if actor.is_admin:
         return None
-    allowed = {Role.MANAGER.value, Role.SUB_MANAGER.value, Role.VIEWER.value}
+    allowed = {Role.MANAGER.value, Role.SUB_MANAGER.value}
     return {region_id for region_id, roles in actor.regional_roles.items() if set(roles) & allowed}
 
 

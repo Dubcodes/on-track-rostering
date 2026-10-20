@@ -91,6 +91,12 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             credential_hash=hash_credential("112233"),
             credential_kind="pin",
         )
+        submanager = User(
+            email=f"submanager-{suffix}@example.com",
+            display_name="Browser Sub-manager",
+            credential_hash=hash_credential("445566"),
+            credential_kind="pin",
+        )
         contractor = User(
             email=f"contractor-{suffix}@example.com",
             display_name="Browser Contractor",
@@ -109,6 +115,9 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             email=contractor.email,
         )
         manager_person = Person(display_name="Browser Roster Manager")
+        submanager_person = Person(
+            display_name="Browser Sub-manager", email=submanager.email
+        )
         other_person = Person(display_name="Unrelated Browser Crew")
         leave_managed_person = Person(display_name="Browser Leave Managed Crew")
         regionless_person = Person(
@@ -124,11 +133,13 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
                 employee,
                 admin,
                 viewer,
+                submanager,
                 contractor,
                 person,
                 admin_person,
                 contractor_person,
                 manager_person,
+                submanager_person,
                 other_person,
                 leave_managed_person,
                 regionless_person,
@@ -166,6 +177,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
         admin_person.home_region_id = region.id
         contractor_person.home_region_id = region.id
         manager_person.home_region_id = region.id
+        submanager_person.home_region_id = region.id
         leave_managed_person.home_region_id = region.id
         db.add_all(
             [
@@ -188,8 +200,10 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
                 UserPersonLink(user_id=admin.id, person_id=admin_person.id),
                 UserPersonLink(user_id=contractor.id, person_id=contractor_person.id),
                 UserPersonLink(user_id=manager.id, person_id=manager_person.id),
+                UserPersonLink(user_id=submanager.id, person_id=submanager_person.id),
                 RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
                 RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=region.id),
+                RoleGrant(user_id=submanager.id, role=Role.SUB_MANAGER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
                 RoleGrant(user_id=contractor.id, role=Role.CONTRACTOR.value, region_id=region.id),
@@ -794,6 +808,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             "employee": (employee.email, "654321"),
             "admin": (admin.email, "12345678"),
             "viewer": (viewer.email, "112233"),
+            "submanager": (submanager.email, "445566"),
             "contractor": (contractor.email, "246810"),
             "contractor_workday_id": str(contractor_workday.id),
             "workday_id": str(workday.id),
@@ -2156,6 +2171,33 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     context = browser.new_context(viewport={"width": width, "height": 900})
     page = context.new_page()
     errors = _watch_browser_errors(page)
+    _login(page, base_url, values["submanager"])
+    page.goto(base_url + f"/manage/crew/{values['browser_person_id']}")
+    assert page.get_by_role("heading", name="Account assistance").is_visible()
+    assert page.get_by_text("Add capability decision", exact=True).count() == 0
+    assert page.get_by_role("heading", name="Security", exact=True).count() == 0
+    assert page.get_by_text("Recent history", exact=False).count() == 0
+    assert page.get_by_text("Create setup link", exact=False).count() == 0
+    _assert_no_horizontal_overflow(page)
+    csrf = next(
+        cookie["value"] for cookie in context.cookies() if cookie["name"] == "ontrack_csrf"
+    )
+    denied = page.request.post(
+        base_url + f"/manage/crew/{values['browser_person_id']}/profile",
+        form={
+            "display_name": "Unauthorized browser edit",
+            "email": values["employee"][0],
+            "home_region_id": values["region_id"],
+            "csrf_token": csrf,
+        },
+    )
+    assert denied.status == 403
+    assert not errors
+    context.close()
+
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
     _login(page, base_url, values["manager"])
     manager_theme = "daylight" if width == 375 else "race-night"
     _select_theme(page, base_url, manager_theme)
@@ -3020,7 +3062,9 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     errors = _watch_browser_errors(page)
     _login(page, base_url, values["viewer"])
     _assert_page(page, base_url + f"/day/{values['workday_id']}")
-    assert page.get_by_text("Browser private roster detail").is_visible()
+    assert page.get_by_text("Browser private roster detail").count() == 0
+    assert page.get_by_text("Browser Crew Member", exact=True).is_visible()
+    assert page.request.get(base_url + "/manage/hours").status == 403
     csrf = next(
         cookie["value"] for cookie in context.cookies() if cookie["name"] == "ontrack_csrf"
     )

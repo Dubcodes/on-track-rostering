@@ -34,6 +34,7 @@ from app.core.database import get_db
 from app.core.enums import Lifecycle, Role
 from app.core.forms import controlled_integrity, optional_uuid
 from app.core.time import local_today, utcnow
+from app.identity.email import validate_person_work_email
 from app.identity.models import (
     Invitation,
     Person,
@@ -286,9 +287,13 @@ def create_person(
     _admin(request)
     verify_csrf(request, csrf_token)
     region = _active_reference(db, Region, home_region_id, "home region") if home_region_id else None
+    try:
+        person_email = validate_person_work_email(db, email)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     person = Person(
         display_name=_name_or_400(display_name, "Person name", 120),
-        email=_email_or_400(email) if email else None,
+        email=person_email,
         home_region_id=region.id if region else None,
     )
     db.add(person)
@@ -367,10 +372,10 @@ def create_user(
         errors["person_id"] = "Contractor access must be linked to a crew identity."
     if person:
         try:
-            person_email = validated_email(person.email or "")
-        except ValueError:
+            person_email = validate_person_work_email(db, person.email, person_id=person.id)
+        except ValueError as exc:
             person_email = ""
-            errors["person_id"] = "That crew identity needs a valid work email before linking."
+            errors["person_id"] = str(exc)
         if person_email and user_email and person_email != user_email:
             errors["email"] = "The account email must match the crew identity's work email."
     if person and db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):

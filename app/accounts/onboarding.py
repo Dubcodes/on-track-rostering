@@ -6,13 +6,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.service import validated_email
 from app.catalog.models import Region
 from app.core.time import utcnow
-from app.identity.models import Invitation, Person, User, UserPersonLink
+from app.identity.email import validate_person_work_email, validated_email
+from app.identity.models import Invitation, Person, UserPersonLink
 
 ONBOARDING_STATES = {
     "NEEDS_REGION", "NEEDS_EMAIL", "READY_TO_INVITE", "INVITATION_PENDING",
@@ -135,10 +135,12 @@ def parse_metadata_csv(db: Session, raw: str, allowed_region_ids: set[uuid.UUID]
                 errors.append("Invalid email address.")
                 email = email.casefold()
         if email and person:
-            if db.scalar(
-                select(Person.id).where(func.lower(Person.email) == email, Person.id != person.id).limit(1)
-            ) or db.scalar(select(User.id).where(func.lower(User.email) == email).limit(1)):
-                errors.append("Normalized email is already in use.")
+            try:
+                email = validate_person_work_email(
+                    db, email, person_id=person.id, lock=False
+                ) or ""
+            except ValueError as exc:
+                errors.append(str(exc))
         supplied_state = (row.get("account_state") or "").strip().upper()
         if supplied_state not in ONBOARDING_STATES:
             errors.append("Unknown account state.")
@@ -173,7 +175,9 @@ def apply_metadata_rows(db: Session, rows: list[MetadataRow]) -> int:
         raise ValueError("Resolve every Preview error before applying metadata.")
     for row in rows:
         assert row.person
-        row.person.email = row.email or None
+        row.person.email = validate_person_work_email(
+            db, row.email or None, person_id=row.person.id
+        )
         row.person.home_region_id = row.region.id if row.region else None
     db.commit()
     return len(rows)
