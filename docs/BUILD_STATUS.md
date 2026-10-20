@@ -2,9 +2,9 @@
 
 ## Application-behavior qualification baseline and deployment boundary
 
-The current application-behavior baseline is exact SHA `03154a3be05fd60d79c30d01b126b3436581bb6f` (release-gate run `39304940178`): **335 PostgreSQL-backed tests** and **79 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-03154a3be05fd60d79c30d01b126b3436581bb6f` with digest `sha256:c882258974d741c04b7dbd98111075461dfcae77214bce21ad4080f842eae706`. The sole Alembic head is `f7a2c9d4e610`.
+The current application-behavior baseline is exact SHA `397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d` (release-gate run `39348170205`): **336 PostgreSQL-backed tests** and **79 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d` with digest `sha256:8350f45cc0e8bd9a9fafdb217a295d9b6ba646b0ec95c2d8b3d2007689e2ee08`. The sole Alembic head is `f7a2c9d4e610`.
 
-Earlier SHAs, including `394ec739cfeb00591254de009183b07926ef796b`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
+Earlier SHAs, including `5c0d1785e2ef26c1f33c552c27611514ffa1cb6c`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
 
 An operational deployment candidate is identified by all three of the following, resolved when the candidate is deliberately selected:
 
