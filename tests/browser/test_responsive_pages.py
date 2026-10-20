@@ -1478,6 +1478,7 @@ def test_people_onboarding_and_one_time_links_are_responsive(
     for label in ("Profile", "Roster & capabilities", "Account & access", "Security & history"):
         assert section_nav.get_by_role("link", name=label).is_visible()
     assert page.get_by_text("Create setup link", exact=True).is_visible()
+    assert page.locator('#account select[name="role"] option[value="CONTRACTOR"]').count() >= 1
     _assert_no_horizontal_overflow(page)
 
     page.goto(base_url + "/manage/accounts")
@@ -3667,10 +3668,12 @@ def test_contractor_management_and_personal_surface_is_responsive(
     assert contractor_card.count() == 1
     assert contractor_card.get_by_text("Account linked", exact=False).is_visible()
     assert contractor_card.get_by_role("button", name="Extend access").is_visible()
-    section.get_by_text("Invite a Contractor Person", exact=True).click()
-    invite_form = section.locator('form[action*="/contractors/"][action$="/invite"]').first
-    assert invite_form.locator('input[name="email"]').is_visible()
-    assert invite_form.get_by_role("button", name="Invite Contractor").is_visible()
+    contractor_card.get_by_role("link", name=re.compile("Browser Contractor")).click()
+    page.wait_for_url(re.compile(r"/manage/crew/[0-9a-f-]+"))
+    assert page.get_by_role("heading", name="Browser Contractor", exact=True).is_visible()
+    account_section = page.locator("#account")
+    assert account_section.get_by_text("Account status", exact=True).is_visible()
+    assert account_section.get_by_text("Contractor", exact=False).count() >= 1
     _assert_no_horizontal_overflow(page)
     assert not errors
     manager_context.close()
