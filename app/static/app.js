@@ -82,6 +82,10 @@
   document.querySelectorAll("[data-auto-submit]").forEach((element) => {
     element.addEventListener("change", () => element.form?.submit());
   });
+  document.addEventListener("click", (event) => {
+    const help = event.target instanceof Element ? event.target.closest(".inline-help[tabindex]") : null;
+    if (help instanceof HTMLElement) help.focus({preventScroll: true});
+  });
   const filterRestoreKey = "ontrack-live-filter-position";
   try {
     const saved = JSON.parse(sessionStorage.getItem(filterRestoreKey) || "null");
