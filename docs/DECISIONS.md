@@ -84,7 +84,7 @@ Roster publication and decline record deterministic event keys in the same datab
 
 ## Regional administration boundary
 
-Manager and Admin may administer regional tracks and scoped accounts. Region policy/lifecycle and the current global Crew Group/Base Position catalogues require Admin. Sub-Manager retains practical roster mutation but has no broad account or catalogue administration. Managers may administer ordinary linked Employee, Contractor and Sub-manager access in their Regions after fresh authentication, but active Manager/Admin security remains Admin-controlled. Historical workday snapshots are never rewritten by catalogue rename, colour, or lifecycle changes.
+Manager and Admin may administer regional tracks and scoped accounts. Region policy/lifecycle and the current global Crew Group/Base Position catalogues require Admin. Sub-Manager retains practical roster mutation but has no broad account or catalogue administration. Managers may administer ordinary linked Employee, Casual, Contractor and Sub-manager access in their Regions after fresh authentication, including policy-permitted Person-level grants; Admin alone may grant Manager or control active Manager/Admin security. Historical workday snapshots are never rewritten by catalogue rename, colour, or lifecycle changes.
 
 ## Hours are derived from publication snapshots
 

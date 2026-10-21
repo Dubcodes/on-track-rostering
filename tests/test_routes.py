@@ -569,15 +569,25 @@ def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -
     page = public.get(f"/invite#token={raw}")
     assert page.status_code == 200
     assert str(page.request.url).endswith("/invite")
+    details = public.post("/invite/details", data={"token": raw})
+    assert details.status_code == 200
+    assert details.json()["email"] == "invitee@example.com"
+    mismatch = public.post(
+        "/invite/activate",
+        data={"token": raw, "display_name": "Corrected Invitee", "credential": "123456", "confirmation": "654321"},
+    )
+    assert mismatch.status_code == 400 and "confirmation did not match" in mismatch.text
     activated = public.post(
         "/invite/activate",
-        data={"token": raw, "display_name": "Invitee", "credential": "123456"},
+        data={"token": raw, "display_name": "Invitee", "credential": "123456", "confirmation": "123456"},
         follow_redirects=False,
     )
     assert activated.status_code == 303
+    assert activated.headers["location"] == "/month"
+    assert public.get("/month").status_code == 200
     repeated = public.post(
         "/invite/activate",
-        data={"token": raw, "display_name": "Invitee", "credential": "123456"},
+        data={"token": raw, "display_name": "Invitee", "credential": "123456", "confirmation": "123456"},
     )
     assert repeated.status_code == 400
 
@@ -622,17 +632,19 @@ def test_manager_contractor_invitation_scope_activation_and_limited_surface(rout
     public = TestClient(app)
     activated = public.post(
         "/invite/activate",
-        data={"token": raw, "display_name": "Scoped Contractor", "credential": "246810"},
+        data={"token": raw, "display_name": "Corrected Account Name", "credential": "246810", "confirmation": "246810"},
         follow_redirects=False,
     )
     assert activated.status_code == 303
     assert public.post(
         "/invite/activate",
-        data={"token": raw, "display_name": "Scoped Contractor", "credential": "246810"},
+        data={"token": raw, "display_name": "Scoped Contractor", "credential": "246810", "confirmation": "246810"},
     ).status_code == 400
     with factory() as db:
         account = db.scalar(select(User).where(User.email == "scoped-contractor@example.com"))
         assert account and account.contractor_access_expires_at is not None
+        assert account.display_name == "Corrected Account Name"
+        assert db.get(Person, contractor_id).display_name == "Scoped Contractor"
         link = db.get(UserPersonLink, account.id)
         assert link and link.person_id == contractor_id
     crew_management = manager.get(f"/manage/crew?region_id={region_id}")
@@ -662,8 +674,21 @@ def test_manager_contractor_invitation_scope_activation_and_limited_surface(rout
     assert month.status_code == 200 and f'/day/{own_day}' in month.text
     assert f'/day/{unrelated_day}' not in month.text
     day = contractor_client.get(f"/day/{own_day}")
-    assert "Scoped Contractor" in day.text and "Own detail" in day.text
-    assert "Amy Crew" not in day.text and "Unrelated detail" not in day.text
+    assert "Scoped Contractor" in day.text and "Amy Crew" in day.text
+    assert "Own detail" not in day.text and "Unrelated detail" not in day.text
+    contractor_api = contractor_client.get(f"/api/day/{own_day}")
+    assert contractor_api.status_code == 200
+    assert {row["person"] for row in contractor_api.json()["workday"]["assignments"]} == {
+        "Scoped Contractor", "Amy Crew"
+    }
+    assert all(
+        not row["note"]
+        and not row["transport"]
+        and not row["vehicle"]
+        and not row["accommodation"]
+        and not row["accommodation_address"]
+        for row in contractor_api.json()["workday"]["assignments"]
+    )
     assert contractor_client.get("/crew").status_code == 403
     assert contractor_client.get("/manage/accounts").status_code == 403
     assert contractor_client.get("/manage/crew").status_code == 403
@@ -1180,8 +1205,125 @@ def test_official_map_refresh_persists_serves_and_renders_on_published_day(
     assert image.status_code == 200 and image.content == content
     day = employee.get(f"/day/{workday_id}")
     assert day.status_code == 200
-    assert f'src="/track-maps/{track_id}"' in day.text
-    assert "pinch to zoom and drag to pan" in day.text
+    assert f'src="/track-maps/{track_id}?v=' in day.text
+    assert "Pinch or use the zoom controls" in day.text
+
+
+def test_manual_track_map_upload_activates_and_versions_preview_in_one_post(
+    routed_db, monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (_region_id, track_id, _position_id, _person_id) = routed_db
+    monkeypatch.setattr("app.track_maps.service._directory", lambda: tmp_path.resolve())
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    content = _png_bytes(640, 480)
+    uploaded = manager.post(
+        f"/manage/catalog/tracks/{track_id}/map/upload",
+        data={"csrf_token": csrf},
+        files={"image": ("course.png", content, "image/png")},
+        follow_redirects=False,
+    )
+    assert uploaded.status_code == 303
+    catalog = manager.get(uploaded.headers["location"])
+    digest = hashlib.sha256(content).hexdigest()
+    assert "Upload &amp; use map" in catalog.text
+    assert f'/track-maps/{track_id}?v={digest}' in catalog.text
+    assert manager.get(f"/track-maps/{track_id}?v={digest}").content == content
+    with factory() as db:
+        row = db.get(TrackMap, track_id)
+        assert row.has_manual_override and row.manual_hash == digest
+
+
+def test_add_person_and_setup_link_is_atomic_and_uses_selected_role(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    manager = TestClient(app)
+    csrf = _login(manager, "manager@example.test", "123456")
+    created = manager.post(
+        "/manage/crew",
+        data={
+            "display_name": "Atomic Invitee",
+            "email": "atomic-invitee@example.com",
+            "region_id": str(region_id),
+            "account_type": "CASUAL",
+            "action": "person_invitation",
+            "csrf_token": csrf,
+        },
+    )
+    assert created.status_code == 200 and "#token=" in created.text
+    with factory() as db:
+        person = db.scalar(select(Person).where(Person.email == "atomic-invitee@example.com"))
+        invitation = db.scalar(select(Invitation).where(Invitation.person_id == person.id))
+        assert invitation.role == "CASUAL" and invitation.region_id == region_id
+        assert db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)) is None
+
+
+def test_admin_manages_person_regional_manager_grant_with_named_scope(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (_region_id, _track_id, _position_id, person_id) = routed_db
+    with factory() as db:
+        other_region = db.scalar(select(Region).where(Region.name == "Southern"))
+        assert other_region
+        other_region_id = other_region.id
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    granted = admin.post(
+        f"/manage/crew/{person_id}/grants",
+        data={"role": "MANAGER", "region_id": str(other_region_id), "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert granted.status_code == 303
+    detail = admin.get(f"/manage/crew/{person_id}")
+    assert "Manager" in detail.text and "Southern · Pending" in detail.text
+    with factory() as db:
+        account = db.scalar(select(User).join(UserPersonLink).where(UserPersonLink.person_id == person_id))
+        grant = db.scalar(
+            select(RoleGrant).where(
+                RoleGrant.user_id == account.id,
+                RoleGrant.role == "MANAGER",
+                RoleGrant.region_id == other_region_id,
+                RoleGrant.status == "PENDING",
+            )
+        )
+        grant_id = grant.id
+    revoked = admin.post(
+        f"/manage/crew/{person_id}/grants/{grant_id}/revoke",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert revoked.status_code == 303
+    with factory() as db:
+        assert db.get(RoleGrant, grant_id).status == "REVOKED"
+
+
+def test_employee_can_revoke_only_own_trusted_device(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ids = routed_db
+    employee = TestClient(app)
+    csrf = _login(employee, "amy@example.test", "654321")
+    with factory() as db:
+        amy = db.scalar(select(User).where(User.email == "amy@example.test"))
+        device = db.scalar(
+            select(TrustedDevice).where(
+                TrustedDevice.user_id == amy.id,
+                TrustedDevice.revoked_at.is_(None),
+            ).order_by(TrustedDevice.created_at.desc())
+        )
+        manager_device = db.scalar(
+            select(TrustedDevice).join(User).where(User.email == "manager@example.test")
+        )
+    settings = employee.get("/settings")
+    assert f'/settings/devices/{device.id}/revoke' in settings.text
+    if manager_device:
+        assert employee.post(
+            f"/settings/devices/{manager_device.id}/revoke",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        ).status_code == 404
+    revoked = employee.post(
+        f"/settings/devices/{device.id}/revoke",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert revoked.status_code == 303 and revoked.headers["location"] == "/login"
+    assert employee.get("/month", follow_redirects=False).status_code == 303
 
 
 def test_admin_can_create_regionless_person_but_manager_cannot(routed_db) -> None:  # type: ignore[no-untyped-def]

@@ -21,6 +21,7 @@ PUBLIC_PATHS = {
     "/login/passkey/verify",
     "/signup",
     "/invite",
+    "/invite/details",
     "/invite/activate",
     "/credential-reset",
     "/credential-reset/complete",

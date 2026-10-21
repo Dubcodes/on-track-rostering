@@ -266,7 +266,8 @@ def _available_map(
     if not path:
         return None
     try:
-        size = path.stat().st_size
+        stat = path.stat()
+        size = stat.st_size
         with path.open("rb") as stream:
             header = stream.read(MAP_HEADER_BYTES)
     except OSError:
@@ -294,6 +295,7 @@ def _available_map(
         "height": height,
         "bytes": size,
         "manual": manual,
+        "version": getattr(row, f"{prefix}_hash") or str(int(stat.st_mtime_ns)),
     }
 
 
@@ -337,8 +339,12 @@ def save_manual_map(db: Session, track: Track, content: bytes) -> TrackMap:
     file_name = f"manual-{track.id.hex}{extension}"
     destination = _directory() / file_name
     temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_bytes(content)
-    os.replace(temporary, destination)
+    try:
+        temporary.write_bytes(content)
+        os.replace(temporary, destination)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise PermissionError("Track-map storage is unavailable; the existing map remains in use.") from exc
     row.manual_file_name = file_name
     row.manual_content_type = content_type
     row.manual_hash = hashlib.sha256(content).hexdigest()

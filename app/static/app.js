@@ -273,6 +273,19 @@
     };
     window.setTimeout(prefetch, 400);
   }
+  const initialiseRoleRegionChoices = () => document.querySelectorAll("[data-role-region-choice]").forEach((choice) => {
+    const form = choice.closest("form");
+    const update = () => {
+      const [role, region] = choice.value.split("|");
+      form.querySelector("[data-role-choice]").value = role || "";
+      form.querySelector("[data-region-choice]").value = region || "";
+    };
+    if (choice.dataset.initialised) return;
+    choice.dataset.initialised = "true";
+    choice.addEventListener("change", update);
+    update();
+  });
+  initialiseRoleRegionChoices();
   const personEditor = document.querySelector("[data-person-editor]");
   if (personEditor) {
     const state = personEditor.querySelector("[data-save-state]");
@@ -303,6 +316,7 @@
           headers: { Accept: "application/json" },
         });
         if (!response.ok) throw new Error(await response.text());
+        const result = await response.json();
         personEditor.querySelectorAll("input, textarea").forEach((control) => {
           if (control.type === "checkbox" || control.type === "radio") {
             control.defaultChecked = control.checked;
@@ -314,6 +328,18 @@
           option.defaultSelected = option.selected;
         });
         clean();
+        if (result.refresh_url) {
+          const refreshed = await fetch(result.refresh_url, { headers: { Accept: "text/html" } });
+          if (refreshed.ok) {
+            const page = new DOMParser().parseFromString(await refreshed.text(), "text/html");
+            const replacement = page.querySelector("[data-person-account-panel]");
+            const current = document.querySelector("[data-person-account-panel]");
+            if (replacement && current) current.replaceWith(replacement);
+            const label = page.querySelector("[data-person-setup-label]");
+            if (label) document.querySelector("[data-person-setup-label]").textContent = label.textContent;
+            initialiseRoleRegionChoices();
+          }
+        }
       } catch (_) {
         state.textContent = "Could not save — review and try again";
       } finally {
@@ -401,16 +427,23 @@
   const reauthForm = reauthDialog?.querySelector("[data-reauth-form]");
   const reauthCredential = reauthDialog?.querySelector("[data-reauth-credential]");
   const reauthError = reauthDialog?.querySelector("[data-reauth-error]");
+  const reauthReady = reauthDialog?.querySelector("[data-reauth-ready]");
+  const reauthContinue = reauthDialog?.querySelector("[data-reauth-continue]");
   let freshAuthTarget = null;
+  let freshAuthSubmitter = null;
   const freshAuthValid = () => {
     const deadline = Date.parse(document.body.dataset.freshAuthExpiresAt || "");
     return document.body.dataset.freshAuth === "true" && Number.isFinite(deadline) && deadline > Date.now();
   };
-  const requestFreshAuth = (form = null) => {
+  const requestFreshAuth = (form = null, submitter = null) => {
     if (!reauthDialog) return;
     freshAuthTarget = form;
+    freshAuthSubmitter = submitter;
     reauthError.hidden = true;
     reauthError.textContent = "";
+    reauthReady.hidden = true;
+    reauthContinue.hidden = true;
+    reauthForm.querySelector("[data-reauth-confirm]").hidden = false;
     reauthCredential.value = "";
     reauthDialog.showModal();
     reauthCredential.focus();
@@ -419,17 +452,16 @@
     const path = new URL(form.action, window.location.href).pathname;
     return /^\/admin\/(users|invitations)(\/|$)/.test(path)
       || /^\/manage\/accounts\/(link-person|invitations|contractors|people-invitations|signup-requests|grants)(\/|$)/.test(path)
-      || /^\/manage\/crew\/[^/]+\/(setup-link|account-status|employment-type|credential-reset|devices\/revoke|sub-manager|notice-scope)(\/|$)/.test(path);
+      || /^\/manage\/crew\/[^/]+\/(setup-link|account-status|employment-type|credential-reset|devices\/revoke|sub-manager|notice-scope|grants)(\/|$)/.test(path);
   };
-  document.querySelectorAll('form[method="post" i]').forEach((form) => {
-    if (sensitiveAction(form)) form.dataset.freshAuth = "";
-  });
-  document.querySelectorAll("form[data-fresh-auth]").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      if (freshAuthValid()) return;
-      event.preventDefault();
-      requestFreshAuth(form);
-    });
+  document.addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== "post") return;
+    const valueGuard = form.dataset.freshAuthSubmitValue;
+    const needsFresh = sensitiveAction(form) || form.hasAttribute("data-fresh-auth") || (valueGuard && event.submitter?.value === valueGuard);
+    if (!needsFresh || freshAuthValid()) return;
+    event.preventDefault();
+    requestFreshAuth(form, event.submitter);
   });
   reauthForm?.addEventListener("submit", async (event) => {
     if (event.submitter?.value === "cancel") return;
@@ -452,10 +484,11 @@
       document.body.dataset.freshAuth = "true";
       document.body.dataset.freshAuthExpiresAt = result.expires_at;
       reauthCredential.value = "";
-      reauthDialog.close();
-      const submit = freshAuthTarget?.querySelector('button[type="submit"], button:not([type]), input[type="submit"]');
-      submit?.focus();
-      freshAuthTarget = null;
+      confirm.hidden = true;
+      reauthReady.hidden = false;
+      reauthContinue.hidden = false;
+      reauthContinue.textContent = `Continue to ${freshAuthSubmitter?.textContent?.trim() || "complete action"}`;
+      reauthContinue.focus();
     } catch (error) {
       reauthError.textContent = error.message || "Credential could not be verified.";
       reauthError.hidden = false;
@@ -464,6 +497,14 @@
     } finally {
       confirm.disabled = false;
     }
+  });
+  reauthContinue?.addEventListener("click", () => {
+    const target = freshAuthTarget;
+    const submitter = freshAuthSubmitter;
+    freshAuthTarget = null;
+    freshAuthSubmitter = null;
+    reauthDialog.close();
+    target?.requestSubmit(submitter || undefined);
   });
   if (new URLSearchParams(window.location.search).get("reauth") === "required") requestFreshAuth();
 })();

@@ -8,8 +8,10 @@
   {% if available %}
   <form method="post" action="/invite/activate" class="stack" data-invite-form>
     <input type="hidden" name="token" value="{{ token }}" data-invite-token>
-    <label>Your name<input name="display_name" required autocomplete="name"></label>
-    <label>Create a PIN<input name="credential" inputmode="numeric" pattern="[0-9]{6,32}" minlength="6" autocomplete="new-password" required><small>At least six digits.</small></label>
+    <label>Account email<input type="email" value="{{ invite_email }}" readonly data-invite-email></label>
+    <label>Your display name<input name="display_name" value="{{ display_name }}" required autocomplete="name" maxlength="120" data-invite-name><small>This changes only the account display name. It does not rename the roster Person.</small></label>
+    <label>Create a PIN or password<span class="password-control"><input type="password" name="credential" minlength="6" autocomplete="new-password" required data-secret-input><button type="button" class="secondary" data-secret-toggle aria-label="Show PIN or password">Show</button></span><small data-invite-credential-help>Use at least six digits, or a password of at least 12 characters.</small></label>
+    <label>Confirm PIN or password<span class="password-control"><input type="password" name="confirmation" minlength="6" autocomplete="new-password" required data-secret-input><button type="button" class="secondary" data-secret-toggle aria-label="Show confirmation">Show</button></span></label>
     <button data-invite-submit>Activate account</button>
   </form>
   {% else %}<div class="alert">This invitation is unavailable or has already been used.</div>{% endif %}

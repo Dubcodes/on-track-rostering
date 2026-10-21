@@ -61,6 +61,8 @@ def upload_track_map(
         row = save_manual_map(db, track, content)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(507, str(exc)) from exc
     record_audit(
         db,
         "track_map.manual_uploaded",

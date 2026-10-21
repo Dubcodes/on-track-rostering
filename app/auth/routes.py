@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,7 @@ from app.auth.service import (
     activate_invitation,
     activate_pending_grants,
     consume_credential_reset,
+    invitation_details,
     normalise_email,
     validated_email,
 )
@@ -210,7 +211,32 @@ def logout(request: Request, csrf_token: str = Form(...), db: Session = Depends(
 @router.get("/invite", response_class=HTMLResponse)
 def invitation_page(request: Request):
     return templates.TemplateResponse(
-        "invite.html", context(request, token="", available=True, error=""),
+        "invite.html", context(request, token="", available=True, error="", invite_email="", display_name=""),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/invite/details")
+def invitation_metadata(token: str = Form(...), db: Session = Depends(get_db)):
+    try:
+        invite = invitation_details(db, token)
+    except ValueError:
+        return JSONResponse(
+            {"available": False, "detail": "This invitation is unavailable."},
+            status_code=404,
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        {
+            "available": True,
+            "email": invite.email,
+            "display_name": invite.display_name,
+            "credential_help": (
+                "Use at least eight digits or a password of at least 12 characters."
+                if invite.role == "ADMIN"
+                else "Use at least six digits, or a password of at least 12 characters."
+            ),
+        },
         headers={"Cache-Control": "no-store"},
     )
 
@@ -221,18 +247,33 @@ def invitation_activate(
     token: str = Form(...),
     display_name: str = Form(...),
     credential: str = Form(...),
+    confirmation: str = Form(...),
     db: Session = Depends(get_db),
 ):
     try:
-        activate_invitation(db, token, display_name, credential)
+        invite = invitation_details(db, token)
+        if credential != confirmation:
+            raise ValueError("PIN/password confirmation did not match.")
+        user = activate_invitation(db, token, display_name, credential)
     except ValueError as exc:
         return templates.TemplateResponse(
             "invite.html",
-            context(request, token=token, available=True, error=str(exc)),
+            context(
+                request, token=token, available=True, error=str(exc),
+                invite_email=(invite.email if "invite" in locals() else ""),
+                display_name=display_name,
+            ),
             status_code=400,
             headers={"Cache-Control": "no-store"},
         )
-    return RedirectResponse("/login?activated=1", status_code=303)
+    if mfa_required(db, user):
+        return RedirectResponse("/login?activated=1&mfa=required", status_code=303)
+    raw_session, raw_csrf, device = create_device(
+        db, user, request.headers.get("user-agent", "Browser")[:120]
+    )
+    response = RedirectResponse("/month", status_code=303)
+    set_auth_cookies(response, raw_session, raw_csrf, device)
+    return response
 
 
 @router.get("/credential-reset", response_class=HTMLResponse)

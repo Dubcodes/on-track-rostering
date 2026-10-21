@@ -281,6 +281,7 @@ def crew_management_response(
                 "display_name": "",
                 "email": "",
                 "region_id": "" if request.state.actor.is_admin else str(selected.id),
+                "account_type": Role.EMPLOYEE.value,
             },
             add_errors=add_errors or {},
             can_administer_people=can_administer_people,
@@ -402,6 +403,16 @@ def crew_person_response(
             .order_by(RoleGrant.granted_at)
         )
     ) if account and can_control_account else []
+    region_names = {
+        region.id: region.name
+        for region in db.scalars(select(Region).where(Region.lifecycle == "ACTIVE"))
+    }
+    grant_choices = [
+        (role.value, region.id, region.name)
+        for region in regions
+        for role in Role
+        if role != Role.ADMIN and can_grant_role(request.state.actor, role.value, region.id)
+    ] if account and can_control_account else []
     devices = list(
         db.scalars(
             select(TrustedDevice)
@@ -469,6 +480,8 @@ def crew_person_response(
             },
             account=account,
             grants=grants,
+            region_names=region_names,
+            grant_choices=grant_choices,
             devices=devices,
             last_seen=devices[0].last_seen_at if devices else None,
             setup_state=setup_state,
@@ -595,7 +608,11 @@ def save_crew_person(
     )
     db.commit()
     if "application/json" in request.headers.get("accept", ""):
-        return JSONResponse({"status": "saved"})
+        return JSONResponse({
+            "status": "saved",
+            "refresh_url": f"/manage/crew/{person.id}",
+            "setup_state": onboarding_state(db, person),
+        })
     return RedirectResponse(f"/manage/crew/{person.id}?saved=1", status_code=303)
 
 
@@ -701,12 +718,14 @@ def create_person_setup_link(
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
     person = _person_in_scope(db, request, person_id, allow_unassigned_admin=True)
-    if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
+    if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value, Role.MANAGER.value}:
         raise HTTPException(403, "That account role is not available here.")
     if not person.email or person.home_region_id is None:
         raise HTTPException(409, "Work email and Primary Region are required.")
     if db.scalar(select(UserPersonLink.user_id).where(UserPersonLink.person_id == person.id)):
         raise HTTPException(409, "This Person already has an account.")
+    if not can_grant_role(request.state.actor, role, person.home_region_id):
+        raise HTTPException(403, "You cannot create that account role in this Region.")
     now = utcnow()
     for pending in db.scalars(
         select(Invitation).where(
@@ -1035,11 +1054,13 @@ def create_crew_member(
     display_name: str = Form(...),
     email: str = Form(""),
     region_id: str = Form(""),
+    account_type: str = Form(Role.EMPLOYEE.value),
+    action: str = Form("person"),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    form_state = {"display_name": display_name, "email": email, "region_id": region_id}
+    form_state = {"display_name": display_name, "email": email, "region_id": region_id, "account_type": account_type}
     errors: dict[str, str] = {}
     try:
         parsed_region_id = optional_uuid(region_id, "Primary Region")
@@ -1062,6 +1083,15 @@ def create_crew_member(
     except ValueError as exc:
         clean_email = None
         errors["email"] = str(exc)
+    create_setup = action == "person_invitation"
+    if create_setup:
+        require_fresh_auth(request)
+        if not clean_email:
+            errors["email"] = "A unique work email is required to create a setup link."
+        if not parsed_region_id:
+            errors["region_id"] = "A Primary Region is required to create a setup link."
+        if parsed_region_id and not can_grant_role(request.state.actor, account_type, parsed_region_id):
+            raise HTTPException(403, "You cannot create that account role in this Region.")
     duplicate_filters = [func.lower(Person.display_name) == clean_name.casefold()]
     if parsed_region_id:
         duplicate_filters.append(Person.home_region_id == parsed_region_id)
@@ -1092,9 +1122,86 @@ def create_crew_member(
         region_id=parsed_region_id,
         detail={"display_name": clean_name},
     )
+    if create_setup:
+        try:
+            _invitation, raw = create_invitation(
+                db,
+                email=clean_email or "",
+                display_name=clean_name,
+                person_id=person.id,
+                role=account_type,
+                region_id=parsed_region_id,
+                actor_user_id=request.state.user.id,
+                commit=False,
+            )
+        except ValueError as exc:
+            db.rollback()
+            errors["email"] = str(exc)
+            return crew_management_response(
+                request, db, region_id=parsed_region_id, add_person=form_state,
+                add_errors=errors, status_code=422,
+            )
     db.commit()
+    if create_setup:
+        return templates.TemplateResponse(
+            "invitation_created.html",
+            context(
+                request,
+                invitation_url=invitation_url(raw),
+                destination=f"/manage/crew/{person.id}",
+                destination_label=f"Continue to {person.display_name}",
+                invitation_kind="Account setup invitation",
+                recipient_name=person.display_name,
+                recipient_email=person.email,
+            ),
+            headers={"Cache-Control": "no-store"},
+        )
     destination = f"/manage/crew/{person.id}?created=1#profile"
     return RedirectResponse(destination, status_code=303)
+
+
+@router.post("/{person_id}/grants")
+def add_person_role_grant(
+    person_id: uuid.UUID,
+    request: Request,
+    role: str = Form(...),
+    region_id: uuid.UUID = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    _person, account = _controlled_account(db, request, person_id)
+    try:
+        grant_role(db, actor=request.state.actor, target_user=account, role=role, region_id=region_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(f"/manage/crew/{person_id}#account", status_code=303)
+
+
+@router.post("/{person_id}/grants/{grant_id}/revoke")
+def revoke_person_role_grant(
+    person_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    require_fresh_auth(request)
+    _person, account = _controlled_account(db, request, person_id)
+    grant = db.get(RoleGrant, grant_id)
+    if not grant or grant.user_id != account.id:
+        raise HTTPException(404)
+    try:
+        revoke_role_grant(db, actor=request.state.actor, grant=grant)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(f"/manage/crew/{person_id}#account", status_code=303)
 
 
 @router.post("/{person_id}/profile")

@@ -1,6 +1,7 @@
 alembic==1.16.5
 aiohttp==3.14.4
 argon2-cffi==25.1.0
+certifi==2026.10.19
 cryptography==50.0.1
 email-validator==2.3.0
 fastapi==0.141.1

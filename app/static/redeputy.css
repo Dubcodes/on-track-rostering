@@ -948,7 +948,7 @@ select option { background: var(--input-bg); color: var(--text); }
 .theme-swatch.is-gradient { width: 34px; }
 .timesheet-dot { display: inline-flex; width: 25px; height: 25px; align-items: center; justify-content: center; margin-top: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-raised); color: var(--warn); }
 .timesheet-dot svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
-.fortnight-total-marker { width: auto; min-width: 25px; height: auto; min-height: 25px; gap: 4px; padding: 3px 6px; border-radius: 7px; text-decoration: none; }
+.fortnight-total-marker { width: 27px; min-width: 27px; height: 27px; min-height: 27px; padding: 4px; border-radius: 50%; text-decoration: none; }
 .fortnight-total-marker span { font-size: .62rem; font-weight: 800; text-transform: uppercase; }
 .fortnight-total-marker strong { color: var(--text); font-size: .74rem; }
 .fortnight-total-marker svg { width: 13px; height: 13px; }
@@ -1197,13 +1197,16 @@ select option { background: var(--input-bg); color: var(--text); }
 .builder-dice-button svg { width: 18px; height: 18px; }
 .builder-dice-feedback { flex-basis: 100%; min-height: 1.2em; }
 .person-travel-fields { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; padding: .65rem; border: 1px solid var(--line); border-radius: 8px; }
-.track-map-admin-preview { display: block; width: min(100%, 360px); max-height: 180px; object-fit: contain; border-radius: 10px; background: var(--surface-soft); }
+.map-canvas, .track-map-admin-preview { background-color: #f5f3ed; background-image: linear-gradient(45deg,#e7e4dc 25%,transparent 25%),linear-gradient(-45deg,#e7e4dc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e7e4dc 75%),linear-gradient(-45deg,transparent 75%,#e7e4dc 75%); background-size: 20px 20px; background-position: 0 0,0 10px,10px -10px,-10px 0; }
+.track-map-admin-preview { display: block; width: min(100%, 360px); max-height: 180px; object-fit: contain; border-radius: 10px; }
 .track-map-open { width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 .track-map-open img { display: block; width: 100%; max-height: 420px; object-fit: contain; }
 .track-map-dialog { width: min(96vw, 1200px); height: min(92vh, 900px); padding: 0; overflow: hidden; background: var(--surface); }
 .track-map-dialog::backdrop { background: rgb(0 0 0 / 78%); }
-.track-map-close { position: absolute; z-index: 2; top: 8px; right: 8px; }
-.track-map-viewport { width: 100%; height: 100%; overflow: auto; touch-action: pinch-zoom pan-x pan-y; overscroll-behavior: contain; }
+.track-map-toolbar { position: absolute; z-index: 2; top: 8px; right: 8px; display: flex; gap: 6px; }
+.track-map-toolbar button { min-width: 42px; }
+.track-map-close { position: static; }
+.track-map-viewport { width: 100%; height: 100%; overflow: auto; touch-action: pinch-zoom pan-x pan-y; overscroll-behavior: contain; padding: 52px 12px 12px; }
 .track-map-viewport img { display: block; width: auto; height: auto; max-width: none; }
 
 @media (max-width: 620px) {
@@ -1258,6 +1261,9 @@ select option { background: var(--input-bg); color: var(--text); }
 .crew-roster-row > * { min-width: 0; line-height: 1.25; overflow-wrap: break-word; }
 .crew-roster-row.is-placeholder { color: var(--muted); background: var(--surface-soft); }
 .crew-roster-row.own { box-shadow: inset 3px 0 var(--accent); }
+.contractor-crew-view .crew-roster-row { grid-template-columns: minmax(82px,.8fr) minmax(0,1.5fr); }
+.password-control { display: flex; align-items: stretch; gap: 8px; }
+.password-control input { flex: 1 1 auto; min-width: 0; }
 .crew-roster-head { background: var(--surface); color: var(--muted); font-size: .7rem; font-weight: 900; text-transform: uppercase; }
 .crew-name { display: flex; gap: 4px; flex-direction: column; align-items: flex-start; }
 .crew-name small, .crew-roster-row [role="cell"] small { color: var(--muted); font-weight: 500; }

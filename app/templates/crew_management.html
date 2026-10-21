@@ -22,14 +22,15 @@
 </section>
 {% if can_administer_people %}<section class="panel">
   <details{% if add_errors %} open{% endif %}><summary>Add Person</summary>
-    <p class="muted">Search first to avoid duplicate People. After adding the Person, continue on their profile to set roster capabilities and create a one-time account setup invitation.</p>
+    <p class="muted">Search first to avoid duplicate People. Add only the roster identity, or create its preferred one-time account setup link in the same operation.</p>
     {% if add_errors %}<div class="alert error" role="alert"><strong>Person not added.</strong> Review the highlighted fields.</div>{% endif %}
-    <form method="post" action="/manage/crew" class="form-grid">
+    <form method="post" action="/manage/crew" class="form-grid" data-fresh-auth-submit-value="person_invitation">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Name<input name="display_name" value="{{ add_person.display_name }}" required maxlength="120" aria-invalid="{{ 'true' if add_errors.display_name else 'false' }}">{% if add_errors.display_name %}<small class="field-error">{{ add_errors.display_name }}</small>{% endif %}</label>
       <label>Work email<input name="email" type="email" value="{{ add_person.email }}" aria-invalid="{{ 'true' if add_errors.email else 'false' }}">{% if add_errors.email %}<small class="field-error">{{ add_errors.email }}</small>{% endif %}</label>
       <label>Primary Region<select name="region_id" {% if not actor.is_admin %}required{% endif %} aria-invalid="{{ 'true' if add_errors.region_id else 'false' }}">{% if actor.is_admin %}<option value="">No Primary Region yet</option>{% endif %}{% for region in regions %}<option value="{{ region.id }}" {% if add_person.region_id == region.id|string %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select>{% if add_errors.region_id %}<small class="field-error">{{ add_errors.region_id }}</small>{% endif %}</label>
-      <button>Add Person</button>
+      <label>Account type<select name="account_type"><option value="EMPLOYEE" {% if add_person.account_type == 'EMPLOYEE' %}selected{% endif %}>Employee</option><option value="CASUAL" {% if add_person.account_type == 'CASUAL' %}selected{% endif %}>Casual</option><option value="CONTRACTOR" {% if add_person.account_type == 'CONTRACTOR' %}selected{% endif %}>Contractor</option><option value="SUB_MANAGER" {% if add_person.account_type == 'SUB_MANAGER' %}selected{% endif %}>Sub-manager</option>{% if actor.is_admin %}<option value="MANAGER" {% if add_person.account_type == 'MANAGER' %}selected{% endif %}>Manager</option>{% endif %}</select><small>Used only when creating a setup link.</small></label>
+      <div class="row-actions"><button name="action" value="person">Add Person</button><button name="action" value="person_invitation">Add &amp; create setup link</button></div>
     </form>
   </details>
 </section>{% endif %}

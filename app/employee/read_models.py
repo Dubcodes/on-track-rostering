@@ -223,6 +223,7 @@ def day_assignments(
     can_view_private_notes: bool,
     can_self_decline: bool = False,
     workday: Workday | None = None,
+    limited_contractor_view: bool = False,
 ) -> list[dict[str, object]]:
     statement = select(Assignment).where(Assignment.revision_id == revision.id)
     if not can_view_all_rows:
@@ -243,6 +244,8 @@ def day_assignments(
         is_own = actor.person_id == row.person_id
         note = row.note if (not row.note_private or is_own or can_view_private_notes) else ""
         travel = effective_person_travel(revision, row)
+        if limited_contractor_view:
+            note = ""
         result.append(
             {
                 "slot_key": str(row.slot_key),
@@ -252,19 +255,21 @@ def day_assignments(
                 "status": row.status,
                 "start": travel.start,
                 "end": travel.finish,
-                "show_time_exception": shows_time_exception(
+                "show_time_exception": limited_contractor_view or shows_time_exception(
                     revision, travel.start, travel.finish
                 ),
                 "note": note,
                 "is_own": is_own,
                 "can_decline": bool(is_own and row.status == "ASSIGNED" and can_self_decline),
-                "transport": transport_display(
+                "transport": "" if limited_contractor_view else transport_display(
                     row.transport_mode, row.vehicle_name_snapshot, row.custom_transport_text
                 ),
-                "vehicle": row.vehicle_name_snapshot,
-                "accommodation": travel.accommodation,
+                "vehicle": None if limited_contractor_view else row.vehicle_name_snapshot,
+                "accommodation": None if limited_contractor_view else travel.accommodation,
                 "accommodation_address": (
-                    row.accommodation_address if is_own or can_view_private_notes else None
+                    None
+                    if limited_contractor_view
+                    else row.accommodation_address if is_own or can_view_private_notes else None
                 ),
             }
         )

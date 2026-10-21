@@ -263,7 +263,11 @@ def assigned_to_revision(db: Session, actor: Actor, revision_id: uuid.UUID) -> b
         actor.person_id
         and db.scalar(
             select(Assignment.id)
-            .where(Assignment.revision_id == revision_id, Assignment.person_id == actor.person_id)
+            .where(
+                Assignment.revision_id == revision_id,
+                Assignment.person_id == actor.person_id,
+                Assignment.status == "ASSIGNED",
+            )
             .limit(1)
         )
     )

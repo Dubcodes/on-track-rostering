@@ -22,6 +22,8 @@ from app.auth.policy import (
     can_view_published,
 )
 from app.auth.security import (
+    CSRF_COOKIE,
+    SESSION_COOKIE,
     clear_failures,
     credential_error,
     hash_credential,
@@ -285,6 +287,10 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         if request.state.actor.person_id and not management and not own_rows:
             raise HTTPException(404, "Workday not found")
     self_decline = can_self_decline_assignment(request.state.actor, workday, revision, own_rows)
+    limited_contractor_view = bool(
+        request.state.actor.is_contractor
+        and any(row.status == "ASSIGNED" for row in own_rows)
+    )
     personal_entry = (
         db.scalar(
             select(PersonalWorkdayEntry).where(
@@ -299,10 +305,11 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
         db,
         request.state.actor,
         revision,
-        can_view_all_rows=crew_history,
+        can_view_all_rows=crew_history or limited_contractor_view,
         can_view_private_notes=management,
         can_self_decline=self_decline,
         workday=workday,
+        limited_contractor_view=limited_contractor_view,
     )
     response_by_person = {
         str(entry.person_id): entry.replacement_response or "PENDING"
@@ -320,10 +327,10 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
             if row["is_own"]:
                 row["start"] = personal_entry.start_time or row["start"]
                 row["end"] = personal_entry.end_time or row["end"]
-                row["show_time_exception"] = shows_time_exception(
+                row["show_time_exception"] = limited_contractor_view or shows_time_exception(
                     revision, row["start"], row["end"]
                 )
-                if personal_entry.standard_travel_opt_out:
+                if personal_entry.standard_travel_opt_out and not limited_contractor_view:
                     row["transport"] = "Making own way"
     participation = person_day_participation(revision, own_rows) if own_rows else None
     can_opt_out_standard_travel = bool(
@@ -424,6 +431,7 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
                 db.scalar(select(Track.palette_slot).where(Track.id == revision.track_id)), workday.category
             ),
             assignments=assignments,
+            limited_contractor_view=limited_contractor_view,
             management=management,
             can_edit=can_manage_region(request.state.actor, workday.region_id),
             history_available=crew_history,
@@ -784,13 +792,25 @@ def day_api(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
     revision = db.get(WorkdayRevision, workday.current_published_revision_id) if workday else None
     if not workday or not revision or not can_view_published(db, request.state.actor, workday, revision):
         raise HTTPException(404, "Workday not found")
+    own_assignment_exists = bool(
+        request.state.actor.person_id
+        and db.scalar(
+            select(Assignment.id).where(
+                Assignment.revision_id == revision.id,
+                Assignment.person_id == request.state.actor.person_id,
+                Assignment.status == "ASSIGNED",
+            ).limit(1)
+        )
+    )
+    limited_contractor_view = bool(request.state.actor.is_contractor and own_assignment_exists)
     personal_assignments = day_assignments(
         db,
         request.state.actor,
         revision,
-        can_view_all_rows=False,
+        can_view_all_rows=limited_contractor_view,
         can_view_private_notes=False,
         workday=workday,
+        limited_contractor_view=limited_contractor_view,
     )
     management = can_view_management_detail(request.state.actor, workday.region_id)
     if (
@@ -948,8 +968,43 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
             ),
             current_person=current_person,
             current_region=current_region,
+            trusted_devices=list(
+                db.scalars(
+                    select(TrustedDevice)
+                    .where(TrustedDevice.user_id == request.state.user.id)
+                    .order_by(TrustedDevice.last_seen_at.desc())
+                )
+            ),
         ),
     )
+
+
+@router.post("/settings/devices/{device_id}/revoke")
+def revoke_own_device(
+    device_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    device = db.scalar(
+        select(TrustedDevice).where(
+            TrustedDevice.id == device_id,
+            TrustedDevice.user_id == request.state.user.id,
+        )
+    )
+    if not device:
+        raise HTTPException(404)
+    if device.revoked_at is None:
+        device.revoked_at = utcnow()
+        record_audit(db, "user.device.revoked", "trusted_device", device.id, request.state.user.id)
+        db.commit()
+    current = bool(request.state.device and request.state.device.id == device.id)
+    response = RedirectResponse("/login" if current else "/settings?device=revoked", status_code=303)
+    if current:
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(CSRF_COOKIE, path="/")
+    return response
 
 
 @router.post("/settings/theme")

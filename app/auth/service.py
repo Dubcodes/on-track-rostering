@@ -30,6 +30,7 @@ from app.identity.models import (
 
 CREDENTIAL_RESET_MINUTES = 60
 CREDENTIAL_RESET_UNAVAILABLE = "This credential reset is invalid, expired, or already used."
+INVITATION_UNAVAILABLE = "This invitation is invalid, expired, or already used."
 
 
 def normalise_email(email: str) -> str:
@@ -183,8 +184,8 @@ def create_invitation(
     clean_name = display_name.strip()
     if not 2 <= len(clean_name) <= 120:
         raise ValueError("Display name must be between 2 and 120 characters.")
-    if role not in {Role.CONTRACTOR.value, Role.CASUAL.value, Role.EMPLOYEE.value, Role.SUB_MANAGER.value}:
-        raise ValueError("Invitations may only grant Contractor, Casual, Employee, or Sub-Manager access.")
+    if role not in {Role.CONTRACTOR.value, Role.CASUAL.value, Role.EMPLOYEE.value, Role.SUB_MANAGER.value, Role.MANAGER.value}:
+        raise ValueError("Invitations may only grant Contractor, Casual, Employee, Sub-Manager, or Manager access.")
     if db.scalar(select(User.id).where(User.email == email)):
         raise ValueError("An account already uses that email.")
     if role != Role.ADMIN.value and region_id is None:
@@ -242,6 +243,17 @@ def create_invitation(
     if commit:
         db.commit()
     return invite, raw
+
+
+def invitation_details(db: Session, raw_token: str) -> Invitation:
+    invite = db.scalar(select(Invitation).where(Invitation.token_hash == token_hash(raw_token)))
+    now = utcnow()
+    expires_at = invite.expires_at if invite else None
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if not invite or invite.consumed_at or invite.revoked_at or not expires_at or expires_at <= now:
+        raise ValueError(INVITATION_UNAVAILABLE)
+    return invite
 
 
 def activate_pending_grants(
@@ -486,11 +498,11 @@ def activate_invitation(db: Session, raw_token: str, display_name: str, secret: 
     if expires_at and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
     if not invite or invite.consumed_at or invite.revoked_at or expires_at <= now:
-        raise ValueError("This invitation is invalid, expired, or already used.")
+        raise ValueError(INVITATION_UNAVAILABLE)
     if error := credential_error(secret, invite.role):
         raise ValueError(error)
     if db.scalar(select(User.id).where(User.email == invite.email)):
-        raise ValueError("This invitation is invalid, expired, or already used.")
+        raise ValueError(INVITATION_UNAVAILABLE)
     user = User(
         email=invite.email,
         display_name=(display_name.strip() or invite.display_name),

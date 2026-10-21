@@ -1383,6 +1383,24 @@ def test_routine_source_and_track_saves_preserve_context_and_history(
         assert track_record.get_attribute("open") is not None
         assert page.url == catalog_url
         assert page.evaluate("history.length") == history_before
+    map_form = track_record.locator(
+        f'form[action="/manage/catalog/tracks/{values["track_id"]}/map/upload"]'
+    )
+    map_form.locator('input[name="image"]').set_input_files(
+        {
+            "name": f"browser-course-map-{width}.png",
+            "mimeType": "image/png",
+            "buffer": _browser_png_bytes(240),
+        }
+    )
+    map_form.get_by_role("button", name="Upload & use map").click()
+    track_record.get_by_text("Map uploaded and now in use.", exact=True).wait_for()
+    map_preview = track_record.locator(f'img[src^="/track-maps/{values["track_id"]}?v="]')
+    assert map_preview.is_visible()
+    assert map_preview.evaluate("element => element.complete && element.naturalWidth > 0")
+    assert track_record.get_attribute("open") is not None
+    assert page.url == catalog_url
+    assert page.evaluate("history.length") == history_before
     page.go_back()
     page.wait_for_url("**/admin/online-sources")
     context.close()
@@ -1486,7 +1504,7 @@ def test_people_onboarding_and_one_time_links_are_responsive(
         f"browser-added-{width}-{uuid.uuid4().hex[:8]}@example.com"
     )
     add_person.locator('select[name="region_id"]').select_option(values["region_id"])
-    add_person.get_by_role("button", name="Add Person").click()
+    add_person.get_by_role("button", name="Add Person", exact=True).click()
     page.wait_for_url(re.compile(r"/manage/crew/[0-9a-f-]+\?created=1#profile"))
     assert page.get_by_role("heading", name=added_name).is_visible()
     section_nav = page.get_by_role("navigation", name="Person sections")
@@ -2009,7 +2027,8 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     assert exception_crew.get_by_text(time_pattern).count() == 1
     page.goto(base_url + "/month")
     assert page.locator(".fortnight-total-marker").count() >= 1
-    assert page.locator(".fortnight-total-marker strong").first.inner_text().strip()
+    assert page.locator(".fortnight-total-marker svg").first.is_visible()
+    assert "Fortnight" in page.locator(".fortnight-total-marker").first.get_attribute("aria-label")
     assert page.locator(".shift-card.cross-region").count() == 1
     assert page.locator(".shift-card.cross-region").evaluate(
         "element => getComputedStyle(element).getPropertyValue('--track').trim() === getComputedStyle(document.documentElement).getPropertyValue('--track-01').trim()"
@@ -3013,10 +3032,11 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     assert invitation_form.locator('input[name="display_name"]').input_value() == candidate_name
     dialog.locator('input[name="credential"]').fill(values["admin"][1])
     dialog.get_by_role("button", name="Confirm").click()
-    dialog.wait_for(state="hidden")
-    assert not dialog.is_visible()
+    continue_button = dialog.get_by_role("button", name="Continue to Create invitation")
+    continue_button.wait_for()
+    assert dialog.is_visible()
     assert page.get_by_text(candidate_name, exact=True).count() == 0
-    invitation_form.get_by_role("button", name="Create invitation").click()
+    continue_button.click()
     page.wait_for_url("**/admin/invitations", wait_until="domcontentloaded")
     created_heading = page.get_by_role("heading", name="Account setup invitation created")
     created_heading.wait_for()
