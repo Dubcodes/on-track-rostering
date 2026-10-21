@@ -1398,8 +1398,19 @@ def test_routine_source_and_track_saves_preserve_context_and_history(
     if track_record.get_attribute("open") is None:
         track_record.locator(":scope > summary").click()
     map_preview = track_record.locator(f'img[src^="/track-maps/{values["track_id"]}?v="]')
+    loaded = map_preview.evaluate(
+        """element => {
+          element.loading = "eager";
+          element.scrollIntoView({block: "center"});
+          if (element.complete) return element.naturalWidth > 0;
+          return new Promise(resolve => {
+            element.addEventListener("load", () => resolve(element.naturalWidth > 0), {once: true});
+            element.addEventListener("error", () => resolve(false), {once: true});
+          });
+        }"""
+    )
     assert map_preview.is_visible()
-    assert map_preview.evaluate("element => element.complete && element.naturalWidth > 0")
+    assert loaded
     assert track_record.get_attribute("open") is not None
     assert page.url == catalog_url
     assert page.evaluate("history.length") == history_before
