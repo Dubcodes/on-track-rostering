@@ -1395,6 +1395,8 @@ def test_routine_source_and_track_saves_preserve_context_and_history(
     )
     map_form.get_by_role("button", name="Upload & use map").click()
     track_record.get_by_text("Map uploaded and now in use.", exact=True).wait_for()
+    if track_record.get_attribute("open") is None:
+        track_record.locator(":scope > summary").click()
     map_preview = track_record.locator(f'img[src^="/track-maps/{values["track_id"]}?v="]')
     assert map_preview.is_visible()
     assert map_preview.evaluate("element => element.complete && element.naturalWidth > 0")
@@ -1565,14 +1567,15 @@ def test_people_onboarding_and_one_time_links_are_responsive(
         + f"/manage/crew?region_id={values['region_id']}&q={person_name.replace(' ', '+')}"
     )
     crew_history_length = manager_page.evaluate("history.length")
-    manager_page.locator('select[name="account_type"]').select_option("NONE")
+    crew_filters = manager_page.locator('form[data-live-filters]')
+    crew_filters.locator('select[name="account_type"]').select_option("NONE")
     manager_page.wait_for_url("**account_type=NONE*", wait_until="domcontentloaded")
     assert "q=Browser" in manager_page.url
     assert manager_page.evaluate("history.length") == crew_history_length
     manager_page.get_by_role("link", name=re.compile(person_name)).click()
     manager_page.wait_for_url(f"**/manage/crew/{person_id}")
     manager_page.go_back(wait_until="domcontentloaded")
-    assert manager_page.locator('select[name="account_type"]').input_value() == "NONE"
+    assert manager_page.locator('form[data-live-filters] select[name="account_type"]').input_value() == "NONE"
     assert manager_page.get_by_text(person_name, exact=True).is_visible()
     manager_context.close()
 
