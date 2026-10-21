@@ -3753,7 +3753,9 @@ def test_contractor_management_and_personal_surface_is_responsive(
         f'.calendar-grid .shift-card[href="/day/{values["contractor_workday_id"]}"]'
     ).count() == 1
     _assert_page(page, base_url + f"/day/{values['contractor_workday_id']}")
-    assert page.get_by_text("Contractor own browser detail", exact=True).is_visible()
+    assert page.get_by_text("Browser Contractor", exact=True).is_visible()
+    assert page.get_by_text("Unrelated Browser Crew", exact=True).is_visible()
+    assert page.get_by_text("Contractor own browser detail", exact=True).count() == 0
     assert page.get_by_text("Hidden from contractor", exact=True).count() == 0
     page.goto(base_url + "/settings")
     assert page.locator('a[href="/hours"]').is_visible()

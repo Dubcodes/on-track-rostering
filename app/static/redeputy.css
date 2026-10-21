@@ -1106,6 +1106,10 @@ select option { background: var(--input-bg); color: var(--text); }
 .admin-grid .record-list { margin-bottom: 10px; }
 .admin-grid details + details, .settings-grid details + details { margin-top: 8px; }
 .admin-grid details > form, .settings-grid details > form { margin-top: 12px; }
+.settings-grid > * { min-width: 0; }
+@media (max-width: 760px) {
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+}
 .branding-name-form { margin-bottom: 14px; }
 .branding-icon-controls { display: grid; grid-template-columns: 64px minmax(150px,1fr) minmax(240px,1.25fr); gap: 12px; align-items: end; padding-top: 14px; border-top: 1px solid var(--line); }
 .branding-icon-preview { width: 64px; height: 64px; align-self: center; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); object-fit: contain; }
