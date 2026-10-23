@@ -174,6 +174,7 @@ def consume_credential_reset(db: Session, raw_token: str, secret: str) -> User:
         select(CredentialReset)
         .where(CredentialReset.id == candidate.id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     now = utcnow()
     expires_at = reset.expires_at if reset else None
@@ -463,6 +464,24 @@ def grant_role(
 
 
 def revoke_role_grant(db: Session, *, actor: Actor, grant: RoleGrant) -> None:
+    if grant.role == Role.ADMIN.value and db.get_bind().dialect.name == "postgresql":
+        # Admin revocation is a global invariant, so serialize it independently
+        # of which individual grant each transaction is changing.
+        from sqlalchemy import func
+
+        db.execute(select(func.pg_advisory_xact_lock(0x4F4E545241434B)))
+    target = db.scalar(select(User).where(User.id == grant.user_id).with_for_update())
+    if target is None:
+        raise ValueError("That account no longer exists.")
+    locked_grant = db.scalar(
+        select(RoleGrant)
+        .where(RoleGrant.id == grant.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if locked_grant is None:
+        raise ValueError("That role grant no longer exists.")
+    grant = locked_grant
     if grant.status == "REVOKED":
         raise ValueError("That role grant is already revoked.")
     if not can_grant_role(actor, grant.role, grant.region_id):
@@ -479,13 +498,11 @@ def revoke_role_grant(db: Session, *, actor: Actor, grant: RoleGrant) -> None:
                 )
                 .order_by(RoleGrant.id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         )
         if len(active_admins) <= 1:
             raise ValueError("The final active Admin grant cannot be revoked.")
-    target = db.scalar(select(User).where(User.id == grant.user_id).with_for_update())
-    if target is None:
-        raise ValueError("That account no longer exists.")
     if (
         not actor.is_admin
         and grant.region_id is not None

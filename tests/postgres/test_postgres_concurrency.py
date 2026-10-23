@@ -308,6 +308,14 @@ def test_postgres_totp_counter_is_atomic_under_concurrent_verification(pg_factor
 def test_postgres_concurrent_admin_revocation_preserves_one_active_admin(pg_factory) -> None:  # type: ignore[no-untyped-def]
     suffix = uuid.uuid4().hex[:10]
     with pg_factory() as db:
+        for existing in db.scalars(
+            select(RoleGrant).where(
+                RoleGrant.role == Role.ADMIN.value,
+                RoleGrant.status == "ACTIVE",
+            )
+        ):
+            existing.status = "REVOKED"
+            existing.revoked_at = utcnow()
         users = [
             User(
                 email=f"admin-race-{index}-{suffix}@example.com",

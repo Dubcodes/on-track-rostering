@@ -146,7 +146,7 @@ The container entrypoint runs briefly with image root authority only to create a
 
 ## 2026-10-23 — active grants are the application access boundary
 
-A User record, Person link, historical assignment, valid primary credential or passkey is not sufficient application authority. At least one active RoleGrant is required to create or resolve a protected session. Removing the final active grant preserves identity and history as a no-access account, advances the authentication epoch and revokes devices. Pending grants remain non-authorizing, while pending or active Manager/Admin grants are equally protected from lower-privilege account administration. Authority transitions serialize on the User row and invalidate outstanding recovery/challenge artifacts. The final active Admin invariant also serializes concurrent revocations over the active-Admin grant set.
+A User record, Person link, historical assignment, valid primary credential or passkey is not sufficient application authority. At least one active RoleGrant is required to create or resolve a protected session. Removing the final active grant preserves identity and history as a no-access account, advances the authentication epoch and revokes devices. Pending grants remain non-authorizing, while pending or active Manager/Admin grants are equally protected from lower-privilege account administration. Authority transitions serialize on the User row and invalidate outstanding recovery/challenge artifacts. The final active Admin invariant also uses a PostgreSQL transaction-scoped global revocation lock before freshly locking the active-Admin grant set.
 
 ## 2026-10-23 — mandatory privileged MFA uses pre-enrollment
 
