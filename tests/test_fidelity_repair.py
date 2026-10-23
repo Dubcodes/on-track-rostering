@@ -870,6 +870,22 @@ def test_portainer_uses_shared_registry_images_with_production_pinning() -> None
     assert "STAGING_ONTRACK_VAPID_PUBLIC_KEY=\n" in staging_example
     assert "STAGING_ONTRACK_VAPID_PRIVATE_KEY=\n" in staging_example
     assert "STAGING_ONTRACK_VAPID_SUBJECT=mailto:operations@example.com" in staging_example
+    assert (
+        '${ONTRACK_BIND_ADDRESS:-127.0.0.1}:${ONTRACK_HOST_PORT:-8080}:8000'
+        in production
+    )
+    for variable in (
+        "ONTRACK_COOKIE_SECURE",
+        "ONTRACK_ALLOWED_HOSTS",
+        "ONTRACK_TRUSTED_PROXY_CIDRS",
+        "ONTRACK_WEBAUTHN_RP_ID",
+        "ONTRACK_WEBAUTHN_ORIGIN",
+        "ONTRACK_MFA_REQUIRED_ADMIN",
+        "ONTRACK_MFA_REQUIRED_MANAGER",
+    ):
+        assert f"${{{variable}:?" in production
+    assert production.count("\n      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:") == 2
+    assert staging.count("\n      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:") == 2
     assert ".ontrack-build-id" in dockerfile and "sha256sum" in dockerfile
     entrypoint = open("scripts/container-entrypoint.sh", encoding="utf-8").read()
     assert 'install -d -o ontrack -g ontrack /app/data/track_maps' in entrypoint

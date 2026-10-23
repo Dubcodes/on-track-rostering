@@ -27,12 +27,20 @@ services:
       ONTRACK_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ontrack}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ontrack}
       ONTRACK_SECRET_KEY: ${ONTRACK_SECRET_KEY:?Set a 32+ character ONTRACK_SECRET_KEY in .env}
       ONTRACK_CREDENTIAL_PEPPER: ${ONTRACK_CREDENTIAL_PEPPER:?Set ONTRACK_CREDENTIAL_PEPPER in .env}
+      ONTRACK_COOKIE_SECURE: ${ONTRACK_COOKIE_SECURE:?Set ONTRACK_COOKIE_SECURE=true in .env}
+      ONTRACK_ALLOWED_HOSTS: ${ONTRACK_ALLOWED_HOSTS:?Set the exact production hostname(s)}
+      ONTRACK_TRUSTED_PROXY_CIDRS: ${ONTRACK_TRUSTED_PROXY_CIDRS:?Set only the production proxy CIDRs}
+      ONTRACK_WEBAUTHN_RP_ID: ${ONTRACK_WEBAUTHN_RP_ID:?Set the production WebAuthn RP ID}
+      ONTRACK_WEBAUTHN_ORIGIN: ${ONTRACK_WEBAUTHN_ORIGIN:?Set the exact production HTTPS origin}
+      ONTRACK_MFA_REQUIRED_ADMIN: ${ONTRACK_MFA_REQUIRED_ADMIN:?Set the production Admin MFA policy explicitly}
+      ONTRACK_MFA_REQUIRED_MANAGER: ${ONTRACK_MFA_REQUIRED_MANAGER:?Set the production Manager MFA policy explicitly}
+      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES: ${ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:-fcm.googleapis.com,updates.push.services.mozilla.com,push.services.mozilla.com,web.push.apple.com,.notify.windows.com}
       TZ: ${TZ:-Pacific/Auckland}
       ONTRACK_DATA_DIR: /app/data
     volumes:
       - ontrack_app_data:/app/data
     ports:
-      - "${ONTRACK_HOST_PORT:-8080}:8000"
+      - "${ONTRACK_BIND_ADDRESS:-127.0.0.1}:${ONTRACK_HOST_PORT:-8080}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -54,6 +62,7 @@ services:
       ONTRACK_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ontrack}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ontrack}
       ONTRACK_SECRET_KEY: ${ONTRACK_SECRET_KEY:?Set a 32+ character ONTRACK_SECRET_KEY in .env}
       ONTRACK_CREDENTIAL_PEPPER: ${ONTRACK_CREDENTIAL_PEPPER:?Set ONTRACK_CREDENTIAL_PEPPER in .env}
+      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES: ${ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:-fcm.googleapis.com,updates.push.services.mozilla.com,push.services.mozilla.com,web.push.apple.com,.notify.windows.com}
       ONTRACK_DATA_DIR: /app/data
       TZ: ${TZ:-Pacific/Auckland}
     volumes:

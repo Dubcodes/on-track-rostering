@@ -140,19 +140,20 @@ def verify_totp_factor(factor: TotpFactor, code: str, *, now: datetime | None = 
     return False
 
 
-def active_totp(db: Session, user_id: uuid.UUID) -> TotpFactor | None:
-    return db.scalar(
-        select(TotpFactor).where(
+def active_totp(
+    db: Session, user_id: uuid.UUID, *, for_update: bool = False
+) -> TotpFactor | None:
+    statement = select(TotpFactor).where(
             TotpFactor.user_id == user_id,
             TotpFactor.confirmed_at.is_not(None),
             TotpFactor.disabled_at.is_(None),
         )
-    )
+    if for_update:
+        statement = statement.with_for_update()
+    return db.scalar(statement)
 
 
-def mfa_required(db: Session, user: User) -> bool:
-    if active_totp(db, user.id):
-        return True
+def mfa_policy_requires_factor(db: Session, user: User) -> bool:
     roles = set(
         db.scalars(
             select(RoleGrant.role).where(
@@ -167,6 +168,12 @@ def mfa_required(db: Session, user: User) -> bool:
     )
 
 
+def mfa_required(db: Session, user: User) -> bool:
+    if active_totp(db, user.id):
+        return True
+    return mfa_policy_requires_factor(db, user)
+
+
 def create_challenge(
     db: Session,
     *,
@@ -175,16 +182,22 @@ def create_challenge(
     user_id: uuid.UUID | None = None,
     device_id: uuid.UUID | None = None,
 ) -> tuple[WebAuthnChallenge, bytes]:
+    now = utcnow()
+    db.execute(
+        delete(WebAuthnChallenge).where(
+            WebAuthnChallenge.expires_at <= now,
+        )
+    )
     raw = challenge or secrets.token_bytes(32)
     row = WebAuthnChallenge(
         purpose=purpose,
         challenge_hash=hashlib.sha256(raw).hexdigest(),
         user_id=user_id,
         device_id=device_id,
-        expires_at=utcnow() + timedelta(minutes=get_settings().webauthn_challenge_minutes),
+        expires_at=now + timedelta(minutes=get_settings().webauthn_challenge_minutes),
     )
     db.add(row)
-    db.commit()
+    db.flush()
     return row, raw
 
 
@@ -229,5 +242,5 @@ def consume_challenge(
     if not valid:
         raise ValueError("WebAuthn challenge is invalid, expired, or already used.")
     row.consumed_at = utcnow()
-    db.commit()
+    db.flush()
     return row

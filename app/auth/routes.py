@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
+from app.auth.access import user_has_active_access
 from app.auth.factors import (
     active_totp,
     consume_challenge,
@@ -22,11 +23,13 @@ from app.auth.network import resolve_request
 from app.auth.security import (
     CSRF_COOKIE,
     SESSION_COOKIE,
+    challenge_throttle_key,
     clear_failures,
     create_device,
-    is_safe_next,
     is_throttled,
+    mfa_throttle_keys,
     record_failure,
+    safe_return_path,
     set_auth_cookies,
     throttle_keys,
     verify_credential,
@@ -54,7 +57,10 @@ TOTP_LOGIN_COOKIE = "ontrack_totp_login"
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/month"):
-    return templates.TemplateResponse("login.html", context(request, next=next, error=""))
+    return templates.TemplateResponse(
+        "login.html", context(request, next=safe_return_path(next), error=""),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/login")
@@ -65,6 +71,7 @@ def login(
     next: str = Form("/month"),
     db: Session = Depends(get_db),
 ):
+    next = safe_return_path(next)
     email = normalise_email(email)
     keys = throttle_keys(email, resolve_request(request).client_address)
     user = db.scalar(select(User).where(User.email == email, User.status == "ACTIVE"))
@@ -88,7 +95,37 @@ def login(
     for key in keys:
         clear_failures(db, key)
     activate_pending_grants(db, user, credential)
+    if not user_has_active_access(db, user.id):
+        return templates.TemplateResponse(
+            "login.html",
+            context(request, next=next, error="This account has no active access grant."),
+            status_code=403,
+            headers={"Cache-Control": "no-store"},
+        )
     if mfa_required(db, user):
+        mfa_keys = mfa_throttle_keys(user.id, resolve_request(request).client_address)
+        if any(is_throttled(db, key) for key in mfa_keys):
+            return templates.TemplateResponse(
+                "login.html",
+                context(request, next=next, error="Too many authentication attempts. Try again later."),
+                status_code=429,
+                headers={"Cache-Control": "no-store"},
+            )
+        challenge_keys = (
+            challenge_throttle_key("TOTP_LOGIN_USER", user.id),
+            challenge_throttle_key(
+                "TOTP_LOGIN_ADDRESS", resolve_request(request).client_address
+            ),
+        )
+        if any(is_throttled(db, key) for key in challenge_keys):
+            return templates.TemplateResponse(
+                "login.html",
+                context(request, next=next, error="Too many authentication challenges. Try again later."),
+                status_code=429,
+                headers={"Cache-Control": "no-store"},
+            )
+        for key in challenge_keys:
+            record_failure(db, key)
         if not active_totp(db, user.id):
             return templates.TemplateResponse(
                 "login.html",
@@ -100,8 +137,14 @@ def login(
                 status_code=403,
             )
         challenge, raw = create_challenge(db, purpose="TOTP_LOGIN", user_id=user.id)
+        db.commit()
         encoded = __import__("base64").urlsafe_b64encode(raw).decode().rstrip("=")
-        response = RedirectResponse(f"/login/totp?challenge_id={challenge.id}&next={next}", status_code=303)
+        from urllib.parse import urlencode
+
+        response = RedirectResponse(
+            "/login/totp?" + urlencode({"challenge_id": str(challenge.id), "next": next}),
+            status_code=303,
+        )
         response.set_cookie(
             TOTP_LOGIN_COOKIE,
             encoded,
@@ -115,13 +158,14 @@ def login(
     raw_session, raw_csrf, device = create_device(
         db, user, request.headers.get("user-agent", "Browser")[:120]
     )
-    response = RedirectResponse(next if is_safe_next(next) else "/month", status_code=303)
+    response = RedirectResponse(next, status_code=303)
     set_auth_cookies(response, raw_session, raw_csrf, device)
     return response
 
 
 @router.get("/login/totp", response_class=HTMLResponse)
 def totp_login_page(request: Request, challenge_id: str, next: str = "/month"):
+    next = safe_return_path(next)
     return templates.TemplateResponse(
         "totp_login.html",
         context(request, challenge_id=challenge_id, next=next, error=""),
@@ -140,6 +184,7 @@ def totp_login(
 ):
     import base64
 
+    next = safe_return_path(next)
     encoded = request.cookies.get(TOTP_LOGIN_COOKIE, "")
     try:
         raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
@@ -147,7 +192,17 @@ def totp_login(
         raw = b""
     challenge = db.get(WebAuthnChallenge, challenge_id)
     user = db.get(User, challenge.user_id) if challenge and challenge.user_id else None
-    factor = active_totp(db, user.id) if user else None
+    mfa_keys = mfa_throttle_keys(
+        user.id if user else "unknown", resolve_request(request).client_address
+    )
+    if any(is_throttled(db, key) for key in mfa_keys):
+        return templates.TemplateResponse(
+            "totp_login.html",
+            context(request, challenge_id=challenge_id, next=next, error="Too many authentication attempts. Try again later."),
+            status_code=429,
+            headers={"Cache-Control": "no-store"},
+        )
+    factor = active_totp(db, user.id, for_update=True) if user else None
     try:
         if not user or not factor:
             raise ValueError("Unavailable login challenge.")
@@ -173,6 +228,8 @@ def totp_login(
     )
     if not accepted:
         db.commit()
+        for key in mfa_keys:
+            record_failure(db, key)
         return templates.TemplateResponse(
             "totp_login.html",
             context(request, challenge_id=challenge_id, next=next, error="Authentication code was not accepted."),
@@ -182,10 +239,17 @@ def totp_login(
     if used_recovery:
         record_audit(db, "mfa.recovery_code_used", "user", user.id, user.id)
     db.commit()
+    for key in mfa_keys:
+        clear_failures(db, key)
+    for key in (
+        challenge_throttle_key("TOTP_LOGIN_USER", user.id),
+        challenge_throttle_key("TOTP_LOGIN_ADDRESS", resolve_request(request).client_address),
+    ):
+        clear_failures(db, key)
     raw_session, raw_csrf, device = create_device(
         db, user, request.headers.get("user-agent", "Browser")[:120]
     )
-    response = RedirectResponse(next if is_safe_next(next) else "/month", status_code=303)
+    response = RedirectResponse(next, status_code=303)
     response.delete_cookie(TOTP_LOGIN_COOKIE, path="/login/totp")
     set_auth_cookies(response, raw_session, raw_csrf, device)
     return response

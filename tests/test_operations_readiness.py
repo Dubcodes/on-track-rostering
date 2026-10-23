@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
 from app.core.time import utcnow
+from app.identity.models import RoleGrant, User
 from app.operations.heartbeat import (
     record_scheduler_completed,
     record_scheduler_failed,
@@ -96,6 +97,23 @@ def test_readiness_rejects_placeholder_contact_when_web_push_is_enabled(db) -> N
         now=now,
     )
     assert _statuses(result)["Web Push contact"] == "FAIL"
+    assert not result.ready
+
+
+def test_readiness_rejects_privileged_account_without_required_mfa(db) -> None:  # type: ignore[no-untyped-def]
+    user = User(
+        email="manager-without-mfa@example.test",
+        display_name="Manager without MFA",
+        credential_hash="test-only",
+    )
+    db.add(user)
+    db.flush()
+    db.add(RoleGrant(user_id=user.id, role="MANAGER", status="PENDING"))
+    db.commit()
+
+    result = evaluate_readiness(db, settings=_production_settings())
+
+    assert _statuses(result)["Privileged MFA enrollment"] == "FAIL"
     assert not result.ready
 
 

@@ -1,5 +1,7 @@
+import base64
 import hashlib
 import io
+import json
 import re
 import struct
 import uuid
@@ -48,6 +50,7 @@ from app.identity.models import (
     CredentialReset,
     Invitation,
     LoginThrottle,
+    PasskeyCredential,
     Person,
     RecoveryCode,
     RoleGrant,
@@ -1030,6 +1033,11 @@ def routed_db(monkeypatch):  # type: ignore[no-untyped-def]
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value, region_id=None),
                 RoleGrant(user_id=submanager.id, role=Role.SUB_MANAGER.value, region_id=region.id),
+                RoleGrant(
+                    user_id=outside_user.id,
+                    role=Role.EMPLOYEE.value,
+                    region_id=other_region.id,
+                ),
                 UserPersonLink(user_id=outside_user.id, person_id=outside_person.id),
             ]
         )
@@ -1198,6 +1206,7 @@ def test_official_map_refresh_persists_serves_and_renders_on_published_day(
         workday.current_published_revision_id = revision.id
         db.commit()
         workday_id = workday.id
+        revision_id = revision.id
 
     employee = TestClient(app)
     _login(employee, "amy@example.test", "654321")
@@ -1207,6 +1216,26 @@ def test_official_map_refresh_persists_serves_and_renders_on_published_day(
     assert day.status_code == 200
     assert f'src="/track-maps/{track_id}?v=' in day.text
     assert "Pinch or use the zoom controls" in day.text
+
+    outside = TestClient(app)
+    _login(outside, "private-south@example.test", "778899")
+    assert outside.get(f"/track-maps/{track_id}").status_code == 403
+    with factory() as db:
+        outside_person = db.scalar(
+            select(Person).where(Person.email == "private-south@example.test")
+        )
+        db.add(
+            Assignment(
+                revision_id=revision_id,
+                base_position_id=position_id,
+                display_name_snapshot="Cross-region camera",
+                person_id=outside_person.id,
+                person_name_snapshot=outside_person.display_name,
+                status="ASSIGNED",
+            )
+        )
+        db.commit()
+    assert outside.get(f"/track-maps/{track_id}").status_code == 200
 
 
 def test_manual_track_map_upload_activates_and_versions_preview_in_one_post(
@@ -1323,7 +1352,49 @@ def test_employee_can_revoke_only_own_trusted_device(routed_db) -> None:  # type
         follow_redirects=False,
     )
     assert revoked.status_code == 303 and revoked.headers["location"] == "/login"
+    assert employee.cookies.get("ontrack_session") is None
+    assert employee.cookies.get("ontrack_csrf") is None
     assert employee.get("/month", follow_redirects=False).status_code == 303
+
+
+def test_logout_does_not_resurrect_deleted_authentication_cookies(routed_db) -> None:  # type: ignore[no-untyped-def]
+    client = TestClient(app)
+    csrf = _login(client, "amy@example.test", "654321")
+
+    response = client.post(
+        "/logout", data={"csrf_token": csrf}, follow_redirects=False
+    )
+
+    assert response.status_code == 303 and response.headers["location"] == "/login"
+    assert client.cookies.get("ontrack_session") is None
+    assert client.cookies.get("ontrack_csrf") is None
+    assert client.get("/month", follow_redirects=False).headers["location"].startswith("/login")
+
+
+def test_account_without_active_grant_cannot_sign_in_or_recover_person_access(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        person = Person(display_name="Former crew", home_region_id=region_id)
+        user = User(
+            email="former@example.test",
+            display_name="Former crew",
+            credential_hash=hash_credential("123456"),
+        )
+        db.add_all([person, user])
+        db.flush()
+        db.add(UserPersonLink(user_id=user.id, person_id=person.id))
+        db.commit()
+
+    client = TestClient(app)
+    response = client.post(
+        "/login",
+        data={"email": "former@example.test", "credential": "123456", "next": "/month"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert "no active access grant" in response.text
+    assert client.cookies.get("ontrack_session") is None
 
 
 def test_admin_can_create_regionless_person_but_manager_cannot(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -3975,6 +4046,133 @@ def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore
     )
     assert completed.status_code == 303
     assert manager_client.cookies.get("ontrack_session")
+
+
+def test_login_methods_apply_server_authoritative_safe_return_policy(
+    routed_db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    password_client = TestClient(app)
+    password = password_client.post(
+        "/login",
+        data={
+            "email": "amy@example.test",
+            "credential": "654321",
+            "next": "//evil.example/path",
+        },
+        follow_redirects=False,
+    )
+    assert password.status_code == 303 and password.headers["location"] == "/month"
+
+    with factory() as db:
+        employee = db.scalar(select(User).where(User.email == "amy@example.test"))
+        credential_id = b"security-return-passkey"
+        db.add(
+            PasskeyCredential(
+                user_id=employee.id,
+                credential_id=credential_id,
+                public_key=b"test-public-key",
+            )
+        )
+        db.commit()
+
+    passkey_client = TestClient(app)
+    options_response = passkey_client.post("/login/passkey/options")
+    options = options_response.json()
+    challenge_id = options.pop("challenge_id")
+    challenge = options["challenge"]
+    malformed = passkey_client.post(
+        "/login/passkey/verify",
+        json={
+            "challenge_id": challenge_id,
+            "credential": {"id": "%%%", "rawId": "%%%", "type": "public-key"},
+        },
+    )
+    assert malformed.status_code == 400
+    client_data = base64.urlsafe_b64encode(
+        json.dumps({"challenge": challenge}).encode()
+    ).decode().rstrip("=")
+    credential_id_text = base64.urlsafe_b64encode(credential_id).decode().rstrip("=")
+    monkeypatch.setattr(
+        "app.auth.factor_routes.verify_authentication_response",
+        lambda **_kwargs: SimpleNamespace(new_sign_count=1),
+    )
+    verified = passkey_client.post(
+        "/login/passkey/verify",
+        json={
+            "challenge_id": challenge_id,
+            "next": "/%5cevil.example",
+            "credential": {
+                "id": credential_id_text,
+                "rawId": credential_id_text,
+                "type": "public-key",
+                "response": {"clientDataJSON": client_data},
+            },
+        },
+    )
+    assert verified.status_code == 200
+    assert verified.json()["next"] == "/month"
+
+
+def test_passkey_challenge_creation_and_totp_guessing_are_throttled(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    challenge_client = TestClient(app)
+    for _ in range(5):
+        assert challenge_client.post("/login/passkey/options").status_code == 200
+    assert challenge_client.post("/login/passkey/options").status_code == 429
+
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        factor, _secret, _svg = begin_totp(db, manager)
+        factor.confirmed_at = utcnow()
+        db.commit()
+
+    totp_client = TestClient(app)
+    for _ in range(5):
+        primary = totp_client.post(
+            "/login",
+            data={"email": "manager@example.test", "credential": "123456"},
+            follow_redirects=False,
+        )
+        query = parse_qs(urlsplit(primary.headers["location"]).query)
+        rejected = totp_client.post(
+            "/login/totp",
+            data={"challenge_id": query["challenge_id"][0], "code": "invalid"},
+        )
+        assert rejected.status_code == 400
+    blocked = totp_client.post(
+        "/login",
+        data={"email": "manager@example.test", "credential": "123456"},
+        follow_redirects=False,
+    )
+    assert blocked.status_code == 429
+
+
+def test_enforced_manager_mfa_cannot_remove_its_required_factor(
+    routed_db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    factory, _ = routed_db
+    client = TestClient(app)
+    csrf = _login(client, "manager@example.test", "123456")
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        factor, _secret, _svg = begin_totp(db, manager)
+        factor.confirmed_at = utcnow()
+        db.commit()
+
+    from app.auth import factors as factor_module
+
+    enforced = factor_module.get_settings().model_copy(update={"mfa_required_manager": True})
+    monkeypatch.setattr(factor_module, "get_settings", lambda: enforced)
+    response = client.post(
+        "/settings/totp/disable",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert response.status_code == 409
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        assert db.get(TotpFactor, manager.id).disabled_at is None
 
 
 def test_totp_confirmation_shows_recovery_codes_once_and_lifecycle_is_fresh_auth(

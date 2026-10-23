@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from urllib.parse import quote
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -8,7 +9,7 @@ from starlette.responses import RedirectResponse, Response
 
 from app.auth.network import resolve_request, same_origin
 from app.auth.policy import actor_for
-from app.auth.security import CSRF_COOKIE, SESSION_COOKIE, resolve_device
+from app.auth.security import SESSION_COOKIE, resolve_device
 from app.branding.service import DEFAULT_BRANDING, branding_for
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -63,37 +64,15 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     request.state.actor = actor_for(db, user)
         public = path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES)
         if not public and request.state.user is None:
-            return RedirectResponse(f"/login?next={path}", status_code=303)
+            return RedirectResponse(f"/login?next={quote(path, safe='/')}", status_code=303)
         response = await call_next(request)
-        if resolved:
-            _, device = resolved
-            days = (
-                get_settings().trusted_device_days_elevated
-                if device.elevated
-                else get_settings().trusted_device_days_standard
-            )
-            response.set_cookie(
-                SESSION_COOKIE,
-                request.cookies.get(SESSION_COOKIE, ""),
-                max_age=days * 86400,
-                httponly=True,
-                secure=get_settings().cookie_secure,
-                samesite="lax",
-                path="/",
-            )
-            if request.cookies.get(CSRF_COOKIE):
-                response.set_cookie(
-                    CSRF_COOKIE,
-                    request.cookies[CSRF_COOKIE],
-                    max_age=days * 86400,
-                    httponly=False,
-                    secure=get_settings().cookie_secure,
-                    samesite="strict",
-                    path="/",
-                )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if get_settings().cookie_secure:
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
         response.headers.setdefault(
             "Content-Security-Policy",
             f"default-src 'self'; img-src 'self' data:; style-src 'self' 'nonce-{request.state.csp_nonce}'; script-src 'self'; "

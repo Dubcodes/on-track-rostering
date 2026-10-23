@@ -20,7 +20,12 @@ from app.auth.security import (
     require_fresh_auth,
     verify_csrf,
 )
-from app.auth.service import create_credential_reset, create_invitation, validated_email
+from app.auth.service import (
+    create_credential_reset,
+    create_invitation,
+    revoke_outstanding_auth_artifacts,
+    validated_email,
+)
 from app.branding.service import (
     MAX_FAVICON_BYTES,
     favicon_asset,
@@ -348,6 +353,17 @@ def create_user(
         errors["region_id"] = "Choose a Region for this role."
     if role == Role.ADMIN.value and scoped_region is not None:
         errors["region_id"] = "Admin is global and cannot carry a Region."
+    settings = get_settings()
+    if (
+        role == Role.ADMIN.value
+        and settings.mfa_required_admin
+        or role == Role.MANAGER.value
+        and settings.mfa_required_manager
+    ):
+        errors["role"] = (
+            "Mandatory MFA is enabled for this role. Create ordinary access first, enroll an "
+            "authenticator, then grant the privileged role."
+        )
     if scoped_region:
         region = db.get(Region, scoped_region)
         if not region or region.lifecycle != Lifecycle.ACTIVE.value:
@@ -518,7 +534,7 @@ def update_user_status(
         raise HTTPException(400, "You cannot disable your own active Admin session.")
     if account_status not in {"ACTIVE", "DISABLED"}:
         raise HTTPException(400, "Invalid account status.")
-    user = db.get(User, user_id)
+    user = db.scalar(select(User).where(User.id == user_id).with_for_update())
     if not user:
         raise HTTPException(404)
     if account_status == "DISABLED":
@@ -545,6 +561,7 @@ def update_user_status(
     user.status = account_status
     user.auth_epoch += 1
     now = utcnow()
+    revoke_outstanding_auth_artifacts(db, user.id, now)
     if account_status == "ACTIVE":
         from app.identity.contractor_access import is_contractor_user, refresh_contractor_access
 
@@ -593,8 +610,10 @@ def issue_credential_reset(
         _reset, raw = create_credential_reset(
             db,
             user=user,
-            actor_user_id=request.state.user.id,
+            actor=request.state.actor,
         )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return templates.TemplateResponse(

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import AuditEvent, HumanChange
 from app.catalog.models import BasePosition, CrewGroup, Region, Track, TrackMap, Vehicle
+from app.core.csv_safe import spreadsheet_safe_cell
 from app.external_calendar.models import (
     ExternalCalendarEvent,
     ExternalEventObservation,
@@ -28,12 +29,17 @@ from app.rostering.models import (
 )
 
 
-def _csv_bytes(rows: Iterable[object], fields: tuple[str, ...]) -> bytes:
+def _csv_bytes(
+    rows: Iterable[object], fields: tuple[str, ...], *, spreadsheet_safe: bool = True
+) -> bytes:
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerow(fields)
     for row in rows:
-        writer.writerow([getattr(row, field) if getattr(row, field) is not None else "" for field in fields])
+        values = [getattr(row, field) if getattr(row, field) is not None else "" for field in fields]
+        writer.writerow(
+            [spreadsheet_safe_cell(value) for value in values] if spreadsheet_safe else values
+        )
     return stream.getvalue().encode("utf-8-sig")
 
 
@@ -259,9 +265,15 @@ def safe_data_export(db: Session) -> bytes:
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             "README.txt",
-            "On Track business-data export. Credential hashes, tokens, MFA secrets, cookies, push endpoints and raw provider payloads are intentionally excluded.\n",
+            "On Track business-data export. Credential hashes, tokens, MFA secrets, cookies, push endpoints and raw provider payloads are intentionally excluded.\n"
+            "The top-level CSV files are spreadsheet-safe presentation copies. Exact machine-readable values are preserved under machine-readable/.\n",
         )
         for filename, model, fields in exports:
             statement = select(model).order_by(*model.__mapper__.primary_key)
-            archive.writestr(filename, _csv_bytes(db.scalars(statement), fields))
+            rows = list(db.scalars(statement))
+            archive.writestr(filename, _csv_bytes(rows, fields))
+            archive.writestr(
+                f"machine-readable/{filename}",
+                _csv_bytes(rows, fields, spreadsheet_safe=False),
+            )
     return output.getvalue()

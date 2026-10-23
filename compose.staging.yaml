@@ -33,6 +33,7 @@ services:
       ONTRACK_VAPID_PUBLIC_KEY: ${STAGING_ONTRACK_VAPID_PUBLIC_KEY:-}
       ONTRACK_VAPID_PRIVATE_KEY: ${STAGING_ONTRACK_VAPID_PRIVATE_KEY:-}
       ONTRACK_VAPID_SUBJECT: ${STAGING_ONTRACK_VAPID_SUBJECT:-mailto:operations@example.invalid}
+      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES: ${STAGING_ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:-fcm.googleapis.com,updates.push.services.mozilla.com,push.services.mozilla.com,web.push.apple.com,.notify.windows.com}
       ONTRACK_DATA_DIR: /app/data
       TZ: ${TZ:-Pacific/Auckland}
     volumes:
@@ -61,6 +62,7 @@ services:
       ONTRACK_VAPID_PUBLIC_KEY: ${STAGING_ONTRACK_VAPID_PUBLIC_KEY:-}
       ONTRACK_VAPID_PRIVATE_KEY: ${STAGING_ONTRACK_VAPID_PRIVATE_KEY:-}
       ONTRACK_VAPID_SUBJECT: ${STAGING_ONTRACK_VAPID_SUBJECT:-mailto:operations@example.invalid}
+      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES: ${STAGING_ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:-fcm.googleapis.com,updates.push.services.mozilla.com,push.services.mozilla.com,web.push.apple.com,.notify.windows.com}
       ONTRACK_DATA_DIR: /app/data
       TZ: ${TZ:-Pacific/Auckland}
     volumes:

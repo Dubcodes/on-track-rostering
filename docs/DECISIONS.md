@@ -143,3 +143,19 @@ Normalized Person work email integrity is a shared service rule: active-Person u
 ## Persistent Track-map ownership
 
 The container entrypoint runs briefly with image root authority only to create and repair ownership of `/app/data/track_maps`, including retained named-volume files, then permanently execs the app or scheduler as `ontrack`. It does not recursively weaken unrelated paths. Successful automatic map checks are due after 90 days and failed attempts after one day; refresh failures retain the last valid local cache, while manual overrides remain authoritative until explicit reversion.
+
+## 2026-10-23 — active grants are the application access boundary
+
+A User record, Person link, historical assignment, valid primary credential or passkey is not sufficient application authority. At least one active RoleGrant is required to create or resolve a protected session. Removing the final active grant preserves identity and history as a no-access account, advances the authentication epoch and revokes devices. Pending grants remain non-authorizing, while pending or active Manager/Admin grants are equally protected from lower-privilege account administration. Authority transitions serialize on the User row and invalidate outstanding recovery/challenge artifacts. The final active Admin invariant also serializes concurrent revocations over the active-Admin grant set.
+
+## 2026-10-23 — mandatory privileged MFA uses pre-enrollment
+
+Mandatory Admin/Manager MFA does not create a temporary privileged enrollment session. A linked account first receives ordinary access, enrolls confirmed TOTP under fresh authentication, then receives a pending privileged grant that activates on its next primary-credential login. Direct privileged creation and Manager invitation fail closed while their applicable mandatory-MFA policy is enabled. Production readiness rejects covered active or pending grants without confirmed TOTP. A dedicated bootstrap design may replace this later only after explicit review; bypassing the factor requirement is not an acceptable convenience.
+
+## 2026-10-23 — sessions have route-owned cookies and absolute caps
+
+Authentication middleware validates a presented device but never renews authentication cookies after route execution. Login and deliberate rotation own cookie issuance; logout, credential replacement and device revocation own deletion. Server activity expiry may advance only inside configurable absolute 180-day standard and 30-day elevated defaults, while the originally issued browser cookie is not extended on every response. This conservative design prevents deleted or replaced cookies from being resurrected.
+
+## 2026-10-23 — Web Push is an allowlisted outbound boundary
+
+User-supplied Web Push subscriptions are accepted only for the configured legitimate browser-push provider hosts, HTTPS on the default port, and DNS results that are all public. The same validation runs immediately before delivery. Redirects are disabled, response bodies and subscription material are bounded, and delivery uses a finite timeout. Application validation is complemented—not replaced—by deployment egress rules that deny internal, loopback, link-local and metadata destinations.

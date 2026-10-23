@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlsplit
 
-from sqlalchemy import text
+from sqlalchemy import exists, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.enums import Role
+from app.identity.models import RoleGrant, TotpFactor, User
 from app.operations.heartbeat import scheduler_health
 
 
@@ -152,6 +154,46 @@ def evaluate_readiness(
         checks.append(ReadinessCheck("Database", "FAIL", "The database check failed."))
     else:
         checks.append(ReadinessCheck("Database", "PASS", "The database is reachable."))
+
+    enforced_roles = []
+    if config.mfa_required_admin:
+        enforced_roles.append(Role.ADMIN.value)
+    if config.mfa_required_manager:
+        enforced_roles.append(Role.MANAGER.value)
+    missing_mfa = None
+    if database_ok and enforced_roles:
+        missing_mfa = db.scalar(
+            select(RoleGrant.id)
+            .join(User, User.id == RoleGrant.user_id)
+            .where(
+                RoleGrant.role.in_(enforced_roles),
+                RoleGrant.status.in_(["ACTIVE", "PENDING"]),
+                User.status == "ACTIVE",
+                ~exists(
+                    select(TotpFactor.user_id).where(
+                        TotpFactor.user_id == RoleGrant.user_id,
+                        TotpFactor.confirmed_at.is_not(None),
+                        TotpFactor.disabled_at.is_(None),
+                    )
+                ),
+            )
+            .limit(1)
+        )
+    checks.append(
+        ReadinessCheck(
+            "Privileged MFA enrollment",
+            "FAIL" if not database_ok or missing_mfa else "PASS",
+            (
+                "Every active or pending account covered by mandatory MFA has an authenticator."
+                if database_ok and not missing_mfa
+                else (
+                    "Privileged MFA enrollment could not be checked because the database is unavailable."
+                    if not database_ok
+                    else "Enroll an authenticator before enabling or activating the privileged grant."
+                )
+            ),
+        )
+    )
 
     health = (
         scheduler_health(db, interval_seconds=config.scheduler_interval_seconds, now=now)

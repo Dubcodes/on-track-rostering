@@ -43,7 +43,15 @@ def test_pending_grant_never_authorizes_and_activates_on_primary_login(db) -> No
         region_id=region.id,
         status="PENDING",
     )
-    db.add(grant)
+    db.add_all([
+        grant,
+        RoleGrant(
+            user_id=user.id,
+            role=Role.EMPLOYEE.value,
+            region_id=region.id,
+            status="ACTIVE",
+        ),
+    ])
     db.commit()
 
     assert Role.SUB_MANAGER.value not in actor_for(db, user).roles_for(region.id)

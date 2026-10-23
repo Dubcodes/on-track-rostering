@@ -263,8 +263,16 @@ def test_settings_accept_csv_tuple_environment_values(
 
 
 def test_admin_activation_requires_admin_grade_primary_credential_and_invalidates_old_session(db) -> None:  # type: ignore[no-untyped-def]
+    region = Region(name="Admin activation")
     weak = _user(db, "weak@example.test")
-    db.add(RoleGrant(user_id=weak.id, role=Role.ADMIN.value, status="PENDING"))
+    db.add(region)
+    db.flush()
+    db.add_all(
+        [
+            RoleGrant(user_id=weak.id, role=Role.ADMIN.value, status="PENDING"),
+            RoleGrant(user_id=weak.id, role=Role.EMPLOYEE.value, region_id=region.id),
+        ]
+    )
     db.commit()
     raw_session, _, old_device = create_device(db, weak)
     assert activate_pending_grants(db, weak, strong_auth=True) == 0

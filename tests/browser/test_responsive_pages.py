@@ -1599,6 +1599,35 @@ def _login(page: Page, base_url: str, credentials: tuple[str, str]) -> None:
     page.wait_for_url("**/month")
 
 
+def test_logout_and_current_device_revocation_leave_browser_signed_out(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 430, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["employee"])
+    page.goto(base_url + "/settings")
+    page.locator('form[action="/logout"]').first.get_by_role("button", name="Sign out").click()
+    page.wait_for_url("**/login")
+    assert not {
+        cookie["name"]
+        for cookie in context.cookies()
+    } & {"ontrack_session", "ontrack_csrf"}
+    page.goto(base_url + "/month")
+    page.wait_for_url("**/login?next=/month")
+
+    _login(page, base_url, values["employee"])
+    page.goto(base_url + "/settings")
+    current_device = page.locator("#devices article", has_text="This device")
+    current_device.get_by_role("button", name="Revoke").click()
+    page.wait_for_url("**/login")
+    assert not {
+        cookie["name"]
+        for cookie in context.cookies()
+    } & {"ontrack_session", "ontrack_csrf"}
+    page.goto(base_url + "/month")
+    page.wait_for_url("**/login?next=/month")
+    context.close()
+
+
 def _browser_png_bytes(size: int = 64) -> bytes:
     def chunk(name: bytes, content: bytes) -> bytes:
         checksum = zlib.crc32(name + content) & 0xFFFFFFFF

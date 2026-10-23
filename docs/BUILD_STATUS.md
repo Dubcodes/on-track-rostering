@@ -1,4 +1,4 @@
-# Build status — 2026-10-21
+# Build status — 2026-10-23
 
 ## Application-behavior qualification baseline and deployment boundary
 
@@ -17,6 +17,8 @@ CI qualification is neither a staging deployment nor a production deployment. No
 Local development and qualification remain Docker-free. PostgreSQL integration, Playwright, Compose validation, and production image construction are authoritative only when executed by the exact-head GitHub release gate unless a native or explicitly configured remote development PostgreSQL instance and local browser environment are available.
 
 ## Implemented
+
+- The internet-facing security hardening candidate makes active grants the session boundary; protects pending/active Manager and Admin accounts; invalidates stale recovery artifacts on authority/lifecycle transitions; serializes TOTP, reset, pending-activation and final-Admin races; gives sessions absolute caps and route-owned cookies; centralizes safe login returns; throttles factor/challenge attempts; enforces privileged MFA pre-enrollment/readiness; constrains Web Push outbound destinations/redirects/responses; separates spreadsheet-safe and exact CSV; and authorizes Track maps through Region Crew View or current published assignment. Exact-head PostgreSQL/Playwright/dependency/image qualification is pending until the candidate is pushed and its release gate completes.
 
 - The operational UX refinement adds one-POST, content-versioned Track-map activation with a neutral map canvas and explicit enlarged zoom controls; atomic Person-plus-setup-link onboarding; authoritative setup-panel refresh after continuous Person save; policy-bounded Person-level regional grants; deliberate fresh-auth continuation; authoritative invitation metadata, credential confirmation and ordinary post-activation session establishment; reduced assigned-Contractor coworker visibility with HTML/API parity; single-Region Crew simplification; Day information hierarchy, icon-only fortnight markers, clearer offer-preference semantics, and self-owned device revocation.
 

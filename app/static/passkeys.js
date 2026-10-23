@@ -88,10 +88,15 @@
       const verified = await fetch("/login/passkey/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ challenge_id: challengeId, credential: authenticationJSON(credential) })
+        body: JSON.stringify({
+          challenge_id: challengeId,
+          credential: authenticationJSON(credential),
+          next: login.dataset.next || "/month"
+        })
       });
       if (!verified.ok) throw new Error();
-      location.href = login.dataset.next || "/month";
+      const result = await verified.json();
+      location.href = result.next || "/month";
     } catch (_) {
       if (status) status.textContent = "Passkey sign-in was cancelled or could not be verified.";
     }

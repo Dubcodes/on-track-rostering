@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
+import socket
 import uuid
 from calendar import monthrange
 from collections.abc import Callable
@@ -11,10 +13,13 @@ from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 from pywebpush import WebPushException, webpush
+from requests import Response as RequestsResponse
+from requests import Session as RequestsSession
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
+from app.auth.access import user_has_active_access
 from app.branding.service import branding_for
 from app.catalog.models import BasePosition, Region
 from app.core.config import get_settings
@@ -34,6 +39,21 @@ from app.rostering.participation import active_published_assignments, person_day
 
 REMINDER_TYPES = {"ONE_HOUR_BEFORE", "NIGHT_BEFORE", "TWO_DAYS_BEFORE"}
 REMINDER_GRACE = timedelta(minutes=15)
+MAX_PUSH_RESPONSE_BYTES = 64 * 1024
+
+
+class _BoundedPushSession(RequestsSession):
+    def post(self, url, data=None, json=None, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs["allow_redirects"] = False
+        kwargs["stream"] = True
+        response: RequestsResponse = super().post(url, data=data, json=json, **kwargs)
+        content = response.raw.read(MAX_PUSH_RESPONSE_BYTES + 1, decode_content=True)
+        response.close()
+        if len(content) > MAX_PUSH_RESPONSE_BYTES:
+            raise RuntimeError("Push provider response exceeded the configured safety limit")
+        response._content = content
+        response._content_consumed = True
+        return response
 
 
 def record_event(
@@ -88,16 +108,27 @@ def decrypt_subscription(value: dict[str, object]) -> dict[str, object]:
 
 
 def save_subscription(
-    db: Session, *, user_id: uuid.UUID, value: dict[str, object], label: str
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    value: dict[str, object],
+    label: str,
+    resolver: Callable[..., list[tuple[object, ...]]] = socket.getaddrinfo,
 ) -> PushSubscription:
     endpoint = value.get("endpoint")
     keys = value.get("keys")
     if (
         not isinstance(endpoint, str)
-        or urlsplit(endpoint).scheme != "https"
         or not isinstance(keys, dict)
         or not isinstance(keys.get("p256dh"), str)
         or not isinstance(keys.get("auth"), str)
+    ):
+        raise ValueError("Malformed push subscription.")
+    validate_push_endpoint(endpoint, resolver=resolver)
+    if (
+        len(str(keys["p256dh"])) > 1024
+        or len(str(keys["auth"])) > 1024
+        or len(json.dumps(value, separators=(",", ":"))) > 8192
     ):
         raise ValueError("Malformed push subscription.")
     endpoint_hash = hashlib.sha256(endpoint.encode()).hexdigest()
@@ -112,6 +143,43 @@ def save_subscription(
     row.active = True
     db.commit()
     return row
+
+
+def validate_push_endpoint(
+    endpoint: str,
+    *,
+    resolver: Callable[..., list[tuple[object, ...]]] = socket.getaddrinfo,
+) -> None:
+    if len(endpoint) > 2048 or any(ord(char) < 32 or ord(char) == 127 for char in endpoint):
+        raise ValueError("Push endpoint is not permitted.")
+    try:
+        parsed = urlsplit(endpoint)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Push endpoint is not permitted.") from exc
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or port not in (None, 443)
+    ):
+        raise ValueError("Push endpoint is not permitted.")
+    allowed = tuple(item.rstrip(".").lower() for item in get_settings().push_allowed_host_suffixes)
+    if not any(
+        (hostname == suffix if not suffix.startswith(".") else hostname.endswith(suffix))
+        for suffix in allowed
+    ):
+        raise ValueError("Push endpoint provider is not permitted.")
+    try:
+        addresses = resolver(hostname, port or 443, type=socket.SOCK_STREAM)
+        ips = {ipaddress.ip_address(str(item[4][0])) for item in addresses}
+    except (OSError, ValueError, IndexError, TypeError) as exc:
+        raise ValueError("Push endpoint provider could not be resolved safely.") from exc
+    if not ips or any(not address.is_global for address in ips):
+        raise ValueError("Push endpoint provider resolved to a non-public address.")
 
 
 def _preference_allows(db: Session, user_id: uuid.UUID, event_type: str) -> bool:
@@ -157,7 +225,10 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
         user = db.get(User, event.audience_user_id)
         return (
             {user.id}
-            if user and user.status == "ACTIVE" and _preference_allows(db, user.id, event.event_type)
+            if user
+            and user.status == "ACTIVE"
+            and user_has_active_access(db, user.id)
+            and _preference_allows(db, user.id, event.event_type)
             else set()
         )
     if event.event_type == "ROSTER_PUBLISHED":
@@ -186,7 +257,7 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
                 .join(User, User.id == UserPersonLink.user_id)
                 .where(UserPersonLink.person_id.in_(person_ids), User.status == "ACTIVE")
             )
-            if _roster_change_allows(db, user_id, event)
+            if user_has_active_access(db, user_id) and _roster_change_allows(db, user_id, event)
         }
     if event.event_type == "MANAGER_ACTION_REQUIRED" and event.region_id:
         return {
@@ -216,7 +287,12 @@ def audience_user_ids(db: Session, event: NotificationEvent) -> set[uuid.UUID]:
             candidate_ids = relevant_notice_user_ids(db, event.region_id)
         else:
             candidate_ids = db.scalars(select(User.id).where(User.status == "ACTIVE"))
-        return {user_id for user_id in candidate_ids if _preference_allows(db, user_id, event.event_type)}
+        return {
+            user_id
+            for user_id in candidate_ids
+            if user_has_active_access(db, user_id)
+            and _preference_allows(db, user_id, event.event_type)
+        }
     if event.event_type == "OPEN_POSITION_AVAILABLE" and event.region_id:
         try:
             position_id = uuid.UUID(str(event.payload["base_position_id"]))
@@ -357,6 +433,7 @@ def _reminder_is_current(db: Session, event: NotificationEvent, now: datetime) -
         or workday.current_published_revision_id != revision_id
         or not user
         or user.status != "ACTIVE"
+        or not user_has_active_access(db, user.id)
         or not link
     ):
         return False
@@ -426,12 +503,17 @@ def _send_webpush(subscription: dict[str, object], payload: str) -> None:
     settings = get_settings()
     if not settings.vapid_private_key:
         raise RuntimeError("VAPID private key is not configured")
+    endpoint = subscription.get("endpoint")
+    if not isinstance(endpoint, str):
+        raise ValueError("Push subscription is malformed.")
+    validate_push_endpoint(endpoint)
     webpush(
         subscription_info=subscription,
         data=payload,
         vapid_private_key=settings.vapid_private_key,
         vapid_claims={"sub": settings.vapid_subject},
         timeout=10,
+        requests_session=_BoundedPushSession(),
     )
 
 
@@ -664,6 +746,11 @@ def generate_reminders(db: Session, *, now: datetime | None = None, horizon_days
         if person_ids
         else {}
     )
+    users_by_person = {
+        person_id: user_id
+        for person_id, user_id in users_by_person.items()
+        if user_has_active_access(db, user_id)
+    }
     created = 0
     for key, assignments in grouped.items():
         workday, revision = revisions[key]
@@ -771,6 +858,8 @@ def generate_periodic_digests(db: Session, *, now: datetime | None = None) -> in
                 RoleGrant.status == "ACTIVE",
             )
         ).all()
+        if not grants:
+            continue
         authorised_regions = (
             set(db.scalars(select(Region.id)))
             if any(role == Role.ADMIN.value for role, _region_id in grants)

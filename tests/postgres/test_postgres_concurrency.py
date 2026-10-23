@@ -4,8 +4,9 @@ import os
 import threading
 import uuid
 import warnings
-from datetime import date, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
+import pyotp
 import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
@@ -15,7 +16,13 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
     from fastapi.testclient import TestClient
 
-from app.auth.factors import consume_recovery_code, generate_recovery_codes
+from app.auth.factors import (
+    active_totp,
+    begin_totp,
+    consume_recovery_code,
+    generate_recovery_codes,
+    verify_totp_factor,
+)
 from app.auth.policy import Actor
 from app.auth.security import hash_credential
 from app.auth.service import (
@@ -23,6 +30,8 @@ from app.auth.service import (
     activate_pending_grants,
     consume_credential_reset,
     create_credential_reset,
+    grant_role,
+    revoke_role_grant,
 )
 from app.catalog.models import BasePosition, Region, Track
 from app.catalog.service import allocate_palette_slot
@@ -99,7 +108,16 @@ def test_postgres_credential_reset_token_has_exactly_one_consumer(pg_factory) ->
         )
         db.add_all([issuer, target])
         db.commit()
-        reset, raw = create_credential_reset(db, user=target, actor_user_id=issuer.id)
+        reset, raw = create_credential_reset(
+            db,
+            user=target,
+            actor=Actor(
+                user_id=issuer.id,
+                person_id=None,
+                global_roles=frozenset({Role.ADMIN.value}),
+                regional_roles={},
+            ),
+        )
         reset_id = reset.id
 
     barrier = threading.Barrier(2)
@@ -129,6 +147,219 @@ def test_postgres_credential_reset_token_has_exactly_one_consumer(pg_factory) ->
     assert failures == [CREDENTIAL_RESET_UNAVAILABLE]
     with pg_factory() as db:
         assert db.get(CredentialReset, reset_id).consumed_at is not None
+
+
+def test_postgres_privilege_grant_and_regional_reset_linearize_safely(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    with pg_factory() as db:
+        region = Region(name=f"Reset race {suffix}")
+        admin = User(
+            email=f"reset-race-admin-{suffix}@example.com",
+            display_name="Reset race Admin",
+            credential_hash=hash_credential("12345678"),
+        )
+        manager = User(
+            email=f"reset-race-manager-{suffix}@example.com",
+            display_name="Reset race Manager",
+            credential_hash=hash_credential("123456"),
+        )
+        target = User(
+            email=f"reset-race-target-{suffix}@example.com",
+            display_name="Reset race Target",
+            credential_hash=hash_credential("123456"),
+        )
+        db.add_all([region, admin, manager, target])
+        db.flush()
+        person = Person(display_name="Reset race Person", home_region_id=region.id)
+        db.add(person)
+        db.flush()
+        db.add_all(
+            [
+                RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
+                RoleGrant(
+                    user_id=manager.id,
+                    role=Role.MANAGER.value,
+                    region_id=region.id,
+                ),
+                RoleGrant(
+                    user_id=target.id,
+                    role=Role.EMPLOYEE.value,
+                    region_id=region.id,
+                ),
+                UserPersonLink(user_id=target.id, person_id=person.id),
+            ]
+        )
+        db.commit()
+        admin_id, manager_id, target_id, region_id = (
+            admin.id,
+            manager.id,
+            target.id,
+            region.id,
+        )
+
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def elevate() -> None:
+        with pg_factory() as db:
+            target = db.get(User, target_id)
+            assert target is not None
+            barrier.wait(timeout=10)
+            grant_role(
+                db,
+                actor=Actor(
+                    user_id=admin_id,
+                    person_id=None,
+                    global_roles=frozenset({Role.ADMIN.value}),
+                    regional_roles={},
+                ),
+                target_user=target,
+                role=Role.MANAGER.value,
+                region_id=region_id,
+            )
+            outcomes.append("granted")
+
+    def reset() -> None:
+        with pg_factory() as db:
+            target = db.get(User, target_id)
+            assert target is not None
+            barrier.wait(timeout=10)
+            try:
+                create_credential_reset(
+                    db,
+                    user=target,
+                    actor=Actor(
+                        user_id=manager_id,
+                        person_id=None,
+                        global_roles=frozenset(),
+                        regional_roles={region_id: frozenset({Role.MANAGER.value})},
+                    ),
+                    region_id=region_id,
+                    allow_operational_assist=True,
+                )
+                outcomes.append("reset-created")
+            except PermissionError:
+                db.rollback()
+                outcomes.append("reset-denied")
+
+    threads = [threading.Thread(target=elevate), threading.Thread(target=reset)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert "granted" in outcomes
+    assert set(outcomes) in ({"granted", "reset-created"}, {"granted", "reset-denied"})
+    with pg_factory() as db:
+        assert db.scalar(
+            select(RoleGrant.id).where(
+                RoleGrant.user_id == target_id,
+                RoleGrant.role == Role.MANAGER.value,
+                RoleGrant.status == "PENDING",
+            )
+        )
+        assert not db.scalar(
+            select(CredentialReset.id).where(
+                CredentialReset.user_id == target_id,
+                CredentialReset.consumed_at.is_(None),
+                CredentialReset.revoked_at.is_(None),
+            )
+        )
+
+
+def test_postgres_totp_counter_is_atomic_under_concurrent_verification(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    instant = datetime(2026, 10, 23, 8, 30, tzinfo=UTC)
+    with pg_factory() as db:
+        user = User(
+            email=f"totp-race-{suffix}@example.com",
+            display_name="TOTP race",
+            credential_hash=hash_credential("123456"),
+        )
+        db.add(user)
+        db.commit()
+        factor, secret, _svg = begin_totp(db, user)
+        factor.confirmed_at = utcnow()
+        db.commit()
+        user_id = user.id
+        code = pyotp.TOTP(secret).at(instant)
+
+    barrier = threading.Barrier(2)
+    results: list[bool] = []
+
+    def attempt() -> None:
+        with pg_factory() as db:
+            barrier.wait(timeout=10)
+            factor = active_totp(db, user_id, for_update=True)
+            assert factor is not None
+            results.append(verify_totp_factor(factor, code, now=instant))
+            db.commit()
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert sorted(results) == [False, True]
+
+
+def test_postgres_concurrent_admin_revocation_preserves_one_active_admin(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    with pg_factory() as db:
+        users = [
+            User(
+                email=f"admin-race-{index}-{suffix}@example.com",
+                display_name=f"Admin race {index}",
+                credential_hash=hash_credential("12345678"),
+            )
+            for index in range(2)
+        ]
+        db.add_all(users)
+        db.flush()
+        grants = [RoleGrant(user_id=user.id, role=Role.ADMIN.value) for user in users]
+        db.add_all(grants)
+        db.commit()
+        grant_ids = [grant.id for grant in grants]
+        user_ids = [user.id for user in users]
+
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def revoke(index: int) -> None:
+        with pg_factory() as db:
+            actor = Actor(
+                user_id=user_ids[index],
+                person_id=None,
+                global_roles=frozenset({Role.ADMIN.value}),
+                regional_roles={},
+            )
+            grant = db.get(RoleGrant, grant_ids[index])
+            assert grant is not None
+            barrier.wait(timeout=10)
+            try:
+                revoke_role_grant(db, actor=actor, grant=grant)
+                outcomes.append("revoked")
+            except ValueError as exc:
+                db.rollback()
+                assert "final active Admin" in str(exc)
+                outcomes.append("preserved")
+
+    threads = [threading.Thread(target=revoke, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["preserved", "revoked"]
+    with pg_factory() as db:
+        assert db.scalar(
+            select(func.count())
+            .select_from(RoleGrant)
+            .where(RoleGrant.role == Role.ADMIN.value, RoleGrant.status == "ACTIVE")
+        ) >= 1
 
 
 def test_postgres_person_email_advisory_lock_serializes_concurrent_creation(pg_factory) -> None:  # type: ignore[no-untyped-def]

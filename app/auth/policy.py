@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.access import user_has_protected_authority
 from app.core.config import get_settings
 from app.core.enums import Role, WorkdayStatus
 from app.core.time import utcnow
@@ -96,13 +97,7 @@ def can_administer_user(db: Session, actor: Actor, user: User, region_id: uuid.U
         return True
     if not can_administer_region(actor, region_id):
         return False
-    if db.scalar(
-        select(RoleGrant.id).where(
-            RoleGrant.user_id == user.id,
-            RoleGrant.status == "ACTIVE",
-            RoleGrant.role.in_([Role.ADMIN.value, Role.MANAGER.value]),
-        ).limit(1)
-    ):
+    if user_has_protected_authority(db, user.id):
         return False
     link = db.get(UserPersonLink, user.id)
     person = db.get(Person, link.person_id) if link else None
@@ -125,13 +120,7 @@ def can_assist_user(db: Session, actor: Actor, user: User, region_id: uuid.UUID)
         return True
     if Role.SUB_MANAGER.value not in actor.roles_for(region_id):
         return False
-    if db.scalar(
-        select(RoleGrant.id).where(
-            RoleGrant.user_id == user.id,
-            RoleGrant.status == "ACTIVE",
-            RoleGrant.role.in_([Role.ADMIN.value, Role.MANAGER.value]),
-        ).limit(1)
-    ):
+    if user_has_protected_authority(db, user.id):
         return False
     link = db.get(UserPersonLink, user.id)
     person = db.get(Person, link.person_id) if link else None

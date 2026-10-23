@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import binascii
 import json
+import re
 import uuid
 from html import escape
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import delete, select
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 from webauthn import (
     base64url_to_bytes,
@@ -25,6 +27,7 @@ from webauthn.helpers.structs import (
 )
 
 from app.audit.service import record_audit
+from app.auth.access import user_has_active_access
 from app.auth.factors import (
     active_totp,
     begin_totp,
@@ -32,15 +35,21 @@ from app.auth.factors import (
     consume_challenge,
     create_challenge,
     generate_recovery_codes,
+    mfa_policy_requires_factor,
     verify_totp_factor,
 )
+from app.auth.network import resolve_request
 from app.auth.security import (
+    challenge_throttle_key,
+    clear_failures,
     create_device,
+    is_throttled,
+    record_failure,
     require_fresh_auth,
+    safe_return_path,
     set_auth_cookies,
     verify_csrf,
 )
-from app.auth.service import activate_pending_grants
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.time import utcnow
@@ -83,6 +92,10 @@ def registration_options(
 ):
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
+    throttle_key = challenge_throttle_key("PASSKEY_REGISTER", request.state.user.id)
+    if is_throttled(db, throttle_key):
+        raise HTTPException(429, "Too many passkey requests. Try again later.")
+    record_failure(db, throttle_key)
     existing = list(
         db.scalars(select(PasskeyCredential).where(PasskeyCredential.user_id == request.state.user.id))
     )
@@ -107,6 +120,7 @@ def registration_options(
         user_id=request.state.user.id,
         device_id=request.state.device.id,
     )
+    db.commit()
     return _json_options(options, challenge.id)
 
 
@@ -157,6 +171,7 @@ async def register_passkey(request: Request, db: Session = Depends(get_db)):
     record_audit(db, "passkey.registered", "passkey", passkey.id, request.state.user.id)
     _record_security_change(db, request)
     db.commit()
+    clear_failures(db, challenge_throttle_key("PASSKEY_REGISTER", request.state.user.id))
     return {"ok": True}
 
 
@@ -177,6 +192,16 @@ def remove_passkey(
     )
     if not passkey:
         raise HTTPException(404)
+    if (
+        mfa_policy_requires_factor(db, request.state.user)
+        and not active_totp(db, request.state.user.id)
+        and (db.scalar(
+            select(func.count(PasskeyCredential.id)).where(
+                PasskeyCredential.user_id == request.state.user.id
+            )
+        ) or 0) <= 1
+    ):
+        raise HTTPException(409, "Add another authentication factor before removing this passkey.")
     record_audit(db, "passkey.removed", "passkey", passkey.id, request.state.user.id)
     db.delete(passkey)
     _record_security_change(db, request)
@@ -185,12 +210,19 @@ def remove_passkey(
 
 
 @router.post("/login/passkey/options")
-def authentication_options(db: Session = Depends(get_db)):
+def authentication_options(request: Request, db: Session = Depends(get_db)):
+    throttle_key = challenge_throttle_key(
+        "PASSKEY_AUTH", resolve_request(request).client_address
+    )
+    if is_throttled(db, throttle_key):
+        raise HTTPException(429, "Too many passkey requests. Try again later.")
+    record_failure(db, throttle_key)
     options = generate_authentication_options(
         rp_id=get_settings().webauthn_rp_id,
         user_verification=UserVerificationRequirement.REQUIRED,
     )
     challenge, _ = create_challenge(db, purpose="PASSKEY_AUTH", challenge=options.challenge)
+    db.commit()
     return _json_options(options, challenge.id)
 
 
@@ -201,15 +233,34 @@ async def authenticate_passkey(request: Request, db: Session = Depends(get_db)):
     if not isinstance(credential, dict):
         raise HTTPException(400, "Missing WebAuthn credential.")
     raw_id = credential.get("rawId") or credential.get("id")
-    if not isinstance(raw_id, str):
+    if (
+        not isinstance(raw_id, str)
+        or len(raw_id) > 2048
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", raw_id)
+    ):
         raise HTTPException(400, "Malformed WebAuthn credential.")
+    try:
+        credential_id = base64url_to_bytes(raw_id)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(400, "Malformed WebAuthn credential.") from exc
     passkey = db.scalar(
         select(PasskeyCredential).where(
-            PasskeyCredential.credential_id == base64url_to_bytes(raw_id)
-        )
+            PasskeyCredential.credential_id == credential_id
+        ).with_for_update()
     )
     user = db.get(User, passkey.user_id) if passkey else None
-    if not passkey or not user or user.status != "ACTIVE":
+    contractor_expiry = user.contractor_access_expires_at if user else None
+    if contractor_expiry and contractor_expiry.tzinfo is None:
+        from datetime import UTC
+
+        contractor_expiry = contractor_expiry.replace(tzinfo=UTC)
+    if (
+        not passkey
+        or not user
+        or user.status != "ACTIVE"
+        or not user_has_active_access(db, user.id)
+        or (contractor_expiry is not None and contractor_expiry <= utcnow())
+    ):
         raise HTTPException(400, "Passkey authentication failed.")
     try:
         challenge_id = uuid.UUID(str(payload.get("challenge_id", "")))
@@ -230,15 +281,19 @@ async def authenticate_passkey(request: Request, db: Session = Depends(get_db)):
             require_user_verification=True,
         )
     except (ValueError, InvalidAuthenticationResponse) as exc:
+        db.commit()
         raise HTTPException(400, "Passkey authentication failed.") from exc
     passkey.sign_count = verified.new_sign_count
     passkey.last_used_at = utcnow()
     db.commit()
-    activate_pending_grants(db, user, strong_auth=True)
+    clear_failures(
+        db,
+        challenge_throttle_key("PASSKEY_AUTH", resolve_request(request).client_address),
+    )
     raw_session, raw_csrf, device = create_device(
         db, user, request.headers.get("user-agent", "Passkey browser")[:120]
     )
-    response = Response(status_code=204)
+    response = JSONResponse({"ok": True, "next": safe_return_path(str(payload.get("next", "")))})
     set_auth_cookies(response, raw_session, raw_csrf, device)
     return response
 
@@ -287,7 +342,11 @@ def confirm_totp(
 ):
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
-    factor = db.get(TotpFactor, request.state.user.id)
+    factor = db.scalar(
+        select(TotpFactor)
+        .where(TotpFactor.user_id == request.state.user.id)
+        .with_for_update()
+    )
     if not factor or factor.confirmed_at is not None or not verify_totp_factor(factor, code):
         raise HTTPException(400, "Authenticator code could not be verified.")
     factor.confirmed_at = utcnow()
@@ -355,6 +414,8 @@ def disable_totp(
     factor = active_totp(db, request.state.user.id)
     if not factor:
         raise HTTPException(409, "Authenticator MFA is not enabled.")
+    if mfa_policy_requires_factor(db, request.state.user):
+        raise HTTPException(409, "Authenticator MFA is required for this account's access.")
     factor.disabled_at = utcnow()
     db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == request.state.user.id))
     record_audit(db, "totp.disabled", "user", request.state.user.id, request.state.user.id)

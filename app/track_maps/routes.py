@@ -4,15 +4,17 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
-from app.auth.policy import can_administer_region
+from app.auth.policy import can_administer_region, can_crew_view, can_view_published
 from app.auth.security import verify_csrf
 from app.catalog.models import Track, TrackMap
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.external_calendar.http import SourceHTTPClient
+from app.rostering.models import Workday, WorkdayRevision
 from app.track_maps.service import (
     effective_map,
     map_path,
@@ -34,7 +36,23 @@ def _administered_track(db: Session, request: Request, track_id: uuid.UUID) -> T
 
 
 @router.get("/track-maps/{track_id}")
-def track_map_file(track_id: uuid.UUID, db: Session = Depends(get_db)):
+def track_map_file(track_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    track = db.get(Track, track_id)
+    if not track:
+        raise HTTPException(404)
+    authorised = can_crew_view(request.state.actor, track.region_id)
+    if not authorised:
+        published = db.execute(
+            select(Workday, WorkdayRevision)
+            .join(WorkdayRevision, Workday.current_published_revision_id == WorkdayRevision.id)
+            .where(WorkdayRevision.track_id == track_id)
+        ).all()
+        authorised = any(
+            can_view_published(db, request.state.actor, workday, revision)
+            for workday, revision in published
+        )
+    if not authorised:
+        raise HTTPException(403)
     effective = effective_map(db.get(TrackMap, track_id))
     path = map_path(str(effective["file_name"])) if effective else None
     if not path:

@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.audit.models import AuditEvent
 from app.auth.factors import mfa_required
+from app.auth.policy import Actor
 from app.auth.security import create_device, hash_credential, token_hash, verify_credential
 from app.auth.service import (
     CREDENTIAL_RESET_UNAVAILABLE,
@@ -43,13 +44,22 @@ def _user(db, email: str = "target@example.test", secret: str = "123456") -> Use
     return user
 
 
+def _admin_actor(user: User) -> Actor:
+    return Actor(
+        user_id=user.id,
+        person_id=None,
+        global_roles=frozenset({Role.ADMIN.value}),
+        regional_roles={},
+    )
+
+
 def test_reset_tokens_are_hash_only_hour_limited_and_supersede_prior_tokens(db) -> None:  # type: ignore[no-untyped-def]
     admin = _user(db, "admin@example.test", "12345678")
     target = _user(db)
     db.commit()
 
-    first, first_raw = create_credential_reset(db, user=target, actor_user_id=admin.id)
-    second, second_raw = create_credential_reset(db, user=target, actor_user_id=admin.id)
+    first, first_raw = create_credential_reset(db, user=target, actor=_admin_actor(admin))
+    second, second_raw = create_credential_reset(db, user=target, actor=_admin_actor(admin))
 
     db.refresh(first)
     assert first_raw != second_raw
@@ -74,7 +84,7 @@ def test_reset_terminal_states_share_one_generic_error(db, state: str) -> None: 
     admin = _user(db, "admin@example.test", "12345678")
     target = _user(db)
     db.commit()
-    reset, raw = create_credential_reset(db, user=target, actor_user_id=admin.id)
+    reset, raw = create_credential_reset(db, user=target, actor=_admin_actor(admin))
     if state == "missing":
         raw = "unknown-token"
     elif state == "expired":
@@ -97,7 +107,7 @@ def test_admin_grant_requires_admin_strength_credential(db, grant_status: str) -
     target = _user(db)
     db.add(RoleGrant(user_id=target.id, role=Role.ADMIN.value, status=grant_status))
     db.commit()
-    _reset, raw = create_credential_reset(db, user=target, actor_user_id=issuer.id)
+    _reset, raw = create_credential_reset(db, user=target, actor=_admin_actor(issuer))
 
     with pytest.raises(ValueError, match="Admin PIN"):
         consume_credential_reset(db, raw, "654321")
@@ -150,7 +160,7 @@ def test_consumption_rotates_only_primary_credential_and_security_state(db) -> N
     original_status = target.status
     original_contractor_expiry = target.contractor_access_expires_at
     original_person_id = person.id
-    reset, raw = create_credential_reset(db, user=target, actor_user_id=issuer.id)
+    reset, raw = create_credential_reset(db, user=target, actor=_admin_actor(issuer))
 
     consumed_user = consume_credential_reset(db, raw, "654321")
 

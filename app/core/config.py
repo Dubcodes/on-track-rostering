@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     trusted_proxy_cidrs: Annotated[tuple[str, ...], NoDecode] = ("127.0.0.1/32",)
     trusted_device_days_standard: int = Field(default=90, ge=1, le=365)
     trusted_device_days_elevated: int = Field(default=14, ge=1, le=90)
+    trusted_device_absolute_days_standard: int = Field(default=180, ge=1, le=730)
+    trusted_device_absolute_days_elevated: int = Field(default=30, ge=1, le=180)
     trusted_device_limit: int = Field(default=10, ge=1, le=100)
     fresh_auth_minutes: int = Field(default=15, ge=1, le=120)
     webauthn_rp_id: str = "localhost"
@@ -41,6 +43,13 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:operations@example.invalid"
+    push_allowed_host_suffixes: Annotated[tuple[str, ...], NoDecode] = (
+        "fcm.googleapis.com",
+        "updates.push.services.mozilla.com",
+        "push.services.mozilla.com",
+        "web.push.apple.com",
+        ".notify.windows.com",
+    )
     notification_max_attempts: int = Field(default=5, ge=1, le=20)
     timezone_name: str = "Pacific/Auckland"
     lunch_allowance_hours: float = Field(default=12.0, ge=0)
@@ -75,7 +84,7 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
-    @field_validator("allowed_hosts", "trusted_proxy_cidrs", mode="before")
+    @field_validator("allowed_hosts", "trusted_proxy_cidrs", "push_allowed_host_suffixes", mode="before")
     @classmethod
     def split_csv(cls, value: object) -> object:
         if isinstance(value, str):

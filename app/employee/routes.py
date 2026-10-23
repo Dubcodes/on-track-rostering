@@ -1118,7 +1118,10 @@ def update_credential(
         device.revoked_at = utcnow()
     record_audit(db, "user.credential.updated", "user", user.id, user.id)
     db.commit()
-    return RedirectResponse("/login?credential=updated", status_code=303)
+    response = RedirectResponse("/login?credential=updated", status_code=303)
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    response.delete_cookie(CSRF_COOKIE, path="/")
+    return response
 
 
 @router.post("/settings/capabilities/{position_id}")

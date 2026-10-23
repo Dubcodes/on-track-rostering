@@ -84,7 +84,10 @@
   });
   document.addEventListener("click", (event) => {
     const help = event.target instanceof Element ? event.target.closest(".inline-help[tabindex]") : null;
-    if (help instanceof HTMLElement) help.focus({preventScroll: true});
+    if (help instanceof HTMLElement) {
+      if (!help.closest("summary")) event.preventDefault();
+      help.focus({preventScroll: true});
+    }
   });
   const filterRestoreKey = "ontrack-live-filter-position";
   try {

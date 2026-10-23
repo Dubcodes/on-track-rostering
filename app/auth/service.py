@@ -9,9 +9,16 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
-from app.auth.policy import Actor, can_administer_person, can_administer_user, can_grant_role
+from app.auth.policy import (
+    Actor,
+    can_administer_person,
+    can_administer_user,
+    can_assist_user,
+    can_grant_role,
+)
 from app.auth.security import credential_error, hash_credential, throttle_keys, token_hash
 from app.catalog.models import Region
+from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import utcnow
 from app.identity.email import validate_person_work_email, validated_email
@@ -31,6 +38,29 @@ from app.identity.models import (
 CREDENTIAL_RESET_MINUTES = 60
 CREDENTIAL_RESET_UNAVAILABLE = "This credential reset is invalid, expired, or already used."
 INVITATION_UNAVAILABLE = "This invitation is invalid, expired, or already used."
+
+
+def revoke_outstanding_auth_artifacts(
+    db: Session, user_id: uuid.UUID, now=None  # type: ignore[no-untyped-def]
+) -> None:
+    now = now or utcnow()
+    db.execute(
+        update(CredentialReset)
+        .where(
+            CredentialReset.user_id == user_id,
+            CredentialReset.consumed_at.is_(None),
+            CredentialReset.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    db.execute(
+        update(WebAuthnChallenge)
+        .where(
+            WebAuthnChallenge.user_id == user_id,
+            WebAuthnChallenge.consumed_at.is_(None),
+        )
+        .values(consumed_at=now)
+    )
 
 
 def normalise_email(email: str) -> str:
@@ -86,12 +116,28 @@ def create_credential_reset(
     db: Session,
     *,
     user: User,
-    actor_user_id: uuid.UUID,
+    actor: Actor,
+    region_id: uuid.UUID | None = None,
+    allow_operational_assist: bool = False,
 ) -> tuple[CredentialReset, str]:
+    now = utcnow()
+    locked_user = db.scalar(select(User).where(User.id == user.id).with_for_update())
+    if locked_user is None:
+        raise ValueError("That account no longer exists.")
+    user = locked_user
     if user.status != "ACTIVE":
         raise ValueError("Credential resets are available only for active accounts.")
-    now = utcnow()
-    db.scalar(select(User.id).where(User.id == user.id).with_for_update())
+    if not actor.is_admin:
+        permitted = bool(
+            region_id is not None
+            and (
+                can_assist_user(db, actor, user, region_id)
+                if allow_operational_assist
+                else can_administer_user(db, actor, user, region_id)
+            )
+        )
+        if not permitted:
+            raise PermissionError("You cannot reset credentials for that account.")
     db.execute(
         update(CredentialReset)
         .where(
@@ -105,28 +151,34 @@ def create_credential_reset(
     reset = CredentialReset(
         user_id=user.id,
         token_hash=token_hash(raw),
-        created_by_user_id=actor_user_id,
+        created_by_user_id=actor.user_id,
         created_at=now,
         expires_at=now + timedelta(minutes=CREDENTIAL_RESET_MINUTES),
     )
     db.add(reset)
     db.flush()
-    record_audit(db, "user.credential_reset.created", "user", user.id, actor_user_id)
+    record_audit(db, "user.credential_reset.created", "user", user.id, actor.user_id)
     db.commit()
     return reset, raw
 
 
 def consume_credential_reset(db: Session, raw_token: str, secret: str) -> User:
-    reset = db.scalar(
+    candidate = db.scalar(
         select(CredentialReset)
         .where(CredentialReset.token_hash == token_hash(raw_token))
+    )
+    if candidate is None:
+        raise ValueError(CREDENTIAL_RESET_UNAVAILABLE)
+    user = db.scalar(select(User).where(User.id == candidate.user_id).with_for_update())
+    reset = db.scalar(
+        select(CredentialReset)
+        .where(CredentialReset.id == candidate.id)
         .with_for_update()
     )
     now = utcnow()
     expires_at = reset.expires_at if reset else None
     if expires_at and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
-    user = db.get(User, reset.user_id) if reset else None
     if (
         not reset
         or reset.consumed_at
@@ -186,6 +238,10 @@ def create_invitation(
         raise ValueError("Display name must be between 2 and 120 characters.")
     if role not in {Role.CONTRACTOR.value, Role.CASUAL.value, Role.EMPLOYEE.value, Role.SUB_MANAGER.value, Role.MANAGER.value}:
         raise ValueError("Invitations may only grant Contractor, Casual, Employee, Sub-Manager, or Manager access.")
+    if role == Role.MANAGER.value and get_settings().mfa_required_manager:
+        raise ValueError(
+            "Manager MFA is enforced. Invite the person with ordinary access, let them enroll an authenticator, then grant Manager access."
+        )
     if db.scalar(select(User.id).where(User.email == email)):
         raise ValueError("An account already uses that email.")
     if role != Role.ADMIN.value and region_id is None:
@@ -261,6 +317,10 @@ def activate_pending_grants(
 ) -> int:
     # A passkey/TOTP can prove a strong login but cannot upgrade the stored primary credential policy.
     _ = strong_auth
+    locked_user = db.scalar(select(User).where(User.id == user.id).with_for_update())
+    if locked_user is None:
+        return 0
+    user = locked_user
     pending = list(
         db.scalars(
             select(RoleGrant)
@@ -303,6 +363,7 @@ def activate_pending_grants(
         )
     if activated:
         user.auth_epoch += 1
+        revoke_outstanding_auth_artifacts(db, user.id, now)
         db.commit()
     return activated
 
@@ -315,11 +376,36 @@ def grant_role(
     role: str,
     region_id: uuid.UUID | None,
 ) -> RoleGrant:
+    locked_target = db.scalar(
+        select(User).where(User.id == target_user.id).with_for_update()
+    )
+    if locked_target is None:
+        raise ValueError("That account no longer exists.")
+    target_user = locked_target
     region = db.get(Region, region_id) if region_id else None
     if region_id and (not region or region.lifecycle != "ACTIVE"):
         raise ValueError("Select an active region for this role grant.")
     if not can_grant_role(actor, role, region_id):
         raise PermissionError("You cannot grant that role and scope.")
+    if (
+        not actor.is_admin
+        and region_id is not None
+        and not can_administer_user(db, actor, target_user, region_id)
+    ):
+        raise PermissionError("You cannot grant access to that account.")
+    settings = get_settings()
+    mfa_required_for_role = (
+        role == Role.ADMIN.value and settings.mfa_required_admin
+    ) or (
+        role == Role.MANAGER.value and settings.mfa_required_manager
+    )
+    if mfa_required_for_role:
+        from app.auth.factors import active_totp
+
+        if not active_totp(db, target_user.id):
+            raise ValueError(
+                "Enroll an authenticator on this account before granting the required privileged access."
+            )
     active_roles = set(
         db.scalars(
             select(RoleGrant.role).where(
@@ -362,6 +448,7 @@ def grant_role(
     )
     db.add(grant)
     db.flush()
+    revoke_outstanding_auth_artifacts(db, target_user.id)
     record_audit(
         db,
         "role_grant.pending",
@@ -381,21 +468,35 @@ def revoke_role_grant(db: Session, *, actor: Actor, grant: RoleGrant) -> None:
     if not can_grant_role(actor, grant.role, grant.region_id):
         raise PermissionError("You cannot revoke that role and scope.")
     if grant.role == Role.ADMIN.value and grant.status == "ACTIVE":
-        active_admins = db.scalar(
-            select(RoleGrant.id).where(
-                RoleGrant.role == Role.ADMIN.value,
-                RoleGrant.status == "ACTIVE",
-                RoleGrant.id != grant.id,
-            ).limit(1)
+        # Lock the whole active-Admin set so concurrent revocations cannot both
+        # observe another Admin and leave the installation without one.
+        active_admins = list(
+            db.scalars(
+                select(RoleGrant)
+                .where(
+                    RoleGrant.role == Role.ADMIN.value,
+                    RoleGrant.status == "ACTIVE",
+                )
+                .order_by(RoleGrant.id)
+                .with_for_update()
+            )
         )
-        if not active_admins:
+        if len(active_admins) <= 1:
             raise ValueError("The final active Admin grant cannot be revoked.")
+    target = db.scalar(select(User).where(User.id == grant.user_id).with_for_update())
+    if target is None:
+        raise ValueError("That account no longer exists.")
+    if (
+        not actor.is_admin
+        and grant.region_id is not None
+        and not can_administer_user(db, actor, target, grant.region_id)
+    ):
+        raise PermissionError("You cannot revoke access from that account.")
     now = utcnow()
     was_active = grant.status == "ACTIVE"
     grant.status = "REVOKED"
     grant.revoked_at = now
-    target = db.get(User, grant.user_id)
-    if was_active and target:
+    if was_active:
         target.auth_epoch += 1
         for device in db.scalars(
             select(TrustedDevice).where(
@@ -403,6 +504,7 @@ def revoke_role_grant(db: Session, *, actor: Actor, grant: RoleGrant) -> None:
             )
         ):
             device.revoked_at = now
+    revoke_outstanding_auth_artifacts(db, target.id, now)
     record_audit(
         db,
         "role_grant.revoked",

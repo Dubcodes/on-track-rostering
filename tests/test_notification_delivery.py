@@ -47,6 +47,8 @@ def _user(db, status: str = "ACTIVE") -> User:  # type: ignore[no-untyped-def]
         status=status,
     )
     db.add(user)
+    db.flush()
+    db.add(RoleGrant(user_id=user.id, role=Role.EMPLOYEE.value, status="ACTIVE"))
     db.commit()
     return user
 
@@ -56,10 +58,13 @@ def _subscription(db, user: User) -> PushSubscription:  # type: ignore[no-untype
         db,
         user_id=user.id,
         value={
-            "endpoint": f"https://push.example.test/{user.id}",
+            "endpoint": f"https://fcm.googleapis.com/test/{user.id}",
             "keys": {"p256dh": "public-material", "auth": "auth-material"},
         },
         label="Test browser",
+        resolver=lambda *_args, **_kwargs: [
+            (2, 1, 6, "", ("8.8.8.8", 443))
+        ],
     )
 
 
@@ -354,6 +359,8 @@ def test_roster_change_audience_is_previous_and_new_assignment_union(db) -> None
     db.flush()
     db.add_all(
         [
+                RoleGrant(user_id=old_user.id, role=Role.EMPLOYEE.value, region_id=region.id),
+                RoleGrant(user_id=new_user.id, role=Role.EMPLOYEE.value, region_id=region.id),
             UserPersonLink(user_id=old_user.id, person_id=old_person.id),
             UserPersonLink(user_id=new_user.id, person_id=new_person.id),
             UserPersonLink(user_id=unrelated.id, person_id=other_person.id),
@@ -380,7 +387,10 @@ def test_reminders_use_person_day_start_and_are_idempotent(db) -> None:  # type:
     position = BasePosition(name="Camera")
     db.add_all([region, user, person, position])
     db.flush()
-    db.add(UserPersonLink(user_id=user.id, person_id=person.id))
+    db.add_all([
+        UserPersonLink(user_id=user.id, person_id=person.id),
+        RoleGrant(user_id=user.id, role=Role.EMPLOYEE.value, region_id=region.id),
+    ])
     workday = Workday(region_id=region.id, created_by_user_id=user.id)
     db.add(workday)
     db.flush()
@@ -580,7 +590,10 @@ def _reminder_roster(db, suffix: str, work_date: date):  # type: ignore[no-untyp
     position = BasePosition(name=f"Camera {suffix}")
     db.add_all([region, user, person, position])
     db.flush()
-    db.add(UserPersonLink(user_id=user.id, person_id=person.id))
+    db.add_all([
+        UserPersonLink(user_id=user.id, person_id=person.id),
+        RoleGrant(user_id=user.id, role=Role.EMPLOYEE.value, region_id=region.id),
+    ])
     workday = Workday(region_id=region.id, created_by_user_id=user.id)
     db.add(workday)
     db.flush()
@@ -705,7 +718,6 @@ def test_generated_travel_opt_out_invalidates_pending_reminder(db) -> None:  # t
         workday_id=parent.id, person_id=person.id, standard_travel_opt_out=True,
     ))
     db.add_all([
-        RoleGrant(user_id=user.id, role=Role.EMPLOYEE.value, region_id=parent.region_id),
         NotificationPreference(user_id=user.id, weekly_digest=True),
     ])
     db.commit()

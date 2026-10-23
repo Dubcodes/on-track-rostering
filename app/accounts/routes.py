@@ -26,6 +26,7 @@ from app.auth.service import (
     validated_email,
 )
 from app.catalog.models import Region
+from app.core.csv_safe import spreadsheet_safe_cell
 from app.core.database import get_db
 from app.core.enums import Role
 from app.core.forms import optional_uuid
@@ -238,8 +239,11 @@ def export_people_metadata(request: Request, db: Session = Depends(get_db)):
     writer.writerow(("person_id", "display_name", "email", "primary_region", "account_state"))
     for person in people:
         writer.writerow((
-            person.id, person.display_name, person.email or "",
-            region_names.get(person.home_region_id, ""), onboarding_state(db, person),
+            person.id,
+            spreadsheet_safe_cell(person.display_name),
+            spreadsheet_safe_cell(person.email or ""),
+            spreadsheet_safe_cell(region_names.get(person.home_region_id, "")),
+            spreadsheet_safe_cell(onboarding_state(db, person)),
         ))
     return Response(
         output.getvalue(), media_type="text/csv",
@@ -364,7 +368,7 @@ def link_existing_person(
     require_fresh_auth(request)
     if region_id not in region_ids:
         raise HTTPException(403)
-    user = db.get(User, user_id)
+    user = db.scalar(select(User).where(User.id == user_id).with_for_update())
     person = db.get(Person, person_id)
     if not user or not person:
         raise HTTPException(404)

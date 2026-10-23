@@ -28,6 +28,7 @@ from app.auth.service import (
     create_credential_reset,
     create_invitation,
     grant_role,
+    revoke_outstanding_auth_artifacts,
     revoke_role_grant,
 )
 from app.catalog.models import BasePosition, CrewGroup, PersonCrewGroup, Region
@@ -384,7 +385,10 @@ def crew_person_response(
         )
     )
     account = db.scalar(
-        select(User).join(UserPersonLink).where(UserPersonLink.person_id == person.id)
+        select(User)
+        .join(UserPersonLink)
+        .where(UserPersonLink.person_id == person.id)
+        .with_for_update(of=User)
     )
     can_control_account = bool(
         account
@@ -775,11 +779,15 @@ def update_person_account_status(
     _person, account = _controlled_account(
         db, request, person_id, allow_operational_assist=True
     )
+    account = db.scalar(select(User).where(User.id == account.id).with_for_update())
+    if account is None:
+        raise HTTPException(404)
     if account.id == request.state.user.id or account_status not in {"ACTIVE", "DISABLED"}:
         raise HTTPException(400, "Invalid account status change.")
     account.status = account_status
     account.auth_epoch += 1
     now = utcnow()
+    revoke_outstanding_auth_artifacts(db, account.id, now)
     if account_status == "ACTIVE":
         from app.identity.contractor_access import is_contractor_user, refresh_contractor_access
 
@@ -817,6 +825,9 @@ def update_person_employment_type(
     verify_csrf(request, csrf_token)
     require_fresh_auth(request)
     person, account = _controlled_account(db, request, person_id)
+    account = db.scalar(select(User).where(User.id == account.id).with_for_update())
+    if account is None:
+        raise HTTPException(404)
     if role not in {Role.EMPLOYEE.value, Role.CASUAL.value}:
         raise HTTPException(400, "Choose Employee or Casual.")
     if person.home_region_id is None or not can_grant_role(
@@ -842,6 +853,7 @@ def update_person_employment_type(
     if any(grant.role == role for grant in ordinary):
         return RedirectResponse(f"/manage/crew/{person.id}#account", status_code=303)
     now = utcnow()
+    revoke_outstanding_auth_artifacts(db, account.id, now)
     previous = [grant.role for grant in ordinary]
     active_replaced = any(grant.status == "ACTIVE" for grant in ordinary)
     for grant in ordinary:
@@ -929,8 +941,14 @@ def reset_person_credential(
         raise HTTPException(400, "Use Settings to change your own credential.")
     try:
         _reset, raw = create_credential_reset(
-            db, user=account, actor_user_id=request.state.user.id
+            db,
+            user=account,
+            actor=request.state.actor,
+            region_id=_person.home_region_id,
+            allow_operational_assist=True,
         )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return templates.TemplateResponse(

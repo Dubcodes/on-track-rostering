@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
@@ -13,6 +13,7 @@ from fastapi.responses import Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.auth.access import user_has_active_access
 from app.auth.network import same_origin
 from app.core.config import get_settings
 from app.core.enums import Role
@@ -66,10 +67,34 @@ def keyed_hash(value: str) -> str:
 
 
 def is_safe_next(value: str) -> bool:
-    parsed = urlsplit(value)
-    return bool(
-        value.startswith("/") and not value.startswith("//") and not parsed.scheme and not parsed.netloc
-    )
+    return safe_return_path(value, fallback="") == value
+
+
+def safe_return_path(value: str | None, *, fallback: str = "/month") -> str:
+    """Accept only an unambiguous same-origin absolute path."""
+    if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return fallback
+    decoded = value
+    for _ in range(3):
+        candidate = unquote(decoded)
+        if candidate == decoded:
+            break
+        decoded = candidate
+    if (
+        any(ord(char) < 32 or ord(char) == 127 for char in decoded)
+        or "\\" in decoded
+        or not decoded.startswith("/")
+        or decoded.startswith("//")
+    ):
+        return fallback
+    try:
+        parsed = urlsplit(decoded)
+        original = urlsplit(value)
+    except ValueError:
+        return fallback
+    if parsed.scheme or parsed.netloc or original.scheme or original.netloc or original.fragment:
+        return fallback
+    return value
 
 
 def verify_csrf(request: Request, submitted: str) -> None:
@@ -89,6 +114,14 @@ def throttle_keys(email: str, ip: str) -> tuple[str, str]:
     return keyed_hash(f"account|{email.strip().lower()}"), keyed_hash(f"address|{ip}")
 
 
+def mfa_throttle_keys(user_id: object, ip: str) -> tuple[str, str]:
+    return keyed_hash(f"mfa-user|{user_id}"), keyed_hash(f"mfa-address|{ip}")
+
+
+def challenge_throttle_key(purpose: str, subject: object) -> str:
+    return keyed_hash(f"challenge|{purpose}|{subject}")
+
+
 def is_throttled(db: Session, key: str) -> bool:
     row = db.get(LoginThrottle, key)
     blocked_until = row.blocked_until if row else None
@@ -99,6 +132,9 @@ def is_throttled(db: Session, key: str) -> bool:
 
 def record_failure(db: Session, key: str) -> None:
     now = utcnow()
+    if db.get_bind().dialect.name == "postgresql":
+        advisory_key = int.from_bytes(bytes.fromhex(key[:16]), "big", signed=True)
+        db.execute(select(func.pg_advisory_xact_lock(advisory_key)))
     row = db.get(LoginThrottle, key)
     window_start = row.window_started_at if row else None
     if window_start and window_start.tzinfo is None:
@@ -120,6 +156,8 @@ def clear_failures(db: Session, key: str) -> None:
 
 
 def create_device(db: Session, user: User, label: str = "Browser") -> tuple[str, str, TrustedDevice]:
+    if not user_has_active_access(db, user.id):
+        raise ValueError("This account has no active access grant.")
     session_token, csrf_token = secrets.token_urlsafe(40), secrets.token_urlsafe(32)
     roles = set(
         db.scalars(select(RoleGrant.role).where(RoleGrant.user_id == user.id, RoleGrant.status == "ACTIVE"))
@@ -192,15 +230,14 @@ def set_auth_cookies(
     raw_csrf: str,
     device: TrustedDevice,
 ) -> None:
-    days = (
-        get_settings().trusted_device_days_elevated
-        if device.elevated
-        else get_settings().trusted_device_days_standard
-    )
+    expires_at = device.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    max_age = max(0, int((expires_at - utcnow()).total_seconds()))
     response.set_cookie(
         SESSION_COOKIE,
         raw_session,
-        max_age=days * 86400,
+        max_age=max_age,
         httponly=True,
         secure=get_settings().cookie_secure,
         samesite="lax",
@@ -209,7 +246,7 @@ def set_auth_cookies(
     response.set_cookie(
         CSRF_COOKIE,
         raw_csrf,
-        max_age=days * 86400,
+        max_age=max_age,
         httponly=False,
         secure=get_settings().cookie_secure,
         samesite="strict",
@@ -235,6 +272,7 @@ def resolve_device(db: Session, raw_token: str) -> tuple[User, TrustedDevice] | 
         not user
         or user.status != "ACTIVE"
         or user.auth_epoch != device.auth_epoch
+        or not user_has_active_access(db, user.id)
         or (contractor_expiry is not None and contractor_expiry <= now)
     ):
         if device and not device.revoked_at:
@@ -246,8 +284,21 @@ def resolve_device(db: Session, raw_token: str) -> tuple[User, TrustedDevice] | 
         if device.elevated
         else get_settings().trusted_device_days_standard
     )
+    created_at = device.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    absolute_days = (
+        get_settings().trusted_device_absolute_days_elevated
+        if device.elevated
+        else get_settings().trusted_device_absolute_days_standard
+    )
+    absolute_expiry = created_at + timedelta(days=absolute_days)
+    if absolute_expiry <= now:
+        device.revoked_at = now
+        db.commit()
+        return None
     device.last_seen_at = now
-    device.expires_at = now + timedelta(days=days)
+    device.expires_at = min(now + timedelta(days=days), absolute_expiry)
     db.commit()
     return user, device
 
