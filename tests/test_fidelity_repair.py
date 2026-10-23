@@ -854,6 +854,7 @@ def test_portainer_uses_shared_registry_images_with_production_pinning() -> None
     staging = open("compose.staging.yaml", encoding="utf-8").read()
     staging_example = open(".env.staging.example", encoding="utf-8").read()
     production = open("compose.yaml", encoding="utf-8").read()
+    release_gate = open(".github/workflows/release-gate.yml", encoding="utf-8").read()
     dockerfile = open("Dockerfile", encoding="utf-8").read()
     staging_image = "${STAGING_ONTRACK_IMAGE:-ghcr.io/dubcodes/on-track-rostering:staging}"
     production_image = "${ONTRACK_IMAGE:?Set ONTRACK_IMAGE to an exact qualified SHA image}"
@@ -884,6 +885,7 @@ def test_portainer_uses_shared_registry_images_with_production_pinning() -> None
         "ONTRACK_MFA_REQUIRED_MANAGER",
     ):
         assert f"${{{variable}:?" in production
+        assert f"          {variable}:" in release_gate
     assert production.count("\n      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:") == 2
     assert staging.count("\n      ONTRACK_PUSH_ALLOWED_HOST_SUFFIXES:") == 2
     assert ".ontrack-build-id" in dockerfile and "sha256sum" in dockerfile
