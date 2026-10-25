@@ -6,7 +6,7 @@ from datetime import date
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -331,6 +331,7 @@ def create_user(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
+    validation_only = request.headers.get("X-Ontrack-Fresh-Preflight") == "1"
     form_state = {
         "display_name": display_name,
         "email": email,
@@ -406,7 +407,7 @@ def create_user(
                 db,
                 direct_account=form_state,
                 direct_errors=errors,
-                status_code=422,
+                status_code=200 if validation_only else 422,
             )
         from app.accounts.routes import accounts_response
 
@@ -415,8 +416,10 @@ def create_user(
             db,
             direct_account=form_state,
             direct_errors=errors,
-            status_code=422,
+            status_code=200 if validation_only else 422,
         )
+    if validation_only:
+        return Response(status_code=204)
     require_fresh_auth(request, db)
     user = User(
         email=user_email,

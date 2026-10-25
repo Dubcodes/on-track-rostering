@@ -1452,6 +1452,39 @@ def test_fresh_authentication_executes_only_one_bound_action(routed_db) -> None:
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(FreshActionIntent)) == 0
 
+    validation = admin.post(
+        "/admin/users",
+        data={
+            "display_name": "Validated only",
+            "email": "validated-only@example.com",
+            "credential": "123456",
+            "role": "EMPLOYEE",
+            "region_id": str(region_id),
+            "person_id": "",
+            "csrf_token": csrf,
+        },
+        headers={"X-Ontrack-Fresh-Preflight": "1"},
+    )
+    assert validation.status_code == 204, validation.text
+    invalid_validation = admin.post(
+        "/admin/users",
+        data={
+            "display_name": "Duplicate Admin",
+            "email": "admin@example.test",
+            "credential": "123456",
+            "role": "EMPLOYEE",
+            "region_id": str(region_id),
+            "person_id": "",
+            "csrf_token": csrf,
+        },
+        headers={"X-Ontrack-Fresh-Preflight": "1"},
+    )
+    assert invalid_validation.status_code == 200
+    assert "Account not created" in invalid_validation.text
+    with factory() as db:
+        assert db.scalar(select(User.id).where(User.email == "validated-only@example.com")) is None
+        assert db.scalar(select(func.count()).select_from(FreshActionIntent)) == 0
+
     action = f"/manage/crew/{person_id}/grants"
     failed = admin.post(
         "/settings/reauthenticate",

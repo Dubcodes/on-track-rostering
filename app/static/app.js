@@ -468,13 +468,9 @@
       const response = await fetch(form.action, {
         method: "POST",
         body: new FormData(form),
-        headers: {Accept: "application/json"},
+        headers: {"X-Ontrack-Fresh-Preflight": "1"},
       });
-      if (response.redirected) {
-        window.location.assign(response.url);
-        return;
-      }
-      if (response.status !== 403) {
+      if (response.status !== 204) {
         const html = await response.text();
         document.open();
         document.write(html);
