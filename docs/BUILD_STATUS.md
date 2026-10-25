@@ -1,8 +1,8 @@
-# Build status — 2026-10-23
+# Build status — 2026-10-25
 
 ## Application-behavior qualification baseline and deployment boundary
 
-The current qualified application-behavior baseline is exact SHA `f224c81307945fd71f64bc012d79a4fd9925115f` (release-gate run `39938040121`): **374 PostgreSQL-backed tests** and **80 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-f224c81307945fd71f64bc012d79a4fd9925115f` with digest `sha256:38dfcde8ed75ea9c769e3cddbeaa0feb4f1ffc3b879469cb70469d07f4542a9f`. The unqualified local redesign candidate advances the sole Alembic head to `a3d8c1f4e720`; its exact qualification evidence will replace this paragraph only after the GitHub gate succeeds.
+The current qualified application-behavior baseline is exact SHA `4422bea51e22255297a7e126409096fcd3dcc622` (release-gate run `40147775820`): **383 PostgreSQL-backed tests** and **80 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-4422bea51e22255297a7e126409096fcd3dcc622` with digest `sha256:0a0077422a03619074f805009d14a83831077842eccd989bd888c83ff7c5feb9`. The sole Alembic head is `a3d8c1f4e720`.
 
 Earlier SHAs, including `397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
 
