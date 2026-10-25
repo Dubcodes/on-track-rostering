@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
 from app.audit.service import record_audit
+from app.auth.device_labels import friendly_device_label
 from app.auth.factors import remaining_recovery_codes
 from app.auth.network import resolve_request
 from app.auth.policy import (
@@ -23,8 +24,10 @@ from app.auth.policy import (
 )
 from app.auth.security import (
     CSRF_COOKIE,
+    FRESH_ACTION_COOKIE,
     SESSION_COOKIE,
     clear_failures,
+    create_fresh_action_intent,
     credential_error,
     hash_credential,
     is_safe_next,
@@ -968,13 +971,14 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
             ),
             current_person=current_person,
             current_region=current_region,
-            trusted_devices=list(
-                db.scalars(
+            trusted_devices=[
+                {"device": device, "friendly_label": friendly_device_label(device.label)}
+                for device in db.scalars(
                     select(TrustedDevice)
                     .where(TrustedDevice.user_id == request.state.user.id)
                     .order_by(TrustedDevice.last_seen_at.desc())
                 )
-            ),
+            ],
         ),
     )
 
@@ -1004,6 +1008,69 @@ def revoke_own_device(
     if current:
         response.delete_cookie(SESSION_COOKIE, path="/")
         response.delete_cookie(CSRF_COOKIE, path="/")
+        response.delete_cookie(FRESH_ACTION_COOKIE, path="/")
+    return response
+
+
+@router.post("/settings/devices/revoke-others")
+def revoke_other_devices(
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    now = utcnow()
+    current_id = request.state.device.id
+    changed = 0
+    for device in db.scalars(
+        select(TrustedDevice).where(
+            TrustedDevice.user_id == request.state.user.id,
+            TrustedDevice.id != current_id,
+            TrustedDevice.revoked_at.is_(None),
+        )
+    ):
+        device.revoked_at = now
+        changed += 1
+    if changed:
+        record_audit(
+            db,
+            "user.devices.others_revoked",
+            "user",
+            request.state.user.id,
+            request.state.user.id,
+            detail={"count": changed},
+        )
+    db.commit()
+    return RedirectResponse("/settings?device=others-revoked#devices", status_code=303)
+
+
+@router.post("/settings/devices/revoke-all")
+def revoke_all_devices(
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    now = utcnow()
+    for device in db.scalars(
+        select(TrustedDevice).where(
+            TrustedDevice.user_id == request.state.user.id,
+            TrustedDevice.revoked_at.is_(None),
+        )
+    ):
+        device.revoked_at = now
+    record_audit(
+        db,
+        "user.devices.all_revoked",
+        "user",
+        request.state.user.id,
+        request.state.user.id,
+    )
+    db.commit()
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    response.delete_cookie(CSRF_COOKIE, path="/")
+    response.delete_cookie(FRESH_ACTION_COOKIE, path="/")
     return response
 
 
@@ -1055,6 +1122,7 @@ def reauthenticate(
     credential: str = Form(...),
     csrf_token: str = Form(...),
     next: str = Form("/settings"),
+    action: str = Form(""),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
@@ -1068,15 +1136,47 @@ def reauthenticate(
                 status_code=400,
             )
         raise HTTPException(400, "Credential could not be verified.")
-    from app.core.time import utcnow
-
-    device.primary_authenticated_at = utcnow()
-    db.commit()
+    action_token = ""
+    if action:
+        try:
+            action_token = create_fresh_action_intent(
+                db,
+                user_id=user.id,
+                device_id=device.id,
+                action_path=action,
+            )
+        except ValueError as exc:
+            if wants_json:
+                return JSONResponse({"ok": False, "detail": str(exc)}, status_code=400)
+            raise HTTPException(400, str(exc)) from exc
+    else:
+        device.primary_authenticated_at = utcnow()
+        db.commit()
     if wants_json:
-        deadline = device.primary_authenticated_at + timedelta(
-            minutes=get_settings().fresh_auth_minutes
+        response = JSONResponse(
+            {
+                "ok": True,
+                "expires_at": (
+                    (utcnow() + timedelta(minutes=2)).isoformat()
+                    if action
+                    else (
+                        device.primary_authenticated_at
+                        + timedelta(minutes=get_settings().fresh_auth_minutes)
+                    ).isoformat()
+                ),
+            }
         )
-        return JSONResponse({"ok": True, "expires_at": deadline.isoformat()})
+        if action_token:
+            response.set_cookie(
+                FRESH_ACTION_COOKIE,
+                action_token,
+                max_age=120,
+                httponly=True,
+                secure=get_settings().cookie_secure,
+                samesite="strict",
+                path="/",
+            )
+        return response
     destination = next if is_safe_next(next) else "/settings"
     return RedirectResponse(destination, status_code=303)
 

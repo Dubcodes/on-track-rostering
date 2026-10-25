@@ -1616,8 +1616,9 @@ def test_logout_and_current_device_revocation_leave_browser_signed_out(browser_s
 
     _login(page, base_url, values["employee"])
     page.goto(base_url + "/settings")
-    current_device = page.locator("#devices article", has_text="This device")
-    current_device.get_by_role("button", name="Revoke").click()
+    current_device = page.locator("#devices article", has_text="Current device")
+    page.once("dialog", lambda dialog: dialog.accept())
+    current_device.get_by_role("button", name="Sign out this device").click()
     page.wait_for_url("**/login")
     assert not {
         cookie["name"]
@@ -2045,6 +2046,10 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page = context.new_page()
     errors = _watch_browser_errors(page)
     _assert_page(page, base_url + "/login")
+    assert page.locator('input[name="credential"]').get_attribute("inputmode") == "numeric"
+    _assert_page(page, base_url + "/login/password")
+    assert page.locator('input[name="credential"]').get_attribute("inputmode") is None
+    _assert_page(page, base_url + "/login")
     if width in {1280, 320}:
         _capture_page(page, f"login-{width}.png")
     _login(page, base_url, values["employee"])
@@ -2294,6 +2299,10 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     page.wait_for_url("**/manage/crew/*")
     assert page.get_by_role("heading", name="Browser Crew Member").is_visible()
     assert page.locator("[data-person-editor]").count() == 1
+    permission_editor = page.locator("details.permission-editor")
+    permission_editor.locator("summary").click()
+    assert permission_editor.locator('input[name="region_ids"]').count() >= 1
+    assert permission_editor.get_by_role("button", name=re.compile("Add selected")).count() >= 1
     page.get_by_text("Add capability decision", exact=True).click()
     capability_input = page.locator("[data-capability-input]")
     assert capability_input.count() == 1
@@ -3061,6 +3070,19 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
         device.primary_authenticated_at = utcnow() - timedelta(hours=1)
         db.commit()
     page.goto(base_url + "/manage/accounts#invitations")
+    dialog = page.locator("[data-reauth-dialog]")
+    page.get_by_text("Create an exceptional unlinked or direct account", exact=True).click()
+    direct_form = page.locator('form[data-account-create]')
+    direct_form.locator('input[name="display_name"]').fill("Duplicate browser account")
+    direct_form.locator('input[name="email"]').fill(values["admin"][0])
+    direct_form.locator('input[name="credential"]').fill("123456")
+    direct_form.locator('select[name="role"]').select_option("EMPLOYEE")
+    direct_form.locator('select[name="region_id"]').select_option(values["region_id"])
+    direct_form.get_by_role("button", name="Create account").click()
+    page.get_by_text("Account not created.", exact=True).wait_for()
+    assert not dialog.is_visible()
+    assert direct_form.locator('input[name="display_name"]').input_value() == "Duplicate browser account"
+    assert direct_form.locator('input[name="credential"]').input_value() == ""
     page.get_by_text("Create a one-time invitation", exact=True).click()
     invitation_form = page.locator('form[action="/admin/invitations"]')
     candidate_name = f"Fresh auth candidate {width}"
@@ -3073,13 +3095,14 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     dialog = page.locator("[data-reauth-dialog]")
     assert dialog.is_visible()
     assert invitation_form.locator('input[name="display_name"]').input_value() == candidate_name
-    dialog.locator('input[name="credential"]').fill(values["admin"][1])
-    dialog.get_by_role("button", name="Confirm").click()
-    continue_button = dialog.get_by_role("button", name="Continue to Create invitation")
-    continue_button.wait_for()
-    assert dialog.is_visible()
+    dialog.get_by_role("button", name="Cancel").click()
+    assert not dialog.is_visible()
     assert page.get_by_text(candidate_name, exact=True).count() == 0
-    continue_button.click()
+    assert invitation_form.locator('input[name="display_name"]').input_value() == candidate_name
+    invitation_form.get_by_role("button", name="Create invitation").click()
+    assert dialog.is_visible()
+    dialog.locator('input[name="credential"]').fill(values["admin"][1])
+    dialog.get_by_role("button", name="Confirm and continue").click()
     page.wait_for_url("**/admin/invitations", wait_until="domcontentloaded")
     created_heading = page.get_by_role("heading", name="Account setup invitation created")
     created_heading.wait_for()

@@ -1,0 +1,29 @@
+<section class="panel wide" id="accounts">
+  <div class="section-heading">
+    <div><p class="eyebrow">Find and manage</p><h2>Account directory</h2></div>
+    <a class="button secondary" href="/manage/crew">Find a Person in Crew</a>
+  </div>
+  <form method="get" action="/manage/accounts" class="filter-grid" data-live-filters data-filter-target="accounts">
+    <label>Find account<input type="search" name="account_q" value="{{ account_q }}" placeholder="Name or email" data-filter-search></label>
+    <label>Status<select name="account_status"><option value="">Any status</option>{% for value in ['ACTIVE','DISABLED','EXPIRED'] %}<option value="{{ value }}" {% if account_status == value %}selected{% endif %}>{{ value|title }}</option>{% endfor %}</select></label>
+    <label>Authority<select name="account_role"><option value="">Any authority</option>{% for value in account_roles %}<option value="{{ value }}" {% if account_role == value %}selected{% endif %}>{{ value|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+    <label>Region<select name="account_region"><option value="">Any Region</option>{% for region in regions %}<option value="{{ region.id }}" {% if account_region == region.id|string %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+    <label>Person link<select name="account_link"><option value="">Linked or unlinked</option><option value="LINKED" {% if account_link == 'LINKED' %}selected{% endif %}>Linked to Person</option><option value="UNLINKED" {% if account_link == 'UNLINKED' %}selected{% endif %}>Unlinked account</option></select></label>
+    <button class="secondary">Apply filters</button>
+  </form>
+  {% if created_user %}<div class="alert success" role="status"><strong>Account created for {{ created_user.display_name }}.</strong> {{ created_user.email }} can now be managed below. No rosterable Person was created.</div>{% endif %}
+  <div class="account-list">
+    {% for account in users %}<article id="account-{{ account.id }}"{% if created_user and created_user.id == account.id %} class="created-record"{% endif %}>
+      <div>
+        <strong>{% if links_by_user.get(account.id) %}<a href="/manage/crew/{{ links_by_user[account.id] }}#account">{{ account.display_name }}</a>{% else %}{{ account.display_name }}{% endif %}</strong>
+        <small>{{ account.email }} · {{ account.status|title }} · {{ 'Linked to Person' if links_by_user.get(account.id) else 'Unlinked account' }}{% if actor.is_admin %} · {{ device_counts[account.id] }} active device(s){% endif %}</small>
+        <small>{% for grant in account_grants.get(account.id, []) %}{{ grant.role|replace('_',' ')|title }}{% if grant.region_id %} · {{ region_names.get(grant.region_id, 'Unknown Region') }}{% endif %} · {{ 'Awaiting account sign-in' if grant.status == 'PENDING' else 'Active' }}{% if not loop.last %}<br>{% endif %}{% else %}No active or pending authority{% endfor %}</small>
+      </div>
+      {% if actor.is_admin and account.id != user.id %}<div class="row-actions">
+        {% if account.status == 'ACTIVE' %}<form method="post" action="/admin/users/{{ account.id }}/credential-reset" data-fresh-auth><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Reset credential</button></form>{% endif %}
+        <form method="post" action="/admin/users/{{ account.id }}/devices/revoke" data-fresh-auth><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">Sign out all devices</button></form>
+        <form method="post" action="/admin/users/{{ account.id }}/status" data-fresh-auth><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="account_status" value="{% if account.status == 'ACTIVE' %}DISABLED{% else %}ACTIVE{% endif %}"><button class="secondary">{% if account.status == 'ACTIVE' %}Disable account{% else %}Activate account{% endif %}</button></form>
+      </div>{% endif %}
+    </article>{% else %}<p class="muted">No accounts match these filters.</p>{% endfor %}
+  </div>
+</section>

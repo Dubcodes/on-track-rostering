@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote, urlsplit
@@ -18,10 +19,11 @@ from app.auth.network import same_origin
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.time import utcnow
-from app.identity.models import LoginThrottle, RoleGrant, TrustedDevice, User
+from app.identity.models import FreshActionIntent, LoginThrottle, RoleGrant, TrustedDevice, User
 
 SESSION_COOKIE = "ontrack_session"
 CSRF_COOKIE = "ontrack_csrf"
+FRESH_ACTION_COOKIE = "ontrack_fresh_action"
 ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2, hash_len=32, salt_len=16)
 ELEVATED_ROLES = {Role.SUB_MANAGER.value, Role.MANAGER.value, Role.VIEWER.value, Role.ADMIN.value}
 
@@ -39,11 +41,9 @@ def credential_error(secret: str, role: str) -> str:
         if secret.isascii() and secret.isdigit():
             return "" if 8 <= len(secret) <= 64 else "Admin PIN must contain at least 8 digits."
         return "" if len(secret) >= 12 else "Admin password must contain at least 12 characters."
-    return (
-        ""
-        if secret.isascii() and secret.isdigit() and 6 <= len(secret) <= 32
-        else "PIN must contain 6–32 digits."
-    )
+    if secret.isascii() and secret.isdigit():
+        return "" if 6 <= len(secret) <= 32 else "PIN must contain 6–32 digits."
+    return "" if len(secret) >= 12 else "Password must contain at least 12 characters."
 
 
 def hash_credential(secret: str) -> str:
@@ -198,13 +198,111 @@ def create_device(db: Session, user: User, label: str = "Browser") -> tuple[str,
     return session_token, csrf_token, device
 
 
-def require_fresh_auth(request: Request) -> None:
+_FRESH_ACTION_PATHS = (
+    re.compile(r"^/admin/(users|invitations)(/[^/]+(?:/(?:status|devices/revoke|credential-reset|revoke))?)?$"),
+    re.compile(r"^/admin/signup-requests/[^/]+/reject$"),
+    re.compile(r"^/manage/accounts/(?:link-person|invitations(?:/[^/]+/revoke)?|contractors/[^/]+/(?:invite|extend)|people-invitations|people-metadata/apply|signup-requests/[^/]+/(?:approve|reject)|grants(?:/[^/]+/revoke)?)$"),
+    re.compile(r"^/manage/crew$"),
+    re.compile(r"^/manage/crew/[^/]+/(?:setup-link(?:/revoke)?|account-status|employment-type|credential-reset|devices/revoke|sub-manager|notice-scope|grants(?:/[^/]+/revoke)?)$"),
+)
+
+
+def allowed_fresh_action_path(value: str) -> str | None:
+    path = safe_return_path(value, fallback="")
+    if not path or "?" in path:
+        return None
+    return path if any(pattern.fullmatch(path) for pattern in _FRESH_ACTION_PATHS) else None
+
+
+def create_fresh_action_intent(
+    db: Session, *, user_id: object, device_id: object, action_path: str
+) -> str:
+    path = allowed_fresh_action_path(action_path)
+    if not path:
+        raise ValueError("That action cannot be reauthenticated here.")
+    now = utcnow()
+    db.execute(
+        delete(FreshActionIntent).where(
+            FreshActionIntent.device_id == device_id,
+            (FreshActionIntent.consumed_at.is_not(None)) | (FreshActionIntent.expires_at <= now),
+        )
+    )
+    raw = secrets.token_urlsafe(32)
+    db.add(
+        FreshActionIntent(
+            user_id=user_id,
+            device_id=device_id,
+            token_hash=token_hash(raw),
+            action_path=path,
+            expires_at=now + timedelta(minutes=2),
+        )
+    )
+    db.commit()
+    return raw
+
+
+def consume_fresh_action_intent(
+    db: Session,
+    *,
+    raw_token: str,
+    user_id: object,
+    device_id: object,
+    action_path: str,
+) -> bool:
+    """Atomically consume one intent bound to one device, user, and action."""
+    if not raw_token:
+        return False
+    intent = db.scalar(
+        select(FreshActionIntent)
+        .where(FreshActionIntent.token_hash == token_hash(raw_token))
+        .with_for_update()
+    )
+    now = utcnow()
+    expires_at = intent.expires_at if intent else None
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (
+        not intent
+        or intent.user_id != user_id
+        or intent.device_id != device_id
+        or intent.action_path != action_path
+        or intent.consumed_at is not None
+        or expires_at is None
+        or expires_at <= now
+    ):
+        return False
+    intent.consumed_at = now
+    db.flush()
+    return True
+
+
+def _consume_fresh_action_intent(request: Request, db: Session) -> bool:
+    raw = request.cookies.get(FRESH_ACTION_COOKIE, "")
+    device = getattr(request.state, "device", None)
+    user = getattr(request.state, "user", None)
+    if not raw or not device or not user:
+        return False
+    consumed = consume_fresh_action_intent(
+        db,
+        raw_token=raw,
+        user_id=user.id,
+        device_id=device.id,
+        action_path=request.url.path,
+    )
+    if consumed:
+        request.state.fresh_action_consumed = True
+    return consumed
+
+
+def require_fresh_auth(request: Request, db: Session | None = None) -> None:
     device = getattr(request.state, "device", None)
     authenticated_at = device.primary_authenticated_at if device else None
     if authenticated_at and authenticated_at.tzinfo is None:
         authenticated_at = authenticated_at.replace(tzinfo=UTC)
     cutoff = utcnow() - timedelta(minutes=get_settings().fresh_auth_minutes)
-    if not authenticated_at or authenticated_at < cutoff:
+    if (not authenticated_at or authenticated_at < cutoff) and not (
+        db is not None and _consume_fresh_action_intent(request, db)
+    ):
         raise FreshAuthenticationRequired()
 
 

@@ -48,6 +48,7 @@ from app.external_calendar.refresh import RefreshResult
 from app.hours.service import fortnight_bounds, published_hours
 from app.identity.models import (
     CredentialReset,
+    FreshActionIntent,
     Invitation,
     LoginThrottle,
     PasskeyCredential,
@@ -582,7 +583,12 @@ def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -
     assert mismatch.status_code == 400 and "confirmation did not match" in mismatch.text
     activated = public.post(
         "/invite/activate",
-        data={"token": raw, "display_name": "Invitee", "credential": "123456", "confirmation": "123456"},
+        data={
+            "token": raw,
+            "display_name": "Invitee",
+            "credential": "ordinary password",
+            "confirmation": "ordinary password",
+        },
         follow_redirects=False,
     )
     assert activated.status_code == 303
@@ -590,7 +596,12 @@ def test_invitation_secret_uses_fragment_reveal_and_body_activation(routed_db) -
     assert public.get("/month").status_code == 200
     repeated = public.post(
         "/invite/activate",
-        data={"token": raw, "display_name": "Invitee", "credential": "123456", "confirmation": "123456"},
+        data={
+            "token": raw,
+            "display_name": "Invitee",
+            "credential": "ordinary password",
+            "confirmation": "ordinary password",
+        },
     )
     assert repeated.status_code == 400
 
@@ -1301,7 +1312,7 @@ def test_admin_manages_person_regional_manager_grant_with_named_scope(routed_db)
     )
     assert granted.status_code == 303
     detail = admin.get(f"/manage/crew/{person_id}")
-    assert "Manager" in detail.text and "Southern · Pending" in detail.text
+    assert "Manager" in detail.text and "Southern · Awaiting account sign-in" in detail.text
     with factory() as db:
         account = db.scalar(select(User).join(UserPersonLink).where(UserPersonLink.person_id == person_id))
         grant = db.scalar(
@@ -1321,6 +1332,223 @@ def test_admin_manages_person_regional_manager_grant_with_named_scope(routed_db)
     assert revoked.status_code == 303
     with factory() as db:
         assert db.get(RoleGrant, grant_id).status == "REVOKED"
+    revoked_detail = admin.get(f"/manage/crew/{person_id}")
+    assert "Removed access" in revoked_detail.text
+    assert "Southern · Revoked" in revoked_detail.text
+
+
+def test_person_permission_editor_stages_multiple_regions_without_replacing_existing_access(
+    routed_db,
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, person_id) = routed_db
+    with factory() as db:
+        southern_id = db.scalar(select(Region.id).where(Region.name == "Southern"))
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    response = admin.post(
+        f"/manage/crew/{person_id}/grants",
+        data={
+            "role": "VIEWER",
+            "region_ids": [str(region_id), str(southern_id)],
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with factory() as db:
+        account = db.scalar(
+            select(User).join(UserPersonLink).where(UserPersonLink.person_id == person_id)
+        )
+        viewer_regions = set(
+            db.scalars(
+                select(RoleGrant.region_id).where(
+                    RoleGrant.user_id == account.id,
+                    RoleGrant.role == "VIEWER",
+                    RoleGrant.status == "PENDING",
+                )
+            )
+        )
+        assert viewer_regions == {region_id, southern_id}
+        assert db.scalar(
+            select(RoleGrant.id).where(
+                RoleGrant.user_id == account.id,
+                RoleGrant.role == "EMPLOYEE",
+                RoleGrant.status == "ACTIVE",
+            )
+        )
+
+
+def test_admin_can_stage_and_activate_a_second_administrator(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (_region_id, _track_id, _position_id, person_id) = routed_db
+    with factory() as db:
+        account = db.scalar(
+            select(User).join(UserPersonLink).where(UserPersonLink.person_id == person_id)
+        )
+        account.credential_hash = hash_credential("87654321")
+        account.credential_kind = "pin"
+        account.credential_admin_eligible = True
+        db.commit()
+        account_id = account.id
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    staged = admin.post(
+        f"/manage/crew/{person_id}/grants",
+        data={"role": "ADMIN", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert staged.status_code == 303
+    with factory() as db:
+        grant = db.scalar(
+            select(RoleGrant).where(
+                RoleGrant.user_id == account_id,
+                RoleGrant.role == "ADMIN",
+            )
+        )
+        assert grant and grant.status == "PENDING" and grant.region_id is None
+
+    promoted = TestClient(app)
+    promoted_csrf = _login(promoted, "amy@example.test", "87654321")
+    assert promoted_csrf
+    with factory() as db:
+        assert db.scalar(
+            select(func.count()).select_from(RoleGrant).where(
+                RoleGrant.role == "ADMIN",
+                RoleGrant.status == "ACTIVE",
+            )
+        ) == 2
+
+
+def test_fresh_authentication_executes_only_one_bound_action(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, person_id) = routed_db
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    with factory() as db:
+        admin_user = db.scalar(select(User).where(User.email == "admin@example.test"))
+        device = db.scalar(
+            select(TrustedDevice)
+            .where(
+                TrustedDevice.user_id == admin_user.id,
+                TrustedDevice.revoked_at.is_(None),
+            )
+            .order_by(TrustedDevice.created_at.desc())
+        )
+        device.primary_authenticated_at = utcnow() - timedelta(hours=1)
+        db.commit()
+
+    duplicate = admin.post(
+        "/admin/users",
+        data={
+            "display_name": "Duplicate Admin",
+            "email": "admin@example.test",
+            "credential": "123456",
+            "role": "EMPLOYEE",
+            "region_id": str(region_id),
+            "person_id": "",
+            "csrf_token": csrf,
+        },
+    )
+    assert duplicate.status_code == 422
+    assert "Account not created" in duplicate.text
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(FreshActionIntent)) == 0
+
+    action = f"/manage/crew/{person_id}/grants"
+    failed = admin.post(
+        "/settings/reauthenticate",
+        data={
+            "credential": "wrong credential",
+            "csrf_token": csrf,
+            "action": action,
+        },
+        headers={"Accept": "application/json"},
+    )
+    assert failed.status_code == 400
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(FreshActionIntent)) == 0
+
+    confirmed = admin.post(
+        "/settings/reauthenticate",
+        data={
+            "credential": "99887766",
+            "csrf_token": csrf,
+            "action": action,
+        },
+        headers={"Accept": "application/json"},
+    )
+    assert confirmed.status_code == 200
+    assert admin.cookies.get("ontrack_fresh_action")
+
+    wrong_action = admin.post(
+        f"/manage/crew/{person_id}/account-status",
+        data={"account_status": "DISABLED", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert wrong_action.status_code == 403
+
+    granted = admin.post(
+        action,
+        data={"role": "VIEWER", "region_ids": str(region_id), "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert granted.status_code == 303
+    replay = admin.post(
+        action,
+        data={"role": "SUB_MANAGER", "region_ids": str(region_id), "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert replay.status_code == 403
+    with factory() as db:
+        intent = db.scalar(select(FreshActionIntent))
+        assert intent and intent.consumed_at is not None
+        account = db.scalar(
+            select(User).join(UserPersonLink).where(UserPersonLink.person_id == person_id)
+        )
+        roles = set(
+            db.scalars(
+                select(RoleGrant.role).where(
+                    RoleGrant.user_id == account.id,
+                    RoleGrant.status != "REVOKED",
+                )
+            )
+        )
+        assert "VIEWER" in roles
+        assert "SUB_MANAGER" not in roles
+        assert account.status == "ACTIVE"
+
+
+def test_bound_fresh_authentication_intent_expires_without_mutation(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, _position_id, person_id) = routed_db
+    admin = TestClient(app)
+    csrf = _login(admin, "admin@example.test", "99887766")
+    with factory() as db:
+        admin_user = db.scalar(select(User).where(User.email == "admin@example.test"))
+        device = db.scalar(
+            select(TrustedDevice)
+            .where(
+                TrustedDevice.user_id == admin_user.id,
+                TrustedDevice.revoked_at.is_(None),
+            )
+            .order_by(TrustedDevice.created_at.desc())
+        )
+        device.primary_authenticated_at = utcnow() - timedelta(hours=1)
+        db.commit()
+    action = f"/manage/crew/{person_id}/grants"
+    confirmed = admin.post(
+        "/settings/reauthenticate",
+        data={"credential": "99887766", "csrf_token": csrf, "action": action},
+        headers={"Accept": "application/json"},
+    )
+    assert confirmed.status_code == 200
+    with factory() as db:
+        intent = db.scalar(select(FreshActionIntent))
+        intent.expires_at = utcnow() - timedelta(seconds=1)
+        db.commit()
+    expired = admin.post(
+        action,
+        data={"role": "VIEWER", "region_ids": str(region_id), "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert expired.status_code == 403
 
 
 def test_employee_can_revoke_only_own_trusted_device(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -1355,6 +1583,34 @@ def test_employee_can_revoke_only_own_trusted_device(routed_db) -> None:  # type
     assert employee.cookies.get("ontrack_session") is None
     assert employee.cookies.get("ontrack_csrf") is None
     assert employee.get("/month", follow_redirects=False).status_code == 303
+
+
+def test_device_labels_and_sign_out_other_devices_preserve_current_session(routed_db) -> None:  # type: ignore[no-untyped-def]
+    first = TestClient(app, headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/140.0"})
+    _login(first, "amy@example.test", "654321")
+    second = TestClient(app, headers={"user-agent": "Mozilla/5.0 (iPhone) Version/18 Safari/605.1"})
+    csrf = _login(second, "amy@example.test", "654321")
+    settings = second.get("/settings")
+    assert "Safari on iPhone or iPad" in settings.text
+    assert "Chrome on Windows" in settings.text
+    assert "Technical details" in settings.text
+    revoked = second.post(
+        "/settings/devices/revoke-others",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert revoked.status_code == 303
+    assert second.get("/settings").status_code == 200
+    assert first.get("/month", follow_redirects=False).status_code == 303
+    all_revoked = second.post(
+        "/settings/devices/revoke-all",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert all_revoked.status_code == 303
+    assert all_revoked.headers["location"] == "/login"
+    assert second.cookies.get("ontrack_session") is None
+    assert second.get("/month", follow_redirects=False).status_code == 303
 
 
 def test_logout_does_not_resurrect_deleted_authentication_cookies(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -3028,6 +3284,7 @@ def test_contractor_online_and_offline_day_rows_are_personal(routed_db) -> None:
     online = employee.get(f"/day/{workday_id}")
     assert "South Crew" in online.text and "Amy Crew" in online.text and "Casey Other" in online.text
     assert "Casey Other moved to a private role" in online.text
+    assert online.text.index("Important notes") < online.text.index("Published crew")
     employee_api = employee.get(f"/api/day/{workday_id}").json()
     assert [row["person"] for row in employee_api["workday"]["assignments"]] == ["Amy Crew"]
     assert employee_api["workday"]["assignments"][0]["note"] == "Amy private note"
@@ -3037,6 +3294,16 @@ def test_contractor_online_and_offline_day_rows_are_personal(routed_db) -> None:
     manager_api = manager.get(f"/api/day/{workday_id}").json()
     assert manager_api["offline_cacheable"] is False
     assert manager_api["workday"]["assignments"] == []
+
+
+def test_single_region_crew_calendar_omits_region_toolbar(routed_db) -> None:  # type: ignore[no-untyped-def]
+    employee = TestClient(app)
+    _login(employee, "amy@example.test", "654321")
+
+    crew = employee.get("/crew")
+
+    assert crew.status_code == 200
+    assert 'class="crew-toolbar"' not in crew.text
 
 
 def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -4047,6 +4314,38 @@ def test_passkey_options_and_totp_login_flow(routed_db) -> None:  # type: ignore
     assert completed.status_code == 303
     assert manager_client.cookies.get("ontrack_session")
 
+    with factory() as db:
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        manager.credential_hash = hash_credential("manager password")
+        manager.credential_kind = "password"
+        db.get(TotpFactor, manager.id).last_counter = None
+        db.commit()
+    password_client = TestClient(app)
+    password_first = password_client.post(
+        "/login/password",
+        data={
+            "email": "manager@example.test",
+            "credential": "manager password",
+            "next": "/settings",
+        },
+        follow_redirects=False,
+    )
+    assert password_first.status_code == 303
+    assert password_first.headers["location"].startswith("/login/totp?")
+    password_query = parse_qs(urlsplit(password_first.headers["location"]).query)
+    password_completed = password_client.post(
+        "/login/totp",
+        data={
+            "challenge_id": password_query["challenge_id"][0],
+            "code": pyotp.TOTP(secret).now(),
+            "next": "/settings",
+        },
+        follow_redirects=False,
+    )
+    assert password_completed.status_code == 303
+    assert password_completed.headers["location"] == "/settings"
+    assert password_client.cookies.get("ontrack_session")
+
 
 def test_login_methods_apply_server_authoritative_safe_return_policy(
     routed_db, monkeypatch
@@ -4112,6 +4411,41 @@ def test_login_methods_apply_server_authoritative_safe_return_policy(
     )
     assert verified.status_code == 200
     assert verified.json()["next"] == "/month"
+
+
+def test_pin_first_and_password_login_routes_share_authentication_backend(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, _ids = routed_db
+    pin_page = TestClient(app).get("/login?next=/settings")
+    assert pin_page.status_code == 200
+    assert 'action="/login"' in pin_page.text
+    assert 'inputmode="numeric"' in pin_page.text
+    assert "/login/password?next=/settings" in pin_page.text
+
+    password_page = TestClient(app).get("/login/password?next=/settings")
+    assert password_page.status_code == 200
+    assert 'action="/login/password"' in password_page.text
+    assert ">Password<" in password_page.text
+    assert 'inputmode="numeric"' not in password_page.text
+    assert "/login?next=/settings" in password_page.text
+
+    with factory() as db:
+        amy = db.scalar(select(User).where(User.email == "amy@example.test"))
+        amy.credential_hash = hash_credential("ordinary password")
+        amy.credential_kind = "password"
+        db.commit()
+    client = TestClient(app)
+    signed_in = client.post(
+        "/login/password",
+        data={
+            "email": "amy@example.test",
+            "credential": "ordinary password",
+            "next": "/settings",
+        },
+        follow_redirects=False,
+    )
+    assert signed_in.status_code == 303
+    assert signed_in.headers["location"] == "/settings"
+    assert client.cookies.get("ontrack_session")
 
 
 def test_passkey_challenge_creation_and_totp_guessing_are_throttled(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -4481,6 +4815,29 @@ def test_configurable_favicon_is_bounded_persistent_audited_and_public(
         assert [event.detail["had_custom_icon"] for event in resets] == [True, False]
 
 
+def test_advanced_account_directory_filters_link_and_scoped_authority(routed_db) -> None:  # type: ignore[no-untyped-def]
+    _factory, (region_id, _track_id, _position_id, _person_id) = routed_db
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+
+    result = admin.get(
+        "/manage/accounts",
+        params={
+            "account_q": "viewer@example.test",
+            "account_status": "ACTIVE",
+            "account_role": "VIEWER",
+            "account_region": str(region_id),
+            "account_link": "UNLINKED",
+        },
+    )
+
+    assert result.status_code == 200
+    assert "viewer@example.test" in result.text
+    assert "Viewer · Northern · Active" in result.text
+    assert "admin@example.test" not in result.text
+    assert "Unlinked account" in result.text
+
+
 def test_management_workspaces_consolidate_controls_and_primary_region(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, position_id, person_id) = routed_db
     admin = TestClient(app)
@@ -4530,6 +4887,12 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
     manager_accounts = manager.get("/manage/accounts").text
     assert 'action="/admin/users"' not in manager_accounts
     assert 'action="/admin/invitations"' not in manager_accounts
+    assert '<option value="MANAGER"' not in manager_accounts
+    assert '<option value="ADMIN"' not in manager_accounts
+    assert "<small>manager@example.test" not in manager_accounts
+    assert "admin@example.test" not in manager.get(
+        "/manage/accounts?account_role=ADMIN"
+    ).text
     manager_settings = manager.get("/settings").text
     assert 'href="/crew"' not in manager_settings
     assert 'href="/manage"' in manager_settings
@@ -4549,8 +4912,9 @@ def test_management_workspaces_consolidate_controls_and_primary_region(routed_db
     assert f'href="/manage/crew/{person_id}"' in filtered_crew.text
     person_detail = manager.get(f"/manage/crew/{person_id}")
     assert person_detail.status_code == 200
-    assert f"Person {person_id}" in person_detail.text
-    assert "Account " in person_detail.text
+    assert "Amy Crew" in person_detail.text
+    assert f"Person {person_id}" not in person_detail.text
+    assert "Account &amp; access" in person_detail.text
     assert "data-person-editor" in person_detail.text
     assert "Reset PIN/password" in person_detail.text
     with factory() as db:

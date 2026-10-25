@@ -407,15 +407,34 @@ def crew_person_response(
             .order_by(RoleGrant.granted_at)
         )
     ) if account and can_control_account else []
+    revoked_grants = list(
+        db.scalars(
+            select(RoleGrant)
+            .where(RoleGrant.user_id == account.id, RoleGrant.status == "REVOKED")
+            .order_by(RoleGrant.revoked_at.desc())
+            .limit(10)
+        )
+    ) if account and can_control_account else []
     region_names = {
         region.id: region.name
-        for region in db.scalars(select(Region).where(Region.lifecycle == "ACTIVE"))
+        for region in db.scalars(select(Region))
     }
-    grant_choices = [
-        (role.value, region.id, region.name)
-        for region in regions
-        for role in Role
-        if role != Role.ADMIN and can_grant_role(request.state.actor, role.value, region.id)
+    authority_roles = [Role.VIEWER, Role.SUB_MANAGER, Role.MANAGER]
+    existing_grant_keys = {
+        (grant.role, grant.region_id) for grant in grants if grant.status != "REVOKED"
+    }
+    authority_options = [
+        {
+            "role": role.value,
+            "label": role.value.replace("_", " ").title(),
+            "regions": [
+                region
+                for region in regions
+                if can_grant_role(request.state.actor, role.value, region.id)
+            ],
+        }
+        for role in authority_roles
+        if any(can_grant_role(request.state.actor, role.value, region.id) for region in regions)
     ] if account and can_control_account else []
     devices = list(
         db.scalars(
@@ -484,8 +503,21 @@ def crew_person_response(
             },
             account=account,
             grants=grants,
+            revoked_grants=revoked_grants,
             region_names=region_names,
-            grant_choices=grant_choices,
+            existing_grant_keys=existing_grant_keys,
+            revocable_grant_ids={
+                grant.id
+                for grant in grants
+                if can_grant_role(request.state.actor, grant.role, grant.region_id)
+            },
+            authority_options=authority_options,
+            can_stage_admin=bool(
+                account
+                and can_control_account
+                and can_grant_role(request.state.actor, Role.ADMIN.value, None)
+                and (Role.ADMIN.value, None) not in existing_grant_keys
+            ),
             devices=devices,
             last_seen=devices[0].last_seen_at if devices else None,
             setup_state=setup_state,
@@ -720,7 +752,7 @@ def create_person_setup_link(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     person = _person_in_scope(db, request, person_id, allow_unassigned_admin=True)
     if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value, Role.MANAGER.value}:
         raise HTTPException(403, "That account role is not available here.")
@@ -775,7 +807,7 @@ def update_person_account_status(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     _person, account = _controlled_account(
         db, request, person_id, allow_operational_assist=True
     )
@@ -823,7 +855,7 @@ def update_person_employment_type(
 ):
     """Atomically replace an ordinary Employee/Casual classification."""
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     person, account = _controlled_account(db, request, person_id)
     account = db.scalar(select(User).where(User.id == account.id).with_for_update())
     if account is None:
@@ -897,7 +929,7 @@ def revoke_person_setup_link(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     person = _person_in_scope(db, request, person_id)
     invitation = db.scalar(
         select(Invitation)
@@ -933,7 +965,7 @@ def reset_person_credential(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     _person, account = _controlled_account(
         db, request, person_id, allow_operational_assist=True
     )
@@ -971,7 +1003,7 @@ def revoke_person_devices(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     _person, account = _controlled_account(db, request, person_id)
     query = select(TrustedDevice).where(
         TrustedDevice.user_id == account.id, TrustedDevice.revoked_at.is_(None)
@@ -995,7 +1027,7 @@ def update_person_sub_manager(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     person, account = _controlled_account(db, request, person_id)
     region_id = person.home_region_id
     grant = db.scalar(
@@ -1035,7 +1067,7 @@ def update_person_notice_scope(
     if not request.state.actor.is_admin:
         raise HTTPException(403, "Admin authority required.")
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     person = _person_in_scope(db, request, person_id, allow_unassigned_admin=True)
     account = db.scalar(
         select(User).join(UserPersonLink).where(UserPersonLink.person_id == person.id)
@@ -1103,7 +1135,7 @@ def create_crew_member(
         errors["email"] = str(exc)
     create_setup = action == "person_invitation"
     if create_setup:
-        require_fresh_auth(request)
+        require_fresh_auth(request, db)
         if not clean_email:
             errors["email"] = "A unique work email is required to create a setup link."
         if not parsed_region_id:
@@ -1183,18 +1215,39 @@ def add_person_role_grant(
     person_id: uuid.UUID,
     request: Request,
     role: str = Form(...),
-    region_id: uuid.UUID = Form(...),
+    region_id: uuid.UUID | None = Form(None),
+    region_ids: list[uuid.UUID] = Form([]),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     _person, account = _controlled_account(db, request, person_id)
+    selected_regions: list[uuid.UUID | None]
+    if role == Role.ADMIN.value:
+        if region_id or region_ids:
+            raise HTTPException(400, "System Administrator access is global.")
+        selected_regions = [None]
+    else:
+        selected_regions = list(dict.fromkeys(region_ids or ([region_id] if region_id else [])))
+        if not selected_regions:
+            raise HTTPException(400, "Select at least one Region.")
     try:
-        grant_role(db, actor=request.state.actor, target_user=account, role=role, region_id=region_id)
+        for selected_region_id in selected_regions:
+            grant_role(
+                db,
+                actor=request.state.actor,
+                target_user=account,
+                role=role,
+                region_id=selected_region_id,
+                commit=False,
+            )
+        db.commit()
     except PermissionError as exc:
+        db.rollback()
         raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(409, str(exc)) from exc
     return RedirectResponse(f"/manage/crew/{person_id}#account", status_code=303)
 
@@ -1208,7 +1261,7 @@ def revoke_person_role_grant(
     db: Session = Depends(get_db),
 ):
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     _person, account = _controlled_account(db, request, person_id)
     grant = db.get(RoleGrant, grant_id)
     if not grant or grant.user_id != account.id:

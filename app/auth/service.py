@@ -376,6 +376,7 @@ def grant_role(
     target_user: User,
     role: str,
     region_id: uuid.UUID | None,
+    commit: bool = True,
 ) -> RoleGrant:
     locked_target = db.scalar(
         select(User).where(User.id == target_user.id).with_for_update()
@@ -459,7 +460,8 @@ def grant_role(
         region_id=region_id,
         detail={"role": role, "target_user_id": str(target_user.id)},
     )
-    db.commit()
+    if commit:
+        db.commit()
     return grant
 
 

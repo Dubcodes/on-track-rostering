@@ -4,14 +4,15 @@
 <section class="auth-card">
   <p class="eyebrow">Authoritative race-day rostering</p>
   <h1>Good to see you.</h1>
-  <p class="lede">Sign in with your account email and PIN or password.</p>
+  {% if credential_mode == 'password' %}<p class="lede">Sign in with your account email and password.</p>{% else %}<p class="lede">Sign in with your account email and PIN.</p>{% endif %}
   {% if error %}<div class="alert error" role="alert">{{ error }}</div>{% endif %}
-  <form method="post" action="/login" class="stack">
+  <form method="post" action="{{ '/login/password' if credential_mode == 'password' else '/login' }}" class="stack">
     <input type="hidden" name="next" value="{{ next }}">
     <label>Email<input name="email" type="email" autocomplete="username" required autofocus></label>
-    <label>PIN or password<input name="credential" type="password" autocomplete="current-password" required></label>
+    {% if credential_mode == 'password' %}<label>Password<span class="password-control"><input name="credential" type="password" autocomplete="current-password" required data-secret-input><button type="button" class="secondary" data-secret-toggle aria-label="Show password">Show</button></span></label>{% else %}<label>PIN<span class="password-control"><input name="credential" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password" required data-secret-input><button type="button" class="secondary" data-secret-toggle aria-label="Show PIN">Show</button></span></label>{% endif %}
     <button type="submit">Sign in</button>
   </form>
+  <p class="muted">{% if credential_mode == 'password' %}<a href="/login?next={{ next|urlencode }}">Use a PIN instead</a>{% else %}<a href="/login/password?next={{ next|urlencode }}">Use a password instead</a>{% endif %}</p>
   <div class="stack"><button id="passkey-login" class="secondary" type="button" data-next="{{ next }}">Sign in with a passkey</button><p class="muted" data-passkey-login-status></p></div>
   <p class="muted"><a href="/signup">Request an account</a></p>
 </section>

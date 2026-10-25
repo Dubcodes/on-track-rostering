@@ -24,7 +24,12 @@ from app.auth.factors import (
     verify_totp_factor,
 )
 from app.auth.policy import Actor
-from app.auth.security import hash_credential
+from app.auth.security import (
+    consume_fresh_action_intent,
+    create_device,
+    create_fresh_action_intent,
+    hash_credential,
+)
 from app.auth.service import (
     CREDENTIAL_RESET_UNAVAILABLE,
     activate_pending_grants,
@@ -147,6 +152,55 @@ def test_postgres_credential_reset_token_has_exactly_one_consumer(pg_factory) ->
     assert failures == [CREDENTIAL_RESET_UNAVAILABLE]
     with pg_factory() as db:
         assert db.get(CredentialReset, reset_id).consumed_at is not None
+
+
+def test_postgres_fresh_action_intent_has_exactly_one_consumer(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    suffix = uuid.uuid4().hex[:10]
+    action_path = "/manage/accounts/link-person"
+    with pg_factory() as db:
+        user = User(
+            email=f"fresh-action-{suffix}@example.com",
+            display_name="Fresh action manager",
+            credential_hash=hash_credential("123456"),
+            credential_kind="pin",
+        )
+        db.add(user)
+        db.flush()
+        db.add(RoleGrant(user_id=user.id, role=Role.MANAGER.value, status="ACTIVE"))
+        db.commit()
+        _, _, device = create_device(db, user, "PostgreSQL concurrency test")
+        raw = create_fresh_action_intent(
+            db,
+            user_id=user.id,
+            device_id=device.id,
+            action_path=action_path,
+        )
+        user_id = user.id
+        device_id = device.id
+
+    barrier = threading.Barrier(2)
+    outcomes: list[bool] = []
+
+    def attempt() -> None:
+        with pg_factory() as db:
+            barrier.wait(timeout=10)
+            consumed = consume_fresh_action_intent(
+                db,
+                raw_token=raw,
+                user_id=user_id,
+                device_id=device_id,
+                action_path=action_path,
+            )
+            db.commit()
+            outcomes.append(consumed)
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert sorted(outcomes) == [False, True]
 
 
 def test_postgres_privilege_grant_and_regional_reset_linearize_safely(pg_factory) -> None:  # type: ignore[no-untyped-def]

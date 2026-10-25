@@ -417,7 +417,7 @@ def create_user(
             direct_errors=errors,
             status_code=422,
         )
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     user = User(
         email=user_email,
         display_name=clean_name,
@@ -475,7 +475,7 @@ def invite_user(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     form_state = {
         "display_name": display_name,
         "email": email,
@@ -529,7 +529,7 @@ def update_user_status(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     if user_id == request.state.user.id:
         raise HTTPException(400, "You cannot disable your own active Admin session.")
     if account_status not in {"ACTIVE", "DISABLED"}:
@@ -600,7 +600,7 @@ def issue_credential_reset(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     if user_id == request.state.user.id:
         raise HTTPException(400, "Use Settings to change your own credential.")
     user = db.get(User, user_id)
@@ -636,7 +636,7 @@ def revoke_user_devices(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404)
@@ -661,7 +661,7 @@ def revoke_invitation(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     invitation = db.get(Invitation, invitation_id)
     if not invitation or invitation.consumed_at:
         raise HTTPException(409, "Invitation is unavailable.")
@@ -682,7 +682,7 @@ def reject_signup(
 ):
     _admin(request)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     signup = db.get(SignupRequest, signup_id)
     if not signup or signup.status != "PENDING":
         raise HTTPException(409, "Signup request is no longer pending.")

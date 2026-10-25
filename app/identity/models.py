@@ -114,6 +114,20 @@ class TrustedDevice(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class FreshActionIntent(Base):
+    __tablename__ = "fresh_action_intents"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("trusted_devices.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    action_path: Mapped[str] = mapped_column(String(300))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class LoginThrottle(Base):
     __tablename__ = "login_throttles"
     key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)

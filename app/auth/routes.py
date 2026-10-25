@@ -22,6 +22,7 @@ from app.auth.factors import (
 from app.auth.network import resolve_request
 from app.auth.security import (
     CSRF_COOKIE,
+    FRESH_ACTION_COOKIE,
     SESSION_COOKIE,
     challenge_throttle_key,
     clear_failures,
@@ -58,11 +59,22 @@ TOTP_LOGIN_COOKIE = "ontrack_totp_login"
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/month"):
     return templates.TemplateResponse(
-        "login.html", context(request, next=safe_return_path(next), error=""),
+        "login.html",
+        context(request, next=safe_return_path(next), error="", credential_mode="pin"),
         headers={"Cache-Control": "no-store"},
     )
 
 
+@router.get("/login/password", response_class=HTMLResponse)
+def password_login_page(request: Request, next: str = "/month"):
+    return templates.TemplateResponse(
+        "login.html",
+        context(request, next=safe_return_path(next), error="", credential_mode="password"),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/login/password")
 @router.post("/login")
 def login(
     request: Request,
@@ -72,6 +84,7 @@ def login(
     db: Session = Depends(get_db),
 ):
     next = safe_return_path(next)
+    credential_mode = "password" if request.url.path.endswith("/password") else "pin"
     email = normalise_email(email)
     keys = throttle_keys(email, resolve_request(request).client_address)
     user = db.scalar(select(User).where(User.email == email, User.status == "ACTIVE"))
@@ -89,8 +102,14 @@ def login(
             record_failure(db, key)
         return templates.TemplateResponse(
             "login.html",
-            context(request, next=next, error="Unable to sign in with those details."),
+            context(
+                request,
+                next=next,
+                error="Unable to sign in with those details.",
+                credential_mode=credential_mode,
+            ),
             status_code=400,
+            headers={"Cache-Control": "no-store"},
         )
     for key in keys:
         clear_failures(db, key)
@@ -98,7 +117,12 @@ def login(
     if not user_has_active_access(db, user.id):
         return templates.TemplateResponse(
             "login.html",
-            context(request, next=next, error="This account has no active access grant."),
+            context(
+                request,
+                next=next,
+                error="This account has no active access grant.",
+                credential_mode=credential_mode,
+            ),
             status_code=403,
             headers={"Cache-Control": "no-store"},
         )
@@ -107,7 +131,12 @@ def login(
         if any(is_throttled(db, key) for key in mfa_keys):
             return templates.TemplateResponse(
                 "login.html",
-                context(request, next=next, error="Too many authentication attempts. Try again later."),
+                context(
+                    request,
+                    next=next,
+                    error="Too many authentication attempts. Try again later.",
+                    credential_mode=credential_mode,
+                ),
                 status_code=429,
                 headers={"Cache-Control": "no-store"},
             )
@@ -120,7 +149,12 @@ def login(
         if any(is_throttled(db, key) for key in challenge_keys):
             return templates.TemplateResponse(
                 "login.html",
-                context(request, next=next, error="Too many authentication challenges. Try again later."),
+                context(
+                    request,
+                    next=next,
+                    error="Too many authentication challenges. Try again later.",
+                    credential_mode=credential_mode,
+                ),
                 status_code=429,
                 headers={"Cache-Control": "no-store"},
             )
@@ -133,6 +167,7 @@ def login(
                     request,
                     next=next,
                     error="This account requires authenticator MFA but has no active factor.",
+                    credential_mode=credential_mode,
                 ),
                 status_code=403,
             )
@@ -268,6 +303,7 @@ def logout(request: Request, csrf_token: str = Form(...), db: Session = Depends(
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")
+    response.delete_cookie(FRESH_ACTION_COOKIE, path="/")
     response.headers["Clear-Site-Data"] = '"cache", "storage"'
     return response
 

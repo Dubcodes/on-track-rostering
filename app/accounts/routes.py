@@ -87,7 +87,22 @@ def accounts_response(
         )
     linked_people = select(UserPersonLink.person_id)
     users_query = select(User)
+    visible_account_roles = (
+        [role.value for role in Role]
+        if request.state.actor.is_admin
+        else [
+            Role.EMPLOYEE.value,
+            Role.CASUAL.value,
+            Role.CONTRACTOR.value,
+            Role.SUB_MANAGER.value,
+            Role.VIEWER.value,
+        ]
+    )
     account_q = request.query_params.get("account_q", "").strip()
+    account_status = request.query_params.get("account_status", "").strip().upper()
+    account_role = request.query_params.get("account_role", "").strip().upper()
+    account_region = request.query_params.get("account_region", "").strip()
+    account_link = request.query_params.get("account_link", "").strip().upper()
     if not request.state.actor.is_admin:
         users_query = users_query.where(User.status == "ACTIVE")
         linked_user_ids = (
@@ -101,12 +116,65 @@ def accounts_response(
         users_query = users_query.where(
             User.id.in_(linked_user_ids) | User.id.in_(granted_user_ids)
         )
+        users_query = users_query.where(
+            User.id.not_in(
+                select(RoleGrant.user_id).where(
+                    RoleGrant.role.in_([Role.MANAGER.value, Role.ADMIN.value]),
+                    RoleGrant.status != "REVOKED",
+                )
+            )
+        )
     if account_q:
         term = f"%{account_q}%"
         users_query = users_query.where(
             or_(User.display_name.ilike(term), User.email.ilike(term))
         )
+    if account_status in {"ACTIVE", "DISABLED", "EXPIRED"}:
+        users_query = users_query.where(User.status == account_status)
+    if account_role in visible_account_roles:
+        users_query = users_query.where(
+            User.id.in_(
+                select(RoleGrant.user_id).where(
+                    RoleGrant.role == account_role,
+                    RoleGrant.status != "REVOKED",
+                )
+            )
+        )
+    try:
+        account_region_id = uuid.UUID(account_region) if account_region else None
+    except ValueError:
+        account_region_id = None
+    if account_region_id in region_ids:
+        users_query = users_query.where(
+            User.id.in_(
+                select(RoleGrant.user_id).where(
+                    RoleGrant.region_id == account_region_id,
+                    RoleGrant.status != "REVOKED",
+                )
+            )
+        )
+    if account_link == "LINKED":
+        users_query = users_query.where(User.id.in_(select(UserPersonLink.user_id)))
+    elif account_link == "UNLINKED":
+        users_query = users_query.where(User.id.not_in(select(UserPersonLink.user_id)))
     users = list(db.scalars(users_query.order_by(User.display_name)))
+    user_ids = [user.id for user in users]
+    account_grants: dict[uuid.UUID, list[RoleGrant]] = {user_id: [] for user_id in user_ids}
+    if user_ids:
+        account_grants_query = select(RoleGrant).where(
+            RoleGrant.user_id.in_(user_ids), RoleGrant.status != "REVOKED"
+        )
+        if not request.state.actor.is_admin:
+            account_grants_query = account_grants_query.where(
+                RoleGrant.region_id.in_(region_ids),
+                RoleGrant.role.in_(visible_account_roles),
+            )
+        for grant in db.scalars(account_grants_query.order_by(RoleGrant.role, RoleGrant.region_id)):
+            account_grants[grant.user_id].append(grant)
+    links_by_user = {
+        link.user_id: link.person_id
+        for link in db.scalars(select(UserPersonLink).where(UserPersonLink.user_id.in_(user_ids)))
+    } if user_ids else {}
     people_query = select(Person).where(
         Person.lifecycle == "ACTIVE", Person.id.not_in(linked_people)
     )
@@ -184,6 +252,13 @@ def accounts_response(
             people=people,
             users=users,
             account_q=account_q,
+            account_status=account_status,
+            account_role=account_role,
+            account_region=account_region,
+            account_link=account_link,
+            account_grants=account_grants,
+            links_by_user=links_by_user,
+            region_names={region.id: region.name for region in regions},
             created_user=created_user,
             device_counts=(
                 {user.id: active_device_count(db, user.id) for user in users}
@@ -195,15 +270,7 @@ def accounts_response(
             contractor_accounts=contractor_accounts,
             contractor_inactivity_days=request.state.system_settings.contractor_inactivity_days,
             unlinked_users=[user for user in users if db.get(UserPersonLink, user.id) is None],
-            account_roles=[
-                Role.EMPLOYEE.value,
-                Role.CASUAL.value,
-                Role.CONTRACTOR.value,
-                Role.SUB_MANAGER.value,
-                Role.MANAGER.value,
-                Role.VIEWER.value,
-                Role.ADMIN.value,
-            ],
+            account_roles=visible_account_roles,
             direct_account=direct_account,
             direct_errors=direct_errors or {},
             invitation_form=invitation_form,
@@ -285,7 +352,7 @@ def apply_people_metadata(
 ):
     require_admin(request.state.actor)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     rows = parse_metadata_csv(db, worksheet, _metadata_scope(request, db))
     try:
         count = apply_metadata_rows(db, rows)
@@ -305,7 +372,7 @@ def batch_people_invitations(
 ):
     require_admin(request.state.actor)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     if not confirm:
         raise HTTPException(400, "Confirm setup-link creation before continuing.")
     allowed = _metadata_scope(request, db)
@@ -365,7 +432,7 @@ def link_existing_person(
 ):
     region_ids = {region.id for region in _regions(request, db)}
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     if region_id not in region_ids:
         raise HTTPException(403)
     user = db.scalar(select(User).where(User.id == user_id).with_for_update())
@@ -422,7 +489,7 @@ def create_regional_invitation(
 ):
     region_ids = {region.id for region in _regions(request, db)}
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     if region_id not in region_ids:
         raise HTTPException(403)
     if role not in {Role.EMPLOYEE.value, Role.CASUAL.value, Role.CONTRACTOR.value, Role.SUB_MANAGER.value}:
@@ -483,7 +550,7 @@ def invite_contractor(
 ):
     region_ids = {region.id for region in _regions(request, db)}
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     person = db.get(Person, person_id)
     if (
         not person
@@ -529,7 +596,7 @@ def extend_contractor_access(
 ):
     region_ids = {region.id for region in _regions(request, db)}
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     user = db.get(User, user_id)
     link = db.get(UserPersonLink, user_id) if user else None
     person = db.get(Person, link.person_id) if link else None
@@ -578,7 +645,7 @@ def revoke_regional_invitation(
 ):
     region_ids = {region.id for region in _regions(request, db)}
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     invitation = db.get(Invitation, invitation_id)
     if (
         not invitation
@@ -613,7 +680,7 @@ def approve_signup_request(
 ):
     _regions(request, db)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     signup = db.get(SignupRequest, signup_id)
     if not signup:
         raise HTTPException(404)
@@ -655,7 +722,7 @@ def reject_signup_request(
 ):
     regions = _regions(request, db)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     signup = db.get(SignupRequest, signup_id)
     if not signup or signup.status != "PENDING":
         raise HTTPException(409, "Signup request is no longer pending.")
@@ -682,7 +749,7 @@ def create_role_grant(
 ):
     _regions(request, db)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404)
@@ -711,7 +778,7 @@ def revoke_grant(
 ):
     _regions(request, db)
     verify_csrf(request, csrf_token)
-    require_fresh_auth(request)
+    require_fresh_auth(request, db)
     grant = db.get(RoleGrant, grant_id)
     if not grant:
         raise HTTPException(404)

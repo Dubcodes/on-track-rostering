@@ -9,7 +9,7 @@ from starlette.responses import RedirectResponse, Response
 
 from app.auth.network import resolve_request, same_origin
 from app.auth.policy import actor_for
-from app.auth.security import SESSION_COOKIE, resolve_device
+from app.auth.security import FRESH_ACTION_COOKIE, SESSION_COOKIE, resolve_device
 from app.branding.service import DEFAULT_BRANDING, branding_for
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -17,6 +17,7 @@ from app.system_settings.service import DEFAULT_OPERATIONAL_SETTINGS, operationa
 
 PUBLIC_PATHS = {
     "/login",
+    "/login/password",
     "/login/totp",
     "/login/passkey/options",
     "/login/passkey/verify",
@@ -66,6 +67,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if not public and request.state.user is None:
             return RedirectResponse(f"/login?next={quote(path, safe='/')}", status_code=303)
         response = await call_next(request)
+        if getattr(request.state, "fresh_action_consumed", False):
+            response.delete_cookie(FRESH_ACTION_COOKIE, path="/")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")

@@ -128,6 +128,8 @@ def publish_current(
 def test_credential_contract_and_safe_redirects() -> None:
     assert credential_error("123456", Role.EMPLOYEE.value) == ""
     assert credential_error("12345", Role.EMPLOYEE.value)
+    assert credential_error("ordinary password", Role.EMPLOYEE.value) == ""
+    assert credential_error("too short", Role.EMPLOYEE.value)
     assert credential_error("12345678", Role.ADMIN.value) == ""
     assert credential_error("a strong admin password", Role.ADMIN.value) == ""
     assert credential_error("short", Role.ADMIN.value)

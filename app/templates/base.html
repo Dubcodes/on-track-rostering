@@ -44,11 +44,11 @@
   {% if user %}<dialog class="reauth-dialog" data-reauth-dialog aria-labelledby="reauth-title">
     <form method="dialog" class="stack" data-reauth-form>
       <h2 id="reauth-title">Confirm it’s you</h2>
-      <p>Enter your PIN or password to continue this account-security task. Your original form stays on this page and will not be submitted automatically.</p>
+      <p>Enter your PIN or password to continue this account-security task. Your original form stays on this page until confirmation succeeds.</p>
       <label>PIN or password<input type="password" name="credential" autocomplete="current-password" required data-reauth-credential></label>
       <p class="alert error" role="alert" data-reauth-error hidden></p>
-      <p class="alert success" role="status" data-reauth-ready hidden>Identity confirmed. Choose Continue to perform the original action.</p>
-      <div class="row-actions"><button value="confirm" data-reauth-confirm>Confirm</button><button type="button" data-reauth-continue hidden>Continue</button><button value="cancel" class="secondary" formnovalidate>Cancel</button></div>
+      <p class="muted">After confirmation, the selected action will complete automatically.</p>
+      <div class="row-actions"><button value="confirm" data-reauth-confirm>Confirm and continue</button><button value="cancel" class="secondary" formnovalidate>Cancel</button></div>
     </form>
   </dialog>{% endif %}
   <script src="/static/app.js?v={{ asset_version|urlencode }}" defer></script>

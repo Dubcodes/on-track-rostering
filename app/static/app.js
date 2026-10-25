@@ -430,8 +430,6 @@
   const reauthForm = reauthDialog?.querySelector("[data-reauth-form]");
   const reauthCredential = reauthDialog?.querySelector("[data-reauth-credential]");
   const reauthError = reauthDialog?.querySelector("[data-reauth-error]");
-  const reauthReady = reauthDialog?.querySelector("[data-reauth-ready]");
-  const reauthContinue = reauthDialog?.querySelector("[data-reauth-continue]");
   let freshAuthTarget = null;
   let freshAuthSubmitter = null;
   const freshAuthValid = () => {
@@ -444,8 +442,6 @@
     freshAuthSubmitter = submitter;
     reauthError.hidden = true;
     reauthError.textContent = "";
-    reauthReady.hidden = true;
-    reauthContinue.hidden = true;
     reauthForm.querySelector("[data-reauth-confirm]").hidden = false;
     reauthCredential.value = "";
     reauthDialog.showModal();
@@ -457,13 +453,35 @@
       || /^\/manage\/accounts\/(link-person|invitations|contractors|people-invitations|signup-requests|grants)(\/|$)/.test(path)
       || /^\/manage\/crew\/[^/]+\/(setup-link|account-status|employment-type|credential-reset|devices\/revoke|sub-manager|notice-scope|grants)(\/|$)/.test(path);
   };
-  document.addEventListener("submit", (event) => {
+  document.addEventListener("submit", async (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== "post") return;
     const valueGuard = form.dataset.freshAuthSubmitValue;
     const needsFresh = sensitiveAction(form) || form.hasAttribute("data-fresh-auth") || (valueGuard && event.submitter?.value === valueGuard);
+    if (form.dataset.freshActionReady === "true") {
+      delete form.dataset.freshActionReady;
+      return;
+    }
     if (!needsFresh || freshAuthValid()) return;
     event.preventDefault();
+    if (form.hasAttribute("data-account-create")) {
+      const response = await fetch(form.action, {
+        method: "POST",
+        body: new FormData(form),
+        headers: {Accept: "application/json"},
+      });
+      if (response.redirected) {
+        window.location.assign(response.url);
+        return;
+      }
+      if (response.status !== 403) {
+        const html = await response.text();
+        document.open();
+        document.write(html);
+        document.close();
+        return;
+      }
+    }
     requestFreshAuth(form, event.submitter);
   });
   reauthForm?.addEventListener("submit", async (event) => {
@@ -477,6 +495,7 @@
       payload.set("credential", reauthCredential.value);
       payload.set("csrf_token", document.querySelector('input[name="csrf_token"]')?.value || "");
       payload.set("next", `${window.location.pathname}${window.location.search}`);
+      if (freshAuthTarget) payload.set("action", new URL(freshAuthTarget.action, window.location.href).pathname);
       const response = await fetch("/settings/reauthenticate", {
         method: "POST",
         body: payload,
@@ -484,14 +503,20 @@
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.detail || "Credential could not be verified.");
-      document.body.dataset.freshAuth = "true";
-      document.body.dataset.freshAuthExpiresAt = result.expires_at;
       reauthCredential.value = "";
-      confirm.hidden = true;
-      reauthReady.hidden = false;
-      reauthContinue.hidden = false;
-      reauthContinue.textContent = `Continue to ${freshAuthSubmitter?.textContent?.trim() || "complete action"}`;
-      reauthContinue.focus();
+      const target = freshAuthTarget;
+      const submitter = freshAuthSubmitter;
+      freshAuthTarget = null;
+      freshAuthSubmitter = null;
+      reauthDialog.close();
+      if (target) {
+        target.dataset.freshActionReady = "true";
+        target.requestSubmit(submitter || undefined);
+      } else {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("reauth");
+        window.location.replace(`${url.pathname}${url.search}${url.hash}`);
+      }
     } catch (error) {
       reauthError.textContent = error.message || "Credential could not be verified.";
       reauthError.hidden = false;
@@ -500,14 +525,6 @@
     } finally {
       confirm.disabled = false;
     }
-  });
-  reauthContinue?.addEventListener("click", () => {
-    const target = freshAuthTarget;
-    const submitter = freshAuthSubmitter;
-    freshAuthTarget = null;
-    freshAuthSubmitter = null;
-    reauthDialog.close();
-    target?.requestSubmit(submitter || undefined);
   });
   if (new URLSearchParams(window.location.search).get("reauth") === "required") requestFreshAuth();
 })();
