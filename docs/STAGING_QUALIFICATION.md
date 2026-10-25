@@ -269,6 +269,12 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Assignment/private note controls | PENDING | Verify visibility separately. |
 | Person-specific start/end | PENDING | Confirm effective displayed span. |
 | Preview and warnings | PENDING | Review exact proposed changes. |
+| Adjacent-day Person conflict | PENDING | Publish a demo 23:00–02:00 Workday, then Preview the same Person at 01:00–04:00 next day; verify one dated warning, explicit Publish-anyway acknowledgement and successful deliberate override. |
+| Adjacent-day Vehicle conflict | PENDING | Repeat with different People sharing one Vehicle; exact 02:00 handoff must not warn, while 01:59 overlap must warn. |
+| Cross-Region conflict privacy | PENDING | A Manager with only one Region sees the affected Person/Vehicle and dated timing but only “another Workday,” never the other Region's title/location/private detail. |
+| TBC adjacent-date behavior | PENDING | Same-date incomplete timing warns conservatively; an adjacent-date TBC row alone does not produce speculative noise. |
+| Generated Travel conflict behavior | PENDING | Parent and its generated Travel do not warn against each other; either part warns once against a genuinely overlapping independent Workday. |
+| Concurrent publication revalidation | PENDING | Two Managers attempt overlapping different Workdays; the later transaction must revalidate and require Publish-anyway rather than both silently passing. |
 | First Publish | PENDING | Confirm atomic authoritative visibility. |
 | Employee Month and Day appearance | PENDING | Confirm only published revision appears. |
 | Edit published day clones current publication | PENDING | Confirm stable slot keys and private draft. |

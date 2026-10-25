@@ -25,7 +25,7 @@ from app.notifications.service import record_event
 from app.positions.ordering import catalog_position_order, position_order
 from app.positions.service import bulk_eligibility
 from app.rostering.builder_read import crew_picker_views
-from app.rostering.conflicts import publication_conflicts
+from app.rostering.conflicts import operation_publication_conflicts
 from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
 from app.rostering.service import (
     AssignmentInput,
@@ -1198,7 +1198,7 @@ def preview(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_d
             draft,
             changes=preview_diff(db, workday, draft),
             warnings=_publication_warnings(db, workday, draft),
-            conflicts=publication_conflicts(
+            conflicts=operation_publication_conflicts(
                 db, workday, draft, visible_region_ids=_managed_region_ids(request)
             ),
         ),

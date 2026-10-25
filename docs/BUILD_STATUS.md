@@ -1,4 +1,8 @@
-# Build status — 2026-10-25
+# Build status — 2026-10-26
+
+## Current development candidate
+
+The working candidate after `c5b2e4a86d5f934c9cfb2ce6964e217e41859db4` corrects cross-calendar Person/Vehicle conflict detection, shares parent/generated-Travel checks between Preview and Publish, and closes concurrent different-Workday publication validation on PostgreSQL. It is not a qualified baseline until its exact committed GitHub head passes the release gate. `docs/REMAINING_WORK.md` is now the maintained prioritized backlog.
 
 ## Application-behavior qualification baseline and deployment boundary
 
@@ -66,22 +70,9 @@ These are historical checkpoints, not the current qualification baseline.
 
 ## Outstanding product and operational backlog
 
-- **Next immediate milestone:** the private staging environment is initialized, reachable, and has its bootstrap Admin, but Administration was observed reporting older build `5e70e1e5c0fbb1dbd8a3aadf1ac5bfd697121642`. The current candidate has not been redeployed or manually qualified there. After a deliberate redeploy, verify the shared `/app/data` mount/ownership for both app and scheduler, inspect TrackMap rows/files/status for Ellerslie and Cambridge Synthetic, run manual automatic refreshes, confirm `/track-maps/<id>` returns 200 and the published Day displays each map, then continue the separately authorized clean staging reset/re-import and full operational matrix. Follow `STAGING_RESET_REIMPORT.md`; no destructive staging action is authorized by this checkpoint.
-- Physical-device and operator staging qualification, including real passkey ceremonies, TOTP, and Web Push with deployment-owned VAPID configuration.
-- Complete role/direct-request/privacy/offline/restart/log qualification matrix.
-- Monitoring and alerting above the durable scheduler-heartbeat and health-endpoint foundation.
-- Backup and restore rehearsal for PostgreSQL and the application-data volume.
-- Immutable production image promotion, production secrets and WebAuthn RP identity freeze/rotation, and operational governance.
-- More advanced historical/predictive Position suggestions beyond the implemented two-published-Workday eligibility rule and simple regional presets.
-- Exceptional Crew-Group-scoped Manager write authority remains unresolved. Existing Region authority stays authoritative: no group grant currently implies mixed-Workday, publication, Person, or account control outside an administered Region.
-- Global grants, unlinked-account role work, recovery and reconciliation remain Advanced Accounts responsibilities; Crew intentionally exposes only policy-authorized regional grants for an already linked Person.
-- Manager invitation bootstrap under a deployment that already mandates Manager MFA remains fail-closed: an invited Manager without an enrolled factor cannot start a normal session. Until a dedicated secure bootstrap flow is approved, enrol MFA on an ordinary linked account before granting Manager access; do not weaken the deployment flag.
-- Global read-only Viewer accounts remain undecided; current Viewer access is explicitly Region-scoped.
-- Existing production Person-email duplicates or linked-account mismatches require explicit reconciliation before adding a partial case-insensitive database unique constraint; the application diagnoses them and prevents new service-path conflicts without automatic merging.
-- Whether missing truck-driver designation should block Save & Preview or only Publish remains undecided; current behavior retains the qualified validation boundary.
-- Canonical real-data conversion, including correction of imported Vehicle-as-Position history, remains staging/import reconciliation work and is not inferred automatically.
-- Configurable Open Position auto-accept; current applications remain Manager-approved.
-- IV configuration / IV setup domain; the original operational design expected it, but no current implementation exists.
+`docs/REMAINING_WORK.md` is the maintained backlog and recommended development sequence. This file records qualification state rather than duplicating that ledger.
+
+The private staging environment is initialized and reachable with a bootstrap Admin, but its last recorded Administration build predates this candidate. No redeploy is authorized here. After a separate deployment decision, follow `docs/STAGING_QUALIFICATION.md`; the broader clean-data rehearsal remains a separately authorized phase under `docs/STAGING_RESET_REIMPORT.md`.
 
 ## Known architecture constraint
 

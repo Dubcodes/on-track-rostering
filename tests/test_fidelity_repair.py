@@ -223,7 +223,7 @@ def test_conflicts_use_effective_hotel_departure_and_return_override(db) -> None
     db.commit()
     conflicts = publication_conflicts(db, target, draft)
     assert {item.kind for item in conflicts} == {"PERSON", "VEHICLE"}
-    assert all(item.timing.startswith("08:00–19:15") for item in conflicts)
+    assert all(item.timing.startswith("2026-10-02 08:00–19:15") for item in conflicts)
 
 
 def test_standard_plan_generates_one_linked_travel_participation_per_person(db) -> None:  # type: ignore[no-untyped-def]

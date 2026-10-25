@@ -62,6 +62,26 @@ class EffectivePersonTravel:
     return_travel_minutes: int | None
 
 
+@dataclass(frozen=True)
+class EffectivePersonInterval:
+    """An assignment interval paired with its operational civil dates."""
+
+    start: datetime | None
+    finish: datetime | None
+
+
+def _clock_on_workday(revision: WorkdayRevision, value: time) -> datetime:
+    result = datetime.combine(revision.work_date, value)
+    if (
+        revision.start_time is not None
+        and revision.end_time is not None
+        and revision.end_time < revision.start_time
+        and value < revision.start_time
+    ):
+        result += timedelta(days=1)
+    return result
+
+
 def effective_person_travel(
     revision: WorkdayRevision, assignment: Assignment
 ) -> EffectivePersonTravel:
@@ -142,6 +162,61 @@ def effective_person_travel(
         ),
         return_travel_minutes=return_minutes,
     )
+
+
+def effective_person_interval(
+    revision: WorkdayRevision, assignment: Assignment
+) -> EffectivePersonInterval:
+    """Resolve effective clocks without losing preceding/next-day rollover."""
+    effective = effective_person_travel(revision, assignment)
+    if effective.start is None:
+        start_at = None
+    elif (
+        assignment.start_time is None
+        and effective.uses_standard_travel
+        and revision.on_track_time is not None
+        and effective.hotel_to_track_minutes is not None
+    ):
+        start_at = _clock_on_workday(revision, revision.on_track_time) - timedelta(
+            minutes=effective.hotel_to_track_minutes
+        )
+    else:
+        start_at = _clock_on_workday(revision, effective.start)
+        if (
+            assignment.start_time is None
+            and not effective.uses_standard_travel
+            and assignment.transport_mode == TRANSPORT_VEHICLE
+            and bool(getattr(getattr(assignment, "vehicle", None), "is_truck", False))
+            and revision.truck_start_offset_minutes
+        ):
+            start_at -= timedelta(minutes=revision.truck_start_offset_minutes)
+
+    last_event = revision.last_race_time or revision.last_trial_time
+    if effective.finish is None:
+        finish_at = None
+    elif (
+        assignment.end_time is None
+        and effective.uses_standard_travel
+        and not revision.end_time_is_override
+        and assignment.return_travel_minutes_override is not None
+        and last_event is not None
+        and revision.on_track_time is not None
+    ):
+        reference = _clock_on_workday(revision, revision.on_track_time)
+        event_at = clock_after(last_event, reference=reference)
+        cleared = race_clear_at(event_at) if revision.last_race_time else ceil_to_quarter(event_at)
+        finish_at = (
+            cleared
+            + timedelta(minutes=revision.pack_up_minutes)
+            + timedelta(minutes=assignment.return_travel_minutes_override)
+        )
+    else:
+        finish_at = _clock_on_workday(revision, effective.finish)
+
+    if start_at is not None and finish_at is not None:
+        while finish_at <= start_at:
+            finish_at += timedelta(days=1)
+    return EffectivePersonInterval(start=start_at, finish=finish_at)
 
 
 def calculate_standard_travel(

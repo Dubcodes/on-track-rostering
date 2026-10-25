@@ -55,6 +55,7 @@ from app.rostering.service import (
     AssignmentInput,
     DraftConflict,
     PublishConflict,
+    _publish,
     add_assignment,
     create_workday,
     decline_published_assignment,
@@ -1249,3 +1250,78 @@ def test_recovery_code_is_consumed_once_under_concurrency(pg_factory) -> None:  
                 RecoveryCode.used_at.is_not(None),
             )
         ) == 1
+
+
+def test_concurrent_overlapping_workday_publications_are_serialized(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    with pg_factory() as db:
+        person = Person(display_name=f"Concurrent roster {uuid.uuid4().hex[:8]}")
+        db.add(person)
+        db.flush()
+        records: list[tuple[uuid.UUID, uuid.UUID, int]] = []
+        for title in ("Concurrent overnight", "Concurrent morning"):
+            workday = Workday(region_id=region_id, created_by_user_id=user_id)
+            db.add(workday)
+            db.flush()
+            revision = WorkdayRevision(
+                workday_id=workday.id,
+                revision_number=1,
+                state="DRAFT",
+                work_date=date(2031, 1, 1) if not records else date(2031, 1, 2),
+                title=title,
+                track_name_snapshot="Concurrency track",
+                start_time=time(23) if not records else time(1),
+                end_time=time(2) if not records else time(4),
+                created_by_user_id=user_id,
+            )
+            db.add(revision)
+            db.flush()
+            workday.current_draft_revision_id = revision.id
+            records.append((workday.id, revision.id, workday.lock_version))
+        person_id = person.id
+        db.commit()
+
+    barrier = threading.Barrier(2)
+    published: list[uuid.UUID] = []
+    blocked: list[str] = []
+    errors: list[Exception] = []
+
+    def attempt(record: tuple[uuid.UUID, uuid.UUID, int]) -> None:
+        workday_id, revision_id, version = record
+        try:
+            with pg_factory() as db, db.begin():
+                db.add(
+                    Assignment(
+                        revision_id=revision_id,
+                        display_name_snapshot="Camera",
+                        person_id=person_id,
+                        person_name_snapshot="Concurrent roster",
+                        status="ASSIGNED",
+                    )
+                )
+                db.flush()
+                barrier.wait(timeout=10)
+                _publish(
+                    db,
+                    workday_id,
+                    revision_id,
+                    user_id,
+                    version,
+                    use_existing_transaction=True,
+                )
+                published.append(workday_id)
+        except PublishConflict as exc:
+            blocked.append(str(exc))
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=attempt, args=(record,)) for record in records]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert errors == []
+    assert len(published) == 1
+    assert len(blocked) == 1
+    assert "Publish anyway" in blocked[0]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.enums import AssignmentStatus, WorkdayStatus
 from app.positions.ordering import position_order
 from app.rostering.models import Assignment, PersonalWorkdayEntry, Workday, WorkdayRevision
-from app.rostering.travel import effective_person_travel
+from app.rostering.travel import effective_person_interval, effective_person_travel
 
 
 @dataclass(frozen=True)
@@ -72,28 +72,10 @@ def active_published_assignments(
 
 
 def _span(revision: WorkdayRevision, assignment: Assignment) -> tuple[datetime, datetime] | None:
-    effective = effective_person_travel(revision, assignment)
-    start = effective.start
-    end = effective.finish
-    if start is None or end is None:
+    effective = effective_person_interval(revision, assignment)
+    if effective.start is None or effective.finish is None:
         return None
-    start_at = datetime.combine(revision.work_date, start)
-    end_at = datetime.combine(revision.work_date, end)
-    # On an overnight workday, explicit times earlier than the workday start
-    # belong to the following calendar day. This keeps multiple after-midnight
-    # assignments on the same operational workday instead of creating a 24h+ span.
-    if (
-        revision.start_time is not None
-        and revision.end_time is not None
-        and revision.end_time < revision.start_time
-    ):
-        if start < revision.start_time:
-            start_at += timedelta(days=1)
-        if end < revision.start_time:
-            end_at += timedelta(days=1)
-    if end_at < start_at:
-        end_at += timedelta(days=1)
-    return start_at, end_at
+    return effective.start, effective.finish
 
 
 def person_day_participation(

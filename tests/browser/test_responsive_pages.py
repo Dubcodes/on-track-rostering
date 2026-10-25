@@ -1591,6 +1591,76 @@ def test_people_onboarding_and_one_time_links_are_responsive(
     manager_context.close()
 
 
+def test_adjacent_day_conflict_preview_and_publish_anyway(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    with SessionLocal() as db:
+        region = db.get(Region, uuid.UUID(values["region_id"]))
+        person = db.get(Person, uuid.UUID(values["browser_person_id"]))
+        manager = db.scalar(select(User).where(User.email == values["manager"][0]))
+        assert region and person and manager
+        prior = Workday(region_id=region.id, created_by_user_id=manager.id)
+        target = Workday(region_id=region.id, created_by_user_id=manager.id)
+        db.add_all([prior, target])
+        db.flush()
+        prior_revision = WorkdayRevision(
+            workday_id=prior.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=local_today() + timedelta(days=40),
+            title="Overnight browser commitment",
+            track_name_snapshot="Browser overnight track",
+            start_time=clock_time(23),
+            end_time=clock_time(2),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        target_revision = WorkdayRevision(
+            workday_id=target.id,
+            revision_number=1,
+            state="DRAFT",
+            work_date=local_today() + timedelta(days=41),
+            title="Adjacent browser draft",
+            track_name_snapshot="Browser morning track",
+            start_time=clock_time(1),
+            end_time=clock_time(4),
+            created_by_user_id=manager.id,
+        )
+        db.add_all([prior_revision, target_revision])
+        db.flush()
+        for revision in (prior_revision, target_revision):
+            db.add(
+                Assignment(
+                    revision_id=revision.id,
+                    display_name_snapshot="Camera",
+                    person_id=person.id,
+                    person_name_snapshot=person.display_name,
+                    status="ASSIGNED",
+                )
+            )
+        prior.current_published_revision_id = prior_revision.id
+        target.current_draft_revision_id = target_revision.id
+        target_id = target.id
+        db.commit()
+
+    context = browser.new_context(viewport={"width": 430, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + f"/manage/workdays/{target_id}/preview")
+    conflict = page.locator(".conflict-review")
+    assert conflict.get_by_text("Roster conflicts", exact=True).is_visible()
+    assert conflict.get_by_text("Overnight browser commitment", exact=False).is_visible()
+    assert conflict.get_by_text("overlapping time", exact=False).is_visible()
+    acknowledgement = page.get_by_text("Publish anyway", exact=False)
+    assert acknowledgement.is_visible()
+    page.locator('input[name="confirm_conflicts"]').check()
+    page.get_by_role("button", name="Publish roster").click()
+    page.wait_for_url(f"**/day/{target_id}")
+    assert page.get_by_text("Adjacent browser draft", exact=False).is_visible()
+    assert errors == []
+    context.close()
+
+
 def _login(page: Page, base_url: str, credentials: tuple[str, str]) -> None:
     page.goto(base_url + "/login")
     page.locator('input[name="email"]').fill(credentials[0])

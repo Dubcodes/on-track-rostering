@@ -1,0 +1,37 @@
+# Remaining work
+
+This is the maintained backlog for work that is not already complete and qualified. Detailed domain and design rules remain in the linked source-of-truth documents; this file records status, priority and sequence without turning earlier ideas into approved requirements.
+
+Priority meanings: **P0** roster/security correctness, **P1** first operational release, **P2** valuable follow-up, **P3** deliberately deferred. “Decision” means product approval is required before implementation.
+
+| Feature or problem | Status and evidence | What remains | Priority | Decision / dependencies / qualification |
+|---|---|---|---|---|
+| Cross-calendar scheduling conflicts | Implemented, pending exact-head CI; `app/rostering/conflicts.py`, Domain Rules and scheduling regression suites | Qualify PostgreSQL serialization and Builder Publish-anyway flow; then perform the listed staging acceptance cases | P0 | No new product decision; precedes operational roster use |
+| Legacy Person/email integrity convergence | Partially implemented; diagnostics and service guards exist, but Architecture records the deferred database constraint | Reconcile real duplicates/mismatches, then add the safe partial case-insensitive constraint if evidence permits | P0 | Explicit record-by-record decisions; must precede clean production import |
+| Full staging permission/privacy matrix | Implemented in code, pending live verification; `docs/STAGING_QUALIFICATION.md`, security audit and Build Status | Exercise every role, Region, private detail, recovery and fresh-auth boundary against the deployed candidate | P0 | Requires an explicitly authorized staging deployment and representative accounts |
+| Reusable hotels and locations | Not implemented; current revisions/assignments store text and address snapshots (`docs/IMPLEMENTATION_INVENTORY.md`) | Design canonical reusable place records, lifecycle, Region ownership, selection and snapshot rules | P1 | Product/domain design first; foundation for group travel |
+| Group travel, shared accommodation and multi-leg coordination | Partially implemented; Operations, TravelLegs and generated previous-day Travel exist | Add reusable travel parties, shared accommodation, multiple vehicles/legs and exception handling | P1 | Depends on reusable places; preserve manual rostering and immutable snapshots |
+| IV equipment setup and reusable event configurations | Not implemented; recorded in Build Status | Define equipment/configuration ownership, reusable templates and publication snapshot boundary | P1 | Product workflow decision; coordinate with Position presets rather than overloading them |
+| Truck-driver enforcement boundary | Requires product decision; qualification currently warns without changing the established save/publish boundary | Decide whether missing/invalid designation blocks Save & Preview or Publish, then implement and test | P1 | Decision required; qualification must include capacity, multi-Position and borrowed vehicles |
+| Privileged onboarding and mandatory-MFA rollout | Partially implemented; pre-enrolment is enforced and insecure bypasses fail closed (`docs/DECISIONS.md`) | Verify real authenticator onboarding and decide whether a dedicated secure privileged bootstrap is needed | P1 | Security/product decision; deployment policy and operator training required |
+| External racing reliability | Implemented with resilient optional evidence, pending live verification | Characterize current HRNZ 403 and Love Racing limitations; approve another source only for a demonstrated data gap | P1 | No scraping/security bypass; manual entry remains authoritative |
+| Mobile, Track-map and offline/PWA acceptance | Implemented, pending live verification; responsive automation and staging checklist exist | Physical-device navigation, offline namespace/logout tests, map gesture polish and remaining desktop zoom/pan review | P1 | Requires deployed HTTPS staging and representative devices |
+| Web Push delivery | Implemented, pending live verification; outbox/scheduler/provider tests exist | Configure staging-only VAPID, verify real devices/providers, retries and quiet disabled behavior | P1 | Requires deployment secrets and notification permission; never blocks publication |
+| Backup, restore and persistence rehearsal | Not yet live-qualified; `docs/BACKUP_RESTORE.md` and staging checklist | Rehearse PostgreSQL plus `/app/data` backup/restore and restart persistence in isolated staging | P1 | Explicit operations window; never use production as the first rehearsal |
+| Authorization model extensions | Requires product decision; current authority is Region-based and Viewer is Region-scoped (`docs/ARCHITECTURE.md`) | Decide cross-Region Engineering Manager, Crew-Group Manager, whole-Day versus group publishing, and global Viewer semantics | P2 | One coherent authorization design before schema/policy work |
+| Employment classification and remaining account lifecycle semantics | Requires product decision; current RoleGrant/Contractor behavior is qualified | Define whether classification is identity metadata, authority, eligibility, or reporting, and settle remaining lifecycle cases | P2 | Must not silently alter RoleGrant or Contractor semantics |
+| Configurable Open Position auto-accept | Deliberately deferred; applications currently require Manager selection and Publish | Define eligibility, race handling, audit and revocation policy before implementation | P2 | Decision required; concurrency and immutable publication tests required |
+| Runtime monitoring, alerting and realistic-volume performance | Not implemented beyond health/readiness/scheduler heartbeat | Establish service objectives, external alerts, database/query metrics and load scenarios | P2 | After representative staging data; before production support handoff |
+| Production readiness and support procedures | Deliberately deferred from active staging development | Freeze hostname/RP identity and secrets, rehearse incident/recovery, establish release governance and support ownership | P2 | Depends on P0/P1 staging evidence; exact image promotion is separate from CI |
+| One-time clean migration and real-data reconciliation | Deliberately deferred; bounded transition capture exists only for manually supplied evidence | Evaluate approved Excel/staff sources; reconcile canonical People/Positions and Vehicle-as-Position history; run isolated dry runs and final qualification | P3 | Separate authorization; preserve the transition stash; no live Deputy connection |
+
+## Recommended sequence
+
+1. Qualify and stage-accept cross-calendar conflict detection, then complete the permission/privacy matrix.
+2. Resolve the truck-driver boundary and design reusable places; implement reusable hotel/location records.
+3. Build group travel/accommodation and multi-leg coordination on that place model, then define IV/event configuration reuse.
+4. Complete physical-device, offline, push, provider and backup/restore evidence for the first operational release.
+5. Address authorization/classification decisions and optional enhancements without blocking proven core rostering.
+6. Perform the separately authorized clean-data migration and production-readiness programme last.
+
+Items marked live verification are not code gaps unless staging evidence reveals a defect. CI qualification never counts as deployment or operational acceptance.

@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, time
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
@@ -26,7 +26,7 @@ from app.identity.models import Person, User, UserPersonLink
 from app.notifications.models import NotificationEvent
 from app.notifications.service import record_event
 from app.positions.service import infer_worked_capability
-from app.rostering.conflicts import publication_conflicts
+from app.rostering.conflicts import operation_publication_conflicts
 from app.rostering.diff import PublicationChange, publication_diff
 from app.rostering.models import (
     AllowanceIndicator,
@@ -735,6 +735,22 @@ def save_draft(
             and not item.accommodation_name.strip()
         )
     ]
+    for value, label in (
+        (details.travel_to_hotel_minutes, "Travel to hotel"),
+        (details.hotel_to_track_minutes, "Hotel to Track"),
+        (details.return_travel_minutes, "Return travel"),
+        (details.pack_up_minutes, "Pack-up"),
+        (details.truck_start_offset_minutes, "Truck start offset"),
+    ):
+        if value is not None and not 0 <= value <= 1440:
+            raise ValueError(f"{label} minutes must be between 0 and 1440.")
+    for item in assignments:
+        for value, label in (
+            (item.hotel_to_track_minutes_override, "Hotel to Track override"),
+            (item.return_travel_minutes_override, "Return travel override"),
+        ):
+            if value is not None and not 0 <= value <= 1440:
+                raise ValueError(f"{label} minutes must be between 0 and 1440.")
     travel_plan_by_person: dict[
         uuid.UUID,
         tuple[bool, str, uuid.UUID | None, str, str, int | None, str, int | None],
@@ -908,13 +924,8 @@ def save_draft(
     draft.truck_start_offset_minutes = details.truck_start_offset_minutes
 
     if workday.category == WorkdayCategory.RACE_DAY.value:
-        if not 0 <= draft.pack_up_minutes <= 1440:
-            raise ValueError("Pack-up minutes must be between 0 and 1440.")
-        if not 0 <= draft.truck_start_offset_minutes <= 1440:
-            raise ValueError("Truck start offset must be between 0 and 1440 minutes.")
         for value, label in (
             (details.track_travel_minutes, "Track travel"),
-            (details.return_travel_minutes, "Return travel"),
         ):
             if value is not None and not 0 <= value <= 1440:
                 raise ValueError(f"{label} minutes must be between 0 and 1440.")
@@ -1023,6 +1034,11 @@ def preview_diff(db: Session, workday: Workday, draft: WorkdayRevision) -> list[
     return publication_diff(db, previous, draft)
 
 
+def _serialize_publication_conflict_check(db: Session) -> None:
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(1869506887)"))
+
+
 def _publish(
     db: Session,
     workday_id: uuid.UUID,
@@ -1034,6 +1050,8 @@ def _publish(
     use_existing_transaction: bool,
 ) -> WorkdayRevision:
     with nullcontext() if use_existing_transaction else db.begin():
+        # Close the check-then-publish race between different Workdays.
+        _serialize_publication_conflict_check(db)
         workday = db.scalar(
             select(Workday)
             .where(Workday.id == workday_id)
@@ -1060,29 +1078,9 @@ def _publish(
             for region_id in (actor.regional_roles if actor else {})
             if actor and can_manage_region(actor, region_id)
         }
-        conflicts = publication_conflicts(
+        conflicts = operation_publication_conflicts(
             db, workday, draft, visible_region_ids=visible_regions
         )
-        generated_candidate = (
-            db.scalar(select(Workday).where(Workday.generated_from_workday_id == workday.id))
-            if draft.standard_travel_enabled
-            else None
-        )
-        generated_draft = (
-            db.get(WorkdayRevision, generated_candidate.current_draft_revision_id)
-            if generated_candidate and generated_candidate.current_draft_revision_id
-            else None
-        )
-        if generated_candidate and generated_draft:
-            conflicts.extend(
-                publication_conflicts(
-                    db,
-                    generated_candidate,
-                    generated_draft,
-                    visible_region_ids=visible_regions,
-                    include_inactive_current=True,
-                )
-            )
         if conflicts and not confirm_conflicts:
             raise PublishConflict(
                 "Roster conflicts changed or remain unresolved. Return to Preview and explicitly confirm Publish anyway."
@@ -1344,6 +1342,7 @@ def reschedule_published_workday(
 ) -> Workday:
     """Move an immutable published roster by publishing a fresh linked Workday."""
     with db.begin():
+        _serialize_publication_conflict_check(db)
         source = db.scalar(
             select(Workday)
             .where(Workday.id == workday_id)
