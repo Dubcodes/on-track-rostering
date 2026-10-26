@@ -1,6 +1,8 @@
-# Build status — 2026-10-26
+# Build status — 2026-10-27
 
 ## Application-behavior qualification baseline and deployment boundary
+
+The comprehensive functional-audit candidate is currently under exact-head qualification. Local Windows checks pass compilation, Ruff, PostgreSQL offline migration rendering through Alembic head `b4e9d2a7f130`, and **382 non-browser tests**; **24 PostgreSQL-only tests** are correctly pending because `ONTRACK_TEST_DATABASE_URL` is not configured. Local browser qualification is also pending the exact-head GitHub gate. This local evidence does not replace the qualified baseline below.
 
 The current qualified application-behavior baseline is exact SHA `5e315353d95bbfb084413ff65c5eb1398d2fc5a2` (release-gate run `40231356215`): **398 PostgreSQL-backed tests** and **81 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-5e315353d95bbfb084413ff65c5eb1398d2fc5a2` with digest `sha256:b27a7cc5e42000c212c9ed6c1b3bf0aa4c0bf16f117ea536fa0f2e11855a997f`. The sole Alembic head remains `a3d8c1f4e720`.
 
@@ -57,6 +59,9 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 - `CASUAL` is a normal linked working account classification for roster participation, capability preferences, Open Positions and notifications, but is deliberately excluded from Dice. Sub-Managers may assist existing ordinary in-scope accounts after fresh authentication; account creation, deletion, privileged role changes and Manager/Admin account control remain unavailable.
 - Accounts/Crew Phase A standardizes live filters, safe validation recovery and meaningful invitation/account outcomes. Phase B makes Crew the normal Person-first staff workspace, adds stable Profile / Roster & capabilities / Account & access / Security & history navigation, places bulk onboarding under Crew, keeps invitation-first setup prominent, and narrows Advanced Accounts to a searchable exceptional/recovery workspace. The permission editor can stage multiple regional grants atomically and safely stage a second Admin without changing RoleGrant semantics. Existing bookmarks remain valid and the established authority boundaries are unchanged.
 - Security/correctness remediation keeps Viewer on the Region-scoped published roster while excluding management detail, Team Hours, leave administration and unrelated private assignment detail; aligns Sub-Manager Crew rendering/data loads with its existing operational/account-assistance authority; centralizes normalized Person-email validation with PostgreSQL absent-row race locking and non-destructive legacy diagnostics; and validates official racing/map HTTP destinations before the first request and every redirect with a three-hop bound and safe header forwarding.
+- The functional-audit candidate makes rescheduling require an explicit, transactionally revalidated destination-conflict review; removes the contradictory legacy Preview warning; consistently clones revision-owned programme, allowance and equipment children; and documents the validated conflict timing envelope.
+- Region-owned reusable accommodation/destination records now supply searchable Builder choices while retaining one-off text and immutable name/address snapshots. Region bases and Tracks remain their existing canonical concepts. Regional IV equipment setups support item quantities/notes, duplicate/archive lifecycle and adjustable immutable Workday snapshots without introducing inventory or asset tracking.
+- Personal Month now bulk-evaluates Open Position eligibility; a representative 25-position regression holds the read to six SQL statements or fewer.
 
 ## Qualification history
 

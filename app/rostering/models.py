@@ -98,6 +98,7 @@ class WorkdayRevision(Base):
     travel_departure_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     travel_to_hotel_minutes: Mapped[int | None] = mapped_column(nullable=True)
     default_hotel: Mapped[str] = mapped_column(String(160), default="")
+    default_hotel_address_snapshot: Mapped[str] = mapped_column(String(500), default="")
     hotel_to_track_minutes: Mapped[int | None] = mapped_column(nullable=True)
     return_travel_minutes: Mapped[int | None] = mapped_column(nullable=True)
     pack_up_minutes: Mapped[int] = mapped_column(default=60)
@@ -108,6 +109,29 @@ class WorkdayRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     published_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkdayEquipmentItem(Base):
+    """Revision-owned equipment snapshot; catalogue changes never rewrite history."""
+
+    __tablename__ = "workday_equipment_items"
+    __table_args__ = (
+        UniqueConstraint("revision_id", "item_key"),
+        CheckConstraint("quantity BETWEEN 1 AND 999", name="workday_equipment_item_quantity"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    revision_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workday_revisions.id", ondelete="CASCADE"), index=True
+    )
+    item_key: Mapped[uuid.UUID] = mapped_column(Uuid, default=uuid.uuid4)
+    setup_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("equipment_setups.id", ondelete="SET NULL"), nullable=True
+    )
+    setup_name_snapshot: Mapped[str] = mapped_column(String(160), default="Custom")
+    name: Mapped[str] = mapped_column(String(160))
+    quantity: Mapped[int] = mapped_column(default=1)
+    notes: Mapped[str] = mapped_column(String(500), default="")
+    display_order: Mapped[int] = mapped_column(default=0)
 
 
 class Assignment(Base):

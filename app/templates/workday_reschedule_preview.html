@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading compact-heading">
+  <div>
+    <p class="eyebrow">Move published Workday</p>
+    <h1>Review destination conflicts</h1>
+    <p>{{ published.track_name_snapshot or published.title }} · {{ published.work_date|display_date }} → {{ new_date|display_date }}</p>
+  </div>
+  <a class="button secondary" href="/day/{{ workday.id }}">Back to published Day</a>
+</section>
+
+<section class="panel conflict-review">
+  <h2>Roster conflicts</h2>
+  <p>{{ conflict_message }}</p>
+  <ul>
+    {% for conflict in conflicts %}
+    <li><strong>{{ conflict.kind|title }}:</strong> {{ conflict.message }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<form method="post" action="/manage/workdays/{{ workday.id }}/reschedule" class="publish-bar">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="new_date" value="{{ new_date.isoformat() }}">
+  <input type="hidden" name="confirm_move" value="true">
+  <input type="hidden" name="reviewed_conflict_state" value="{{ conflict_state }}">
+  <label class="compact-check"><input type="checkbox" name="confirm_conflicts" value="true" required> Move anyway — I reviewed these destination conflicts</label>
+  <button>Move and publish replacement</button>
+</form>
+{% endblock %}

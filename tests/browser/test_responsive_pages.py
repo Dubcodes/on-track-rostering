@@ -20,7 +20,16 @@ from sqlalchemy import delete, select
 
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
-from app.catalog.models import BasePosition, CrewGroup, Region, Track, Vehicle
+from app.catalog.models import (
+    BasePosition,
+    CrewGroup,
+    EquipmentSetup,
+    EquipmentSetupItem,
+    OperationalPlace,
+    Region,
+    Track,
+    Vehicle,
+)
 from app.core.database import Base, SessionLocal, engine
 from app.core.enums import CapabilitySignal, Role
 from app.core.themes import THEME_VALUES
@@ -194,6 +203,34 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             ]
         )
         db.flush()
+        browser_hotel = OperationalPlace(
+            region_id=region.id,
+            name=f"Browser Lodge {suffix}",
+            address="88 Browser Road",
+            kind="ACCOMMODATION",
+        )
+        browser_setup = EquipmentSetup(
+            region_id=region.id,
+            name=f"Browser IV {suffix}",
+        )
+        db.add_all([browser_hotel, browser_setup])
+        db.flush()
+        db.add_all(
+            [
+                EquipmentSetupItem(
+                    setup_id=browser_setup.id,
+                    name="Browser camera",
+                    quantity=2,
+                ),
+                EquipmentSetupItem(
+                    setup_id=browser_setup.id,
+                    name="Browser microphone",
+                    quantity=4,
+                    notes="With batteries",
+                    display_order=1,
+                ),
+            ]
+        )
         db.add_all(
             [
                 UserPersonLink(user_id=employee.id, person_id=person.id),
@@ -821,6 +858,8 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             "track_name": track.name,
             "cross_track_id": str(cross_track.id),
             "vehicle_id": str(vehicle.id),
+            "operational_place_name": browser_hotel.name,
+            "equipment_setup_id": str(browser_setup.id),
             "active_notice_text": active_notice_text,
             "expired_notice_text": expired_notice_text,
             "external_event_id": str(external_event.id),
@@ -937,6 +976,34 @@ def test_workday_region_tracks_and_friendly_time(browser_site, width: int) -> No
     start.fill("09:30")
     start.press("Tab")
     assert start.input_value() == "09:30"
+    context.close()
+
+
+def test_builder_applies_reusable_place_and_adjustable_iv_snapshot(browser_site) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": 430, "height": 900})
+    page = context.new_page()
+    errors = _watch_browser_errors(page)
+    _login(page, base_url, values["manager"])
+    page.goto(base_url + "/manage/workdays/new?date=2041-02-15")
+    page.locator('[name="day_type"]').select_option("OTHER:")
+    page.locator('[name="region_id"]').select_option(values["region_id"])
+    page.locator('[name="track_id"]').select_option(values["track_id"])
+    page.locator('[name="title"]').fill("Browser equipment preparation")
+    page.locator('[name="start_time"]').fill("09:00")
+    page.locator('[name="end_time"]').fill("17:00")
+    page.locator('[name="default_hotel"]').fill(values["operational_place_name"])
+    page.locator('[name="equipment_setup_id"]').select_option(values["equipment_setup_id"])
+    page.locator("[data-apply-equipment]").click()
+    rows = page.locator("[data-workday-equipment-rows] .equipment-row")
+    assert rows.count() == 2
+    rows.nth(0).locator('[name="equipment_quantity"]').fill("3")
+    page.get_by_role("button", name="Save & Preview").click()
+    page.wait_for_url("**/preview")
+    assert page.get_by_role("heading", name="IV equipment").is_visible()
+    assert "3 × Browser camera" in page.locator("body").inner_text()
+    _assert_no_horizontal_overflow(page)
+    assert not errors
     context.close()
 
 

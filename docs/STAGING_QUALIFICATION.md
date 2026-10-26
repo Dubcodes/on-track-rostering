@@ -234,6 +234,8 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Historical snapshots survive rename/archive | PENDING | Publish first, then rename/archive master record. |
 | Region base and Track physical addresses | PENDING | Configure demo addresses and default travel; confirm travel stays configured rather than route-derived. |
 | Published address snapshot immutability | PENDING | Publish, edit live Track/base addresses, and confirm the historical Day retains the original values. |
+| Reusable operational places | PENDING | Create a regional hotel and destination, select both in Builder, verify copied addresses, then rename/archive the catalogue rows and confirm the published Day remains unchanged. Confirm one-off free text still saves without an address. |
+| IV equipment setup snapshots | PENDING | Create, edit and duplicate a regional setup; apply it in Builder, change one quantity for the Workday, Publish, then alter/archive the template and confirm the published configuration and change history remain unchanged. |
 | Track map automatic/manual/reset lifecycle | PENDING | Verify safe automatic image, scoped manual override, reset and last-good retention. |
 | Cambridge venues stay distinct | PENDING | Confirm Cambridge Harness and Cambridge Synthetic have separate identity, address, map and travel configuration. |
 
@@ -280,7 +282,7 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Edit published day clones current publication | PENDING | Confirm stable slot keys and private draft. |
 | Republish/history/human diff | PENDING | Include a change reason. |
 | Date change behavior | PENDING | Old publication remains immutable in history. |
-| Reschedule published Workday | PENDING | Confirm a new linked Workday/publication and preserved source history. |
+| Reschedule published Workday | PENDING | Confirm a new linked Workday/publication and preserved source history. On a conflicting destination, verify the first submit shows redacted conflict review, requires a separate explicit acknowledgement, and forces re-review if another Manager changes the conflict set before confirmation. |
 
 ## Love Racing programme and Race/Trial association
 

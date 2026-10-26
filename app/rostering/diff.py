@@ -7,7 +7,7 @@ from datetime import date, time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.rostering.models import Assignment, WorkdayRevision
+from app.rostering.models import Assignment, WorkdayEquipmentItem, WorkdayRevision
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,7 @@ def publication_diff(
             ("travel_departure_time", "Travel departure"),
             ("travel_to_hotel_minutes", "Travel to hotel minutes"),
             ("default_hotel", "Default hotel"),
+            ("default_hotel_address_snapshot", "Default hotel address"),
             ("hotel_to_track_minutes", "Hotel to track minutes"),
             ("return_travel_minutes", "Return travel minutes"),
             ("pack_up_minutes", "Pack-up minutes"),
@@ -197,4 +198,52 @@ def publication_diff(
                         f"{label} for {role} changed from {_display(before)} to {_display(after)}.", slot_key,
                     )
                 )
+    old_equipment = (
+        {
+            row.item_key: row
+            for row in db.scalars(
+                select(WorkdayEquipmentItem).where(
+                    WorkdayEquipmentItem.revision_id == previous.id
+                )
+            )
+        }
+        if previous is not None
+        else {}
+    )
+    new_equipment = {
+        row.item_key: row
+        for row in db.scalars(
+            select(WorkdayEquipmentItem).where(
+                WorkdayEquipmentItem.revision_id == draft.id
+            )
+        )
+    }
+    for item_key in sorted(old_equipment.keys() | new_equipment.keys(), key=str):
+        old_item, new_item = old_equipment.get(item_key), new_equipment.get(item_key)
+        if old_item is None and new_item is not None:
+            changes.append(
+                PublicationChange(
+                    "equipment", "IV equipment", None, new_item.name,
+                    f"IV equipment added: {new_item.quantity} × {new_item.name}.",
+                )
+            )
+        elif old_item is not None and new_item is None:
+            changes.append(
+                PublicationChange(
+                    "equipment", "IV equipment", old_item.name, None,
+                    f"IV equipment removed: {old_item.quantity} × {old_item.name}.",
+                )
+            )
+        elif old_item is not None and new_item is not None and (
+            old_item.name,
+            old_item.quantity,
+            old_item.notes,
+        ) != (new_item.name, new_item.quantity, new_item.notes):
+            changes.append(
+                PublicationChange(
+                    "equipment", "IV equipment", old_item.name, new_item.name,
+                    f"IV equipment changed from {old_item.quantity} × {old_item.name} "
+                    f"to {new_item.quantity} × {new_item.name}.",
+                )
+            )
     return changes

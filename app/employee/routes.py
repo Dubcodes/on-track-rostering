@@ -71,6 +71,7 @@ from app.rostering.models import (
     PersonalWorkdayEntry,
     PositionCapability,
     Workday,
+    WorkdayEquipmentItem,
     WorkdayRevision,
 )
 from app.rostering.participation import active_published_assignments, person_day_participation
@@ -444,6 +445,16 @@ def day_view(workday_id: uuid.UUID, request: Request, db: Session = Depends(get_
                 else worked_minutes(revision.work_date, revision.start_time, revision.end_time)
             ),
             participation=participation,
+            equipment_items=list(
+                db.scalars(
+                    select(WorkdayEquipmentItem)
+                    .where(WorkdayEquipmentItem.revision_id == revision.id)
+                    .order_by(
+                        WorkdayEquipmentItem.display_order,
+                        WorkdayEquipmentItem.name,
+                    )
+                )
+            ),
             allowances=list(
                 db.scalars(
                     select(AllowanceIndicator).where(

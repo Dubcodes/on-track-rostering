@@ -31,7 +31,18 @@ from app.auth.policy import actor_for
 from app.auth.security import hash_credential, token_hash
 from app.branding.models import SystemBranding
 from app.branding.service import MAX_FAVICON_BYTES
-from app.catalog.models import BasePosition, CrewGroup, PositionPreset, Region, Track, TrackMap, Vehicle
+from app.catalog.models import (
+    BasePosition,
+    CrewGroup,
+    EquipmentSetup,
+    EquipmentSetupItem,
+    OperationalPlace,
+    PositionPreset,
+    Region,
+    Track,
+    TrackMap,
+    Vehicle,
+)
 from app.core.config import get_settings
 from app.core.database import Base
 from app.core.enums import CapabilitySignal, Role
@@ -73,11 +84,136 @@ from app.rostering.models import (
     PositionCapability,
     TravelLeg,
     Workday,
+    WorkdayEquipmentItem,
     WorkdayRevision,
 )
 from app.system_settings.models import SystemSettings
 from app.track_maps.service import refresh_automatic_map
 from app.unavailability.models import PersonUnavailability
+
+
+def test_operational_place_and_iv_setup_catalogue_feed_builder_snapshots(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    client = TestClient(app)
+    csrf = _login(client, "manager@example.test", "123456")
+
+    created_place = client.post(
+        "/manage/catalog/places",
+        data={
+            "region_id": str(region_id),
+            "name": "Builder Lodge",
+            "kind": "ACCOMMODATION",
+            "address": "44 Builder Road",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created_place.status_code == 303
+    duplicate_place = client.post(
+        "/manage/catalog/places",
+        data={
+            "region_id": str(region_id),
+            "name": "  BUILDER LODGE  ",
+            "kind": "DESTINATION",
+            "address": "Different address",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert duplicate_place.status_code == 409
+    created_setup = client.post(
+        "/manage/catalog/equipment-setups",
+        data={
+            "region_id": str(region_id),
+            "name": "Mobile IV",
+            "notes": "Reusable configuration",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert created_setup.status_code == 303
+    with factory() as db:
+        setup = db.scalar(select(EquipmentSetup).where(EquipmentSetup.name == "Mobile IV"))
+        assert setup is not None
+        setup_id, setup_version = setup.id, setup.lock_version
+    updated_setup = client.post(
+        f"/manage/catalog/equipment-setups/{setup_id}",
+        data={
+            "name": "Mobile IV",
+            "notes": "Reusable configuration",
+            "lifecycle": "ACTIVE",
+            "expected_version": str(setup_version),
+            "item_name": ["Camera", "Wireless microphone"],
+            "item_quantity": ["2", "4"],
+            "item_notes": ["", "Include spare batteries"],
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert updated_setup.status_code == 303
+    page = client.get("/manage/workdays/new")
+    assert page.status_code == 200
+    assert "Builder Lodge" in page.text
+    assert "Mobile IV" in page.text
+    options = client.get(
+        "/manage/new-workday/operational-options", params={"region_id": str(region_id)}
+    )
+    assert options.status_code == 200
+    assert {place["name"] for place in options.json()["places"]} >= {"Builder Lodge"}
+    assert [setup["name"] for setup in options.json()["equipment_setups"]] == ["Mobile IV"]
+    denied_options = client.get(
+        "/manage/new-workday/operational-options",
+        params={"region_id": str(uuid.uuid4())},
+    )
+    assert denied_options.status_code == 403
+
+    item_key = uuid.uuid4()
+    saved = client.post(
+        "/manage/workdays",
+        data={
+            "region_id": str(region_id),
+            "track_id": str(track_id),
+            "work_date": "2026-11-20",
+            "day_type": "OTHER:",
+            "title": "Equipment preparation",
+            "start_time": "09:00",
+            "end_time": "17:00",
+            "start_origin": "Builder Lodge",
+            "finish_destination": "One-off studio",
+            "default_hotel": "Builder Lodge",
+            "equipment_setup_id": str(setup_id),
+            "equipment_item_key": str(item_key),
+            "equipment_name": "Camera",
+            "equipment_quantity": "3",
+            "equipment_notes": "Workday adjustment",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    with factory() as db:
+        workday = db.get(Workday, uuid.UUID(saved.headers["location"].split("/")[3]))
+        draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+        equipment = db.scalar(
+            select(WorkdayEquipmentItem).where(WorkdayEquipmentItem.revision_id == draft.id)
+        )
+        assert draft.start_address_snapshot == "44 Builder Road"
+        assert draft.finish_address_snapshot == ""
+        assert draft.default_hotel_address_snapshot == "44 Builder Road"
+        assert equipment is not None
+        assert (equipment.setup_name_snapshot, equipment.name, equipment.quantity) == (
+            "Mobile IV",
+            "Camera",
+            3,
+        )
+        assert db.scalar(select(OperationalPlace).where(OperationalPlace.name == "Builder Lodge"))
+        assert len(
+            list(
+                db.scalars(
+                    select(EquipmentSetupItem).where(EquipmentSetupItem.setup_id == setup_id)
+                )
+            )
+        ) == 2
 
 
 def test_new_workday_region_guard_and_initial_change_reason(routed_db) -> None:  # type: ignore[no-untyped-def]
@@ -2505,6 +2641,98 @@ def test_published_workday_reschedule_and_person_response_workflow(routed_db) ->
         data={"response": "ACCEPTED", "csrf_token": employee_csrf},
     )
     assert stale_response.status_code == 404
+
+
+def test_reschedule_requires_current_destination_conflict_review_and_rolls_back(routed_db) -> None:  # type: ignore[no-untyped-def]
+    factory, (region_id, _track_id, position_id, person_id) = routed_db
+    source_id = _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 11, 1),
+        rows=[(person_id, "Amy Crew", "", False)],
+    )
+    _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 11, 3),
+        rows=[(person_id, "Amy Crew", "", False)],
+    )
+    client = TestClient(app)
+    csrf = _login(client, "manager@example.test", "123456")
+
+    review = client.post(
+        f"/manage/workdays/{source_id}/reschedule",
+        data={
+            "new_date": "2026-11-03",
+            "confirm_move": "true",
+            "csrf_token": csrf,
+        },
+    )
+    assert review.status_code == 409
+    assert "Review destination conflicts" in review.text
+    assert "Amy Crew" in review.text
+    state = re.search(r'name="reviewed_conflict_state" value="([0-9a-f]{64})"', review.text)
+    assert state
+    with factory() as db:
+        assert db.get(Workday, source_id).status == "SCHEDULED"
+        assert db.scalar(
+            select(Workday.id).where(Workday.rescheduled_from_workday_id == source_id)
+        ) is None
+
+    # A new conflict between review and confirmation changes the state and must be shown.
+    _publish_rows(
+        factory,
+        region_id=region_id,
+        position_id=position_id,
+        work_date=date(2026, 11, 3),
+        rows=[(person_id, "Amy Crew", "", False)],
+    )
+    changed = client.post(
+        f"/manage/workdays/{source_id}/reschedule",
+        data={
+            "new_date": "2026-11-03",
+            "confirm_move": "true",
+            "confirm_conflicts": "true",
+            "reviewed_conflict_state": state.group(1),
+            "csrf_token": csrf,
+        },
+    )
+    assert changed.status_code == 409
+    assert "destination conflicts changed" in changed.text
+    updated_state = re.search(
+        r'name="reviewed_conflict_state" value="([0-9a-f]{64})"', changed.text
+    )
+    assert updated_state and updated_state.group(1) != state.group(1)
+    with factory() as db:
+        assert db.get(Workday, source_id).status == "SCHEDULED"
+        assert db.scalar(
+            select(Workday.id).where(Workday.rescheduled_from_workday_id == source_id)
+        ) is None
+
+    moved = client.post(
+        f"/manage/workdays/{source_id}/reschedule",
+        data={
+            "new_date": "2026-11-03",
+            "confirm_move": "true",
+            "confirm_conflicts": "true",
+            "reviewed_conflict_state": updated_state.group(1),
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert moved.status_code == 303
+    with factory() as db:
+        source = db.get(Workday, source_id)
+        replacements = list(
+            db.scalars(
+                select(Workday).where(Workday.rescheduled_from_workday_id == source_id)
+            )
+        )
+        assert source.status == "ABANDONED"
+        assert len(replacements) == 1
+        assert replacements[0].current_published_revision_id is not None
 
 
 def test_reschedule_rebuilds_travel_skips_applications_and_does_not_double_hours(

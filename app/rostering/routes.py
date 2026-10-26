@@ -13,7 +13,15 @@ from sqlalchemy.orm import Session
 from app.audit.service import record_audit
 from app.auth.policy import can_manage_region, require_manage_region
 from app.auth.security import verify_csrf
-from app.catalog.models import BasePosition, Region, Track, Vehicle
+from app.catalog.models import (
+    BasePosition,
+    EquipmentSetup,
+    EquipmentSetupItem,
+    OperationalPlace,
+    Region,
+    Track,
+    Vehicle,
+)
 from app.catalog.presets import effective_position_presets
 from app.core.database import get_db
 from app.core.enums import AssignmentStatus, RacingDiscipline, WorkdayCategory, WorkdayStatus
@@ -26,12 +34,19 @@ from app.positions.ordering import catalog_position_order, position_order
 from app.positions.service import bulk_eligibility
 from app.rostering.builder_read import crew_picker_views
 from app.rostering.conflicts import operation_publication_conflicts
-from app.rostering.models import Assignment, OpenPositionApplication, Workday, WorkdayRevision
+from app.rostering.models import (
+    Assignment,
+    OpenPositionApplication,
+    Workday,
+    WorkdayEquipmentItem,
+    WorkdayRevision,
+)
 from app.rostering.service import (
     AssignmentInput,
     DraftAssignmentInput,
     DraftConflict,
     DraftDetailsInput,
+    DraftEquipmentInput,
     PublishConflict,
     add_assignment,
     create_workday,
@@ -172,6 +187,26 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         WorkdayCategory.TRIALS.value,
     }
     race_day = category == WorkdayCategory.RACE_DAY.value
+    equipment_keys = form.getlist("equipment_item_key")
+    equipment_names = form.getlist("equipment_name")
+    equipment_quantities = form.getlist("equipment_quantity")
+    equipment_notes = form.getlist("equipment_notes")
+    if not (
+        len(equipment_keys)
+        == len(equipment_names)
+        == len(equipment_quantities)
+        == len(equipment_notes)
+    ):
+        raise ValueError("The equipment rows were incomplete. Refresh and try again.")
+    equipment_items = [
+        DraftEquipmentInput(
+            item_key=_optional_uuid(equipment_keys[index]),
+            name=str(equipment_names[index]),
+            quantity=_optional_int(equipment_quantities[index]) or 1,
+            notes=str(equipment_notes[index]),
+        )
+        for index in range(len(equipment_keys))
+    ]
     details = DraftDetailsInput(
         work_date=date.fromisoformat(str(form["work_date"])),
         track_id=_optional_uuid(form.get("track_id")),
@@ -220,6 +255,7 @@ def _draft_payload(  # type: ignore[no-untyped-def]
         travel_departure_time=parse_time(str(form.get("travel_departure_time", ""))),
         travel_to_hotel_minutes=_optional_int(form.get("travel_to_hotel_minutes")),
         default_hotel=str(form.get("default_hotel", "")),
+        equipment_setup_id=_optional_uuid(form.get("equipment_setup_id")),
         hotel_to_track_minutes=_optional_int(form.get("hotel_to_track_minutes")),
         return_travel_minutes=_optional_int(form.get("return_travel_minutes")),
         pack_up_minutes=(
@@ -231,7 +267,79 @@ def _draft_payload(  # type: ignore[no-untyped-def]
             15 if race_day and str(form.get("truck_leaves_early", "")) == "1" else 0
         ),
     )
-    return details, assignments
+    return details, assignments, equipment_items
+
+
+def _operational_options(
+    db: Session, region_ids: list[uuid.UUID]
+) -> tuple[list[dict[str, str]], list[dict[str, object]]]:
+    place_rows = list(
+        db.scalars(
+            select(OperationalPlace)
+            .where(
+                OperationalPlace.region_id.in_(region_ids),
+                OperationalPlace.lifecycle == "ACTIVE",
+            )
+            .order_by(OperationalPlace.name)
+        )
+    )
+    places = [
+        {
+            "id": str(row.id),
+            "region_id": str(row.region_id),
+            "name": row.name,
+            "address": row.address or "",
+            "kind": row.kind,
+        }
+        for row in place_rows
+    ]
+    for region in db.scalars(select(Region).where(Region.id.in_(region_ids))):
+        if region.base_name:
+            places.append(
+                {
+                    "id": "",
+                    "region_id": str(region.id),
+                    "name": region.base_name,
+                    "address": region.base_address or "",
+                    "kind": "BASE",
+                }
+            )
+    setups = list(
+        db.scalars(
+            select(EquipmentSetup)
+            .where(
+                EquipmentSetup.region_id.in_(region_ids),
+                EquipmentSetup.lifecycle == "ACTIVE",
+            )
+            .order_by(EquipmentSetup.name)
+        )
+    )
+    items_by_setup: dict[uuid.UUID, list[EquipmentSetupItem]] = {}
+    if setups:
+        for item in db.scalars(
+            select(EquipmentSetupItem)
+            .where(EquipmentSetupItem.setup_id.in_([row.id for row in setups]))
+            .order_by(EquipmentSetupItem.display_order, EquipmentSetupItem.name)
+        ):
+            items_by_setup.setdefault(item.setup_id, []).append(item)
+    setup_options = [
+        {
+            "id": str(setup.id),
+            "region_id": str(setup.region_id),
+            "name": setup.name,
+            "items": [
+                {
+                    "key": str(item.item_key),
+                    "name": item.name,
+                    "quantity": item.quantity,
+                    "notes": item.notes,
+                }
+                for item in items_by_setup.get(setup.id, [])
+            ],
+        }
+        for setup in setups
+    ]
+    return places, setup_options
 
 
 @router.get("/workdays/new", response_class=HTMLResponse)
@@ -259,6 +367,7 @@ def new_workday_page(
         (region for region in regions if region.id == region_id),
         regions[0],
     )
+    places, equipment_setups = _operational_options(db, [selected_region.id])
     workday = SimpleNamespace(
         id=None,
         region_id=selected_region.id,
@@ -292,6 +401,7 @@ def new_workday_page(
         travel_departure_time=time(12),
         travel_to_hotel_minutes=None,
         default_hotel="",
+        default_hotel_address_snapshot="",
         hotel_to_track_minutes=None,
         return_travel_minutes=None,
         pack_up_minutes=60,
@@ -321,11 +431,26 @@ def new_workday_page(
                 region.id: region.name for region in db.scalars(select(Region))
             },
             transport_labels=TRANSPORT_LABELS,
+            operational_places=places,
+            equipment_setups=equipment_setups,
+            equipment_items=[],
             setup_lead_minutes=selected_region.lead_minutes_race_day,
             day_type_options=_day_type_options(),
             builder_error=request.query_params.get("error"),
         ),
     )
+
+
+@router.get("/new-workday/operational-options", response_class=JSONResponse)
+def new_workday_operational_options(
+    region_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    if not any(region.id == region_id for region in _editable_regions(db, request)):
+        raise HTTPException(403, "Regional roster authority required")
+    places, equipment_setups = _operational_options(db, [region_id])
+    return JSONResponse({"places": places, "equipment_setups": equipment_setups})
 
 
 @router.post("/workdays/{workday_id}/delete")
@@ -379,7 +504,9 @@ async def new_workday(request: Request, db: Session = Depends(get_db)):
             )
             return RedirectResponse(f"/manage/workdays/{workday.id}", status_code=303)
         category, discipline = _parse_day_type(str(form.get("day_type", "")))
-        details, assignments = _draft_payload(form, category=category, discipline=discipline)
+        details, assignments, equipment_items = _draft_payload(
+            form, category=category, discipline=discipline
+        )
         workday = create_workday(
             db,
             region_id=region_id,
@@ -399,6 +526,7 @@ async def new_workday(request: Request, db: Session = Depends(get_db)):
             expected_version=workday.lock_version,
             details=details,
             assignments=assignments,
+            equipment_items=equipment_items,
             commit=False,
         )
         db.commit()
@@ -535,6 +663,17 @@ def _builder_context(
             )
         )
     )
+    places, equipment_setups = _operational_options(db, [workday.region_id])
+    equipment_items = list(
+        db.scalars(
+            select(WorkdayEquipmentItem)
+            .where(WorkdayEquipmentItem.revision_id == draft.id)
+            .order_by(WorkdayEquipmentItem.display_order, WorkdayEquipmentItem.name)
+        )
+    )
+    selected_equipment_setup_id = next(
+        (str(item.setup_id) for item in equipment_items if item.setup_id), ""
+    )
     return context(
         request,
         new_mode=False,
@@ -567,6 +706,10 @@ def _builder_context(
             region.id: region.name for region in db.scalars(select(Region))
         },
         transport_labels=TRANSPORT_LABELS,
+        operational_places=places,
+        equipment_setups=equipment_setups,
+        equipment_items=equipment_items,
+        selected_equipment_setup_id=selected_equipment_setup_id,
         setup_lead_minutes=region.lead_minutes_race_day if region else 120,
         generated_travel=generated_travel,
         source_event=source_event,
@@ -762,22 +905,6 @@ def _publication_warnings(
         for row in assignments
     ):
         warnings.append("One or more assignments have a capability conflict.")
-    elsewhere = bool(
-        person_ids
-        and db.scalar(
-            select(Assignment.id)
-            .join(WorkdayRevision, WorkdayRevision.id == Assignment.revision_id)
-            .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
-            .where(
-                Workday.id != workday.id,
-                WorkdayRevision.work_date == draft.work_date,
-                Assignment.person_id.in_(person_ids),
-            )
-            .limit(1)
-        )
-    )
-    if elsewhere:
-        warnings.append("A person is also rostered on another workday on this date.")
     if workday.category == WorkdayCategory.RACE_DAY.value and any(
         value is None
         for value in (
@@ -926,6 +1053,8 @@ def reschedule_workday(
     request: Request,
     new_date: date = Form(...),
     confirm_move: bool = Form(False),
+    confirm_conflicts: bool = Form(False),
+    reviewed_conflict_state: str = Form(""),
     csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
@@ -947,6 +1076,31 @@ def reschedule_workday(
             workday_id=workday.id,
             new_date=new_date,
             actor_user_id=request.state.user.id,
+            confirm_conflicts=confirm_conflicts,
+            reviewed_conflict_state=reviewed_conflict_state or None,
+        )
+    except PublishConflict as exc:
+        db.rollback()
+        if not exc.conflicts:
+            raise HTTPException(409, str(exc)) from exc
+        source = db.get(Workday, workday_id)
+        published = (
+            db.get(WorkdayRevision, source.current_published_revision_id) if source else None
+        )
+        if source is None or published is None:
+            raise HTTPException(409, "The source roster changed. Reload it before moving.") from exc
+        return templates.TemplateResponse(
+            "workday_reschedule_preview.html",
+            context(
+                request,
+                workday=source,
+                published=published,
+                new_date=new_date,
+                conflicts=exc.conflicts,
+                conflict_state=exc.conflict_state,
+                conflict_message=str(exc),
+            ),
+            status_code=409,
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -971,7 +1125,7 @@ async def save_workday_draft(
         category, discipline = _parse_day_type(
             str(form.get("day_type", f"{workday.category}:{workday.racing_discipline or ''}"))
         )
-        details, items = _draft_payload(
+        details, items, equipment_items = _draft_payload(
             form, category=category, discipline=discipline, draft=draft
         )
         save_draft(
@@ -981,6 +1135,7 @@ async def save_workday_draft(
             expected_version=int(str(form["expected_version"])),
             details=details,
             assignments=items,
+            equipment_items=equipment_items,
         )
     except DraftConflict as exc:
         db.rollback()

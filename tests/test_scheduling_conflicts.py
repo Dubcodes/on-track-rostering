@@ -161,6 +161,62 @@ def test_derived_hotel_start_can_begin_on_preceding_date(db) -> None:  # type: i
     assert len(publication_conflicts(db, target, draft)) == 1
 
 
+def test_validated_timing_envelope_includes_maximum_early_and_late_reach(db) -> None:  # type: ignore[no-untyped-def]
+    region, _, user, person, _ = _setup(db)
+    early_target, early_draft, early_row = _workday(
+        db,
+        region=region,
+        user=user,
+        work_date=date(2027, 2, 10),
+        start=time(0),
+        finish=time(4),
+        person=person,
+        state="DRAFT",
+        standard_travel=True,
+        on_track=time(0),
+        hotel_minutes=1440,
+    )
+    _workday(
+        db,
+        region=region,
+        user=user,
+        work_date=date(2027, 2, 9),
+        start=time(23),
+        finish=time(0, 30),
+        person=person,
+    )
+    assert effective_person_interval(early_draft, early_row).start.date() == date(2027, 2, 9)  # type: ignore[union-attr]
+    assert publication_conflicts(db, early_target, early_draft)
+
+    late_target, late_draft, late_row = _workday(
+        db,
+        region=region,
+        user=user,
+        work_date=date(2027, 3, 10),
+        start=time(20),
+        finish=None,
+        person=person,
+        state="DRAFT",
+        standard_travel=True,
+        on_track=time(23),
+    )
+    late_draft.last_race_time = time(22)
+    late_draft.pack_up_minutes = 1440
+    late_row.return_travel_minutes_override = 1440
+    _workday(
+        db,
+        region=region,
+        user=user,
+        work_date=date(2027, 3, 13),
+        start=time(21),
+        finish=time(23),
+        person=person,
+    )
+    interval = effective_person_interval(late_draft, late_row)
+    assert interval.finish.date() == date(2027, 3, 13)  # type: ignore[union-attr]
+    assert publication_conflicts(db, late_target, late_draft)
+
+
 def test_unknown_times_warn_only_on_same_workday_date(db) -> None:  # type: ignore[no-untyped-def]
     region, _, user, person, _ = _setup(db)
     _workday(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, time, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -27,7 +28,14 @@ from app.notifications.models import NotificationEvent
 from app.open_positions.service import apply_for_position, available_positions, select_application
 from app.positions.service import eligibility, set_signal
 from app.rostering.builder_read import crew_picker_views
-from app.rostering.models import Assignment, PositionCapability, Workday, WorkdayRevision
+from app.rostering.models import (
+    AllowanceIndicator,
+    Assignment,
+    PositionCapability,
+    ProgrammeItem,
+    Workday,
+    WorkdayRevision,
+)
 from app.rostering.service import (
     AssignmentInput,
     DraftAssignmentInput,
@@ -246,6 +254,8 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
         row["id"] != str(private_draft.id)
         for row in month_items(db, employee_actor, date(2026, 9, 1), date(2026, 10, 1))
     )
+
+
     unrelated = create_workday(
         db,
         region_id=region.id,
@@ -326,6 +336,67 @@ def test_publish_vertical_path_and_draft_isolation(db) -> None:  # type: ignore[
             "Ellerslie Race Day",
             "Eligible open day",
         ]
+
+
+def test_ordinary_draft_preserves_revision_programme_and_allowance_children(db) -> None:  # type: ignore[no-untyped-def]
+    region, track, position, person, manager, *_ = seed_vertical(db)
+    workday = create_workday(
+        db,
+        region_id=region.id,
+        category=WorkdayCategory.RACE_DAY.value,
+        work_date=date(2026, 9, 18),
+        track_id=track.id,
+        title="Revision child fidelity",
+        actor_user_id=manager.id,
+    )
+    published = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    add_current(
+        db,
+        workday,
+        published,
+        AssignmentInput(
+            base_position_id=position.id,
+            slot_index=1,
+            person_id=person.id,
+            status=AssignmentStatus.ASSIGNED.value,
+        ),
+    )
+    db.add_all(
+        [
+            ProgrammeItem(
+                revision_id=published.id,
+                kind="RACE",
+                sequence=1,
+                operational_time=time(12, 30),
+                source_time=time(12, 28),
+                source_provider="TEST",
+                manual_override=True,
+            ),
+            AllowanceIndicator(
+                revision_id=published.id,
+                person_id=person.id,
+                kind="MEAL",
+                entitlement_hours=Decimal("1.00"),
+                explanation="Operational information only",
+            ),
+        ]
+    )
+    db.commit()
+    publish_current(db, workday, published, manager.id)
+
+    draft = ensure_draft(db, workday, manager.id)
+    programme = list(
+        db.scalars(select(ProgrammeItem).where(ProgrammeItem.revision_id == draft.id))
+    )
+    allowances = list(
+        db.scalars(select(AllowanceIndicator).where(AllowanceIndicator.revision_id == draft.id))
+    )
+    assert [(row.kind, row.sequence, row.manual_override) for row in programme] == [
+        ("RACE", 1, True)
+    ]
+    assert [(row.kind, row.entitlement_hours) for row in allowances] == [
+        ("MEAL", Decimal("1.00"))
+    ]
 
 
 def test_private_assignment_note_not_leaked_to_viewer(db) -> None:  # type: ignore[no-untyped-def]

@@ -14,6 +14,9 @@ from app.auth.security import verify_csrf
 from app.catalog.models import (
     BasePosition,
     CrewGroup,
+    EquipmentSetup,
+    EquipmentSetupItem,
+    OperationalPlace,
     PositionPreset,
     Region,
     Track,
@@ -70,6 +73,28 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
     visible_tracks = list(
         db.scalars(select(Track).where(Track.region_id.in_(region_ids)).order_by(Track.name))
     )
+    places = list(
+        db.scalars(
+            select(OperationalPlace)
+            .where(OperationalPlace.region_id.in_(region_ids))
+            .order_by(OperationalPlace.name)
+        )
+    )
+    equipment_setups = list(
+        db.scalars(
+            select(EquipmentSetup)
+            .where(EquipmentSetup.region_id.in_(region_ids))
+            .order_by(EquipmentSetup.name)
+        )
+    )
+    equipment_items_by_setup: dict[uuid.UUID, list[EquipmentSetupItem]] = {}
+    if equipment_setups:
+        for item in db.scalars(
+            select(EquipmentSetupItem)
+            .where(EquipmentSetupItem.setup_id.in_([row.id for row in equipment_setups]))
+            .order_by(EquipmentSetupItem.display_order, EquipmentSetupItem.name)
+        ):
+            equipment_items_by_setup.setdefault(item.setup_id, []).append(item)
     map_by_track = {
         row.track_id: row
         for row in db.scalars(select(TrackMap).where(TrackMap.track_id.in_([t.id for t in visible_tracks])))
@@ -116,6 +141,9 @@ def catalog_page(request: Request, db: Session = Depends(get_db)):
             positions=positions,
             active_positions=[row for row in positions if row.lifecycle == Lifecycle.ACTIVE.value],
             vehicles=vehicles,
+            operational_places=places,
+            equipment_setups=equipment_setups,
+            equipment_items_by_setup=equipment_items_by_setup,
             preset_keys=PRESET_KEYS,
             preset_labels={
                 "THOROUGHBRED": "Thoroughbred standard",
@@ -566,6 +594,187 @@ def _vehicle_region(db: Session, actor, region_id: uuid.UUID) -> Region:
     if not can_administer_region(actor, region.id):
         raise HTTPException(403, "Regional administration authority required.")
     return region
+
+
+def _catalog_region(db: Session, actor, region_id: uuid.UUID) -> Region:
+    region = db.get(Region, region_id)
+    if not region or region.lifecycle != Lifecycle.ACTIVE.value:
+        raise HTTPException(400, "Select an active region.")
+    if not can_administer_region(actor, region.id):
+        raise HTTPException(403, "Regional administration authority required.")
+    return region
+
+
+@router.post("/places")
+def create_operational_place(
+    request: Request,
+    region_id: uuid.UUID = Form(...),
+    name: str = Form(...),
+    kind: str = Form(...),
+    address: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    _catalog_region(db, request.state.actor, region_id)
+    if kind not in {"ACCOMMODATION", "DESTINATION"}:
+        raise HTTPException(400, "Select a valid place type.")
+    row = OperationalPlace(
+        region_id=region_id,
+        name=_name(name, 160),
+        kind=kind,
+        address=address.strip()[:500] or None,
+    )
+    with controlled_integrity(db, "A place in that region already uses that name."):
+        db.add(row)
+        db.flush()
+        record_audit(
+            db, "operational_place.created", "operational_place", row.id,
+            request.state.user.id, region_id=region_id,
+            detail={"name": row.name, "kind": row.kind},
+        )
+        db.commit()
+    return RedirectResponse("/manage/catalog#places", status_code=303)
+
+
+@router.post("/places/{place_id}")
+def update_operational_place(
+    place_id: uuid.UUID,
+    request: Request,
+    name: str = Form(...),
+    kind: str = Form(...),
+    address: str = Form(""),
+    lifecycle: str = Form(...),
+    expected_version: int = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    row = db.scalar(select(OperationalPlace).where(OperationalPlace.id == place_id).with_for_update())
+    if not row:
+        raise HTTPException(404)
+    _catalog_region(db, request.state.actor, row.region_id)
+    if row.lock_version != expected_version:
+        raise HTTPException(409, "This place changed. Reload it before saving.")
+    if kind not in {"ACCOMMODATION", "DESTINATION"}:
+        raise HTTPException(400, "Select a valid place type.")
+    previous = {"name": row.name, "kind": row.kind, "address": row.address, "lifecycle": row.lifecycle}
+    row.name = _name(name, 160)
+    row.kind = kind
+    row.address = address.strip()[:500] or None
+    row.lifecycle = _lifecycle(lifecycle)
+    row.lock_version += 1
+    record_audit(
+        db, "operational_place.updated", "operational_place", row.id,
+        request.state.user.id, region_id=row.region_id,
+        detail={"previous": previous, "name": row.name, "kind": row.kind, "lifecycle": row.lifecycle},
+    )
+    with controlled_integrity(db, "A place in that region already uses that name."):
+        db.commit()
+    return RedirectResponse("/manage/catalog#places", status_code=303)
+
+
+def _equipment_rows(names: list[str], quantities: list[int], notes: list[str]) -> list[tuple[str, int, str]]:
+    if not (len(names) == len(quantities) == len(notes)):
+        raise HTTPException(400, "The equipment rows were incomplete.")
+    result = []
+    for name, quantity, note in zip(names, quantities, notes, strict=True):
+        clean_name = name.strip()
+        if not clean_name and not note.strip():
+            continue
+        if not clean_name:
+            raise HTTPException(400, "Enter a name for each equipment item.")
+        if not 1 <= quantity <= 999:
+            raise HTTPException(400, "Equipment quantity must be between 1 and 999.")
+        result.append((_name(clean_name, 160), quantity, note.strip()[:500]))
+    return result
+
+
+@router.post("/equipment-setups")
+def create_equipment_setup(
+    request: Request,
+    region_id: uuid.UUID = Form(...),
+    name: str = Form(...),
+    notes: str = Form(""),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    _catalog_region(db, request.state.actor, region_id)
+    row = EquipmentSetup(region_id=region_id, name=_name(name, 160), notes=notes.strip()[:500])
+    with controlled_integrity(db, "An equipment setup in that region already uses that name."):
+        db.add(row)
+        db.flush()
+        record_audit(db, "equipment_setup.created", "equipment_setup", row.id,
+                     request.state.user.id, region_id=region_id, detail={"name": row.name})
+        db.commit()
+    return RedirectResponse(f"/manage/catalog#equipment-{row.id}", status_code=303)
+
+
+@router.post("/equipment-setups/{setup_id}")
+def update_equipment_setup(
+    setup_id: uuid.UUID,
+    request: Request,
+    name: str = Form(...),
+    notes: str = Form(""),
+    lifecycle: str = Form(...),
+    expected_version: int = Form(...),
+    item_name: list[str] = Form(default=[]),
+    item_quantity: list[int] = Form(default=[]),
+    item_notes: list[str] = Form(default=[]),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    row = db.scalar(select(EquipmentSetup).where(EquipmentSetup.id == setup_id).with_for_update())
+    if not row:
+        raise HTTPException(404)
+    _catalog_region(db, request.state.actor, row.region_id)
+    if row.lock_version != expected_version:
+        raise HTTPException(409, "This equipment setup changed. Reload it before saving.")
+    items = _equipment_rows(item_name, item_quantity, item_notes)
+    row.name = _name(name, 160)
+    row.notes = notes.strip()[:500]
+    row.lifecycle = _lifecycle(lifecycle)
+    row.lock_version += 1
+    for old in db.scalars(select(EquipmentSetupItem).where(EquipmentSetupItem.setup_id == row.id)):
+        db.delete(old)
+    for order, (item_name_value, quantity, item_note) in enumerate(items):
+        db.add(EquipmentSetupItem(setup_id=row.id, name=item_name_value, quantity=quantity,
+                                  notes=item_note, display_order=order))
+    record_audit(db, "equipment_setup.updated", "equipment_setup", row.id,
+                 request.state.user.id, region_id=row.region_id,
+                 detail={"name": row.name, "lifecycle": row.lifecycle, "item_count": len(items)})
+    with controlled_integrity(db, "An equipment setup in that region already uses that name."):
+        db.commit()
+    return RedirectResponse(f"/manage/catalog#equipment-{row.id}", status_code=303)
+
+
+@router.post("/equipment-setups/{setup_id}/duplicate")
+def duplicate_equipment_setup(
+    setup_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    verify_csrf(request, csrf_token)
+    source = db.get(EquipmentSetup, setup_id)
+    if not source:
+        raise HTTPException(404)
+    _catalog_region(db, request.state.actor, source.region_id)
+    duplicate = EquipmentSetup(region_id=source.region_id, name=f"{source.name} copy"[:160], notes=source.notes)
+    with controlled_integrity(db, "Rename the existing copy before duplicating again."):
+        db.add(duplicate)
+        db.flush()
+        for item in db.scalars(select(EquipmentSetupItem).where(EquipmentSetupItem.setup_id == source.id)):
+            db.add(EquipmentSetupItem(setup_id=duplicate.id, item_key=item.item_key,
+                                      name=item.name, quantity=item.quantity, notes=item.notes,
+                                      display_order=item.display_order))
+        record_audit(db, "equipment_setup.duplicated", "equipment_setup", duplicate.id,
+                     request.state.user.id, region_id=source.region_id,
+                     detail={"source_id": str(source.id), "name": duplicate.name})
+        db.commit()
+    return RedirectResponse(f"/manage/catalog#equipment-{duplicate.id}", status_code=303)
 
 
 @router.post("/vehicles")

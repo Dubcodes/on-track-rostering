@@ -4,13 +4,21 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, time
+from hashlib import sha256
 
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.audit.models import HumanChange
 from app.audit.service import record_audit
-from app.catalog.models import BasePosition, Region, Track, Vehicle
+from app.catalog.models import (
+    BasePosition,
+    EquipmentSetup,
+    OperationalPlace,
+    Region,
+    Track,
+    Vehicle,
+)
 from app.core.enums import (
     AssignmentStatus,
     DeclinePolicy,
@@ -26,7 +34,7 @@ from app.identity.models import Person, User, UserPersonLink
 from app.notifications.models import NotificationEvent
 from app.notifications.service import record_event
 from app.positions.service import infer_worked_capability
-from app.rostering.conflicts import operation_publication_conflicts
+from app.rostering.conflicts import RosterConflict, operation_publication_conflicts
 from app.rostering.diff import PublicationChange, publication_diff
 from app.rostering.models import (
     AllowanceIndicator,
@@ -37,6 +45,7 @@ from app.rostering.models import (
     ProgrammeItem,
     TravelLeg,
     Workday,
+    WorkdayEquipmentItem,
     WorkdayRevision,
 )
 from app.rostering.timing import derive_race_day_timing
@@ -50,7 +59,16 @@ from app.rostering.travel import (
 
 
 class PublishConflict(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        conflicts: tuple[RosterConflict, ...] = (),
+        conflict_state: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.conflicts = conflicts
+        self.conflict_state = conflict_state
 
 
 class DraftConflict(ValueError):
@@ -58,6 +76,17 @@ class DraftConflict(ValueError):
 
 
 _UNCHANGED = object()
+
+
+def _conflict_state(conflicts: list[RosterConflict]) -> str:
+    """Fingerprint the exact conflict set a Manager reviewed."""
+    payload = "\n".join(
+        sorted(
+            f"{row.kind}|{row.subject_id}|{row.other_workday_id}|{row.timing}"
+            for row in conflicts
+        )
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -88,6 +117,14 @@ class DraftAssignmentInput(AssignmentInput):
 
 
 @dataclass(frozen=True)
+class DraftEquipmentInput:
+    item_key: uuid.UUID | None
+    name: str
+    quantity: int
+    notes: str = ""
+
+
+@dataclass(frozen=True)
 class DraftDetailsInput:
     work_date: date
     track_id: uuid.UUID | None
@@ -115,6 +152,7 @@ class DraftDetailsInput:
     travel_departure_time: time | None = None
     travel_to_hotel_minutes: int | None = None
     default_hotel: str = ""
+    equipment_setup_id: uuid.UUID | None = None
     hotel_to_track_minutes: int | None = None
     return_travel_minutes: int | None = None
     pack_up_minutes: int = 60
@@ -266,6 +304,67 @@ def delete_never_published_workday(
     return work_date
 
 
+def _copy_revision_children(
+    db: Session,
+    source_revision_id: uuid.UUID,
+    target_revision_id: uuid.UUID,
+    *,
+    include_programme: bool = True,
+    include_allowances: bool = True,
+    include_equipment: bool = True,
+) -> None:
+    """Copy immutable revision-owned facts without reusing child identities."""
+    if include_programme:
+        for item in db.scalars(
+            select(ProgrammeItem).where(ProgrammeItem.revision_id == source_revision_id)
+        ):
+            db.add(
+                ProgrammeItem(
+                    revision_id=target_revision_id,
+                    kind=item.kind,
+                    sequence=item.sequence,
+                    operational_time=item.operational_time,
+                    source_time=item.source_time,
+                    source_provider=item.source_provider,
+                    source_retrieved_at=item.source_retrieved_at,
+                    manual_override=item.manual_override,
+                )
+            )
+    if include_allowances:
+        for indicator in db.scalars(
+            select(AllowanceIndicator).where(
+                AllowanceIndicator.revision_id == source_revision_id
+            )
+        ):
+            db.add(
+                AllowanceIndicator(
+                    revision_id=target_revision_id,
+                    person_id=indicator.person_id,
+                    kind=indicator.kind,
+                    entitlement_hours=indicator.entitlement_hours,
+                    explanation=indicator.explanation,
+                )
+            )
+    if include_equipment:
+        for item in db.scalars(
+            select(WorkdayEquipmentItem).where(
+                WorkdayEquipmentItem.revision_id == source_revision_id
+            )
+        ):
+            db.add(
+                WorkdayEquipmentItem(
+                    revision_id=target_revision_id,
+                    item_key=item.item_key,
+                    setup_id=item.setup_id,
+                    setup_name_snapshot=item.setup_name_snapshot,
+                    name=item.name,
+                    quantity=item.quantity,
+                    notes=item.notes,
+                    display_order=item.display_order,
+                )
+            )
+
+
 def ensure_draft(
     db: Session, workday: Workday, actor_user_id: uuid.UUID, *, commit: bool = True
 ) -> WorkdayRevision:
@@ -313,6 +412,7 @@ def ensure_draft(
         travel_departure_time=published.travel_departure_time,
         travel_to_hotel_minutes=published.travel_to_hotel_minutes,
         default_hotel=published.default_hotel,
+        default_hotel_address_snapshot=published.default_hotel_address_snapshot,
         hotel_to_track_minutes=published.hotel_to_track_minutes,
         return_travel_minutes=published.return_travel_minutes,
         pack_up_minutes=published.pack_up_minutes,
@@ -350,6 +450,7 @@ def ensure_draft(
                 return_travel_minutes_override=old.return_travel_minutes_override,
             )
         )
+    _copy_revision_children(db, published.id, draft.id)
     workday.current_draft_revision_id = draft.id
     workday.lock_version += 1
     if commit:
@@ -490,12 +591,16 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
             state=RevisionState.DRAFT.value,
             work_date=calculation.travel_date,
             track_name_snapshot=draft.default_hotel,
+            track_address_snapshot=draft.default_hotel_address_snapshot,
             title="Travel Day",
             start_time=calculation.travel_start,
             end_time=calculation.travel_finish,
             start_origin=draft.start_origin,
+            start_address_snapshot=draft.start_address_snapshot,
             finish_destination=draft.default_hotel,
+            finish_address_snapshot=draft.default_hotel_address_snapshot,
             default_hotel=draft.default_hotel,
+            default_hotel_address_snapshot=draft.default_hotel_address_snapshot,
             day_note=f"Standard travel for {draft.track_name_snapshot}",
             created_by_user_id=draft.created_by_user_id,
         )
@@ -513,11 +618,15 @@ def _sync_standard_travel(db: Session, workday: Workday, draft: WorkdayRevision)
             travel_draft = ensure_draft(db, travel_workday, draft.created_by_user_id, commit=False)
         travel_draft.work_date = calculation.travel_date
         travel_draft.track_name_snapshot = draft.default_hotel
+        travel_draft.track_address_snapshot = draft.default_hotel_address_snapshot
         travel_draft.start_time = calculation.travel_start
         travel_draft.end_time = calculation.travel_finish
         travel_draft.start_origin = draft.start_origin
+        travel_draft.start_address_snapshot = draft.start_address_snapshot
         travel_draft.finish_destination = draft.default_hotel
+        travel_draft.finish_address_snapshot = draft.default_hotel_address_snapshot
         travel_draft.default_hotel = draft.default_hotel
+        travel_draft.default_hotel_address_snapshot = draft.default_hotel_address_snapshot
     for row in db.scalars(select(Assignment).where(Assignment.revision_id == travel_draft.id)):
         db.delete(row)
     race_rows = list(
@@ -709,6 +818,7 @@ def save_draft(
     expected_version: int,
     details: DraftDetailsInput,
     assignments: list[DraftAssignmentInput],
+    equipment_items: list[DraftEquipmentInput] | None = None,
     commit: bool = True,
 ) -> WorkdayRevision:
     """Atomically replace the editable draft state while preserving stable slot identities."""
@@ -871,6 +981,28 @@ def save_draft(
         if len(drivers) != 1:
             raise ValueError(f"Choose exactly one qualified driver for truck {vehicle.name}.")
 
+    active_places = list(
+        db.scalars(
+            select(OperationalPlace).where(
+                OperationalPlace.region_id == workday.region_id,
+                OperationalPlace.lifecycle == "ACTIVE",
+            )
+        )
+    )
+    places_by_name = {row.name.casefold(): row for row in active_places}
+    region_for_places = db.get(Region, workday.region_id)
+    if region_for_places is None:
+        raise ValueError("Workday region not found.")
+
+    def place_address(name: str, *, accommodation: bool = False) -> str:
+        clean = name.strip()
+        if clean == (region_for_places.base_name or ""):
+            return region_for_places.base_address or ""
+        place = places_by_name.get(clean.casefold())
+        if place and (not accommodation or place.kind == "ACCOMMODATION"):
+            return place.address or ""
+        return ""
+
     previous_start_origin = draft.start_origin
     previous_finish_destination = draft.finish_destination
     draft.work_date = details.work_date
@@ -899,25 +1031,19 @@ def save_draft(
         draft.start_origin != previous_start_origin
         or draft.finish_destination != previous_finish_destination
     ):
-        region_for_places = db.get(Region, workday.region_id)
-        if region_for_places is None:
-            raise ValueError("Workday region not found.")
         if draft.start_origin != previous_start_origin:
-            draft.start_address_snapshot = (
-                region_for_places.base_address or ""
-                if draft.start_origin == (region_for_places.base_name or "")
-                else ""
-            )
+            draft.start_address_snapshot = place_address(draft.start_origin)
         if draft.finish_destination != previous_finish_destination:
-            draft.finish_address_snapshot = (
-                region_for_places.base_address or ""
-                if draft.finish_destination == (region_for_places.base_name or "")
-                else ""
-            )
+            draft.finish_address_snapshot = place_address(draft.finish_destination)
     draft.standard_travel_enabled = details.standard_travel_enabled
     draft.travel_departure_time = details.travel_departure_time
     draft.travel_to_hotel_minutes = details.travel_to_hotel_minutes
+    previous_hotel = draft.default_hotel
     draft.default_hotel = details.default_hotel.strip()
+    if draft.default_hotel != previous_hotel:
+        draft.default_hotel_address_snapshot = place_address(
+            draft.default_hotel, accommodation=True
+        )
     draft.hotel_to_track_minutes = details.hotel_to_track_minutes
     draft.return_travel_minutes = details.return_travel_minutes
     draft.pack_up_minutes = details.pack_up_minutes
@@ -997,6 +1123,53 @@ def save_draft(
         assignment.hotel_to_track_minutes_override = item.hotel_to_track_minutes_override
         assignment.finish_destination_override = item.finish_destination_override.strip() or None
         assignment.return_travel_minutes_override = item.return_travel_minutes_override
+
+    if equipment_items is not None:
+        setup = None
+        if details.equipment_setup_id:
+            setup = db.get(EquipmentSetup, details.equipment_setup_id)
+            if (
+                setup is None
+                or setup.region_id != workday.region_id
+                or setup.lifecycle != "ACTIVE"
+            ):
+                raise ValueError("Select an active equipment setup from the Workday Region.")
+        prepared_equipment: list[DraftEquipmentInput] = []
+        seen_keys: set[uuid.UUID] = set()
+        for item in equipment_items:
+            clean_name = item.name.strip()
+            if not clean_name and not item.notes.strip():
+                continue
+            if not clean_name:
+                raise ValueError("Enter a name for each equipment item.")
+            if len(clean_name) > 160 or len(item.notes.strip()) > 500:
+                raise ValueError("Equipment item text is too long.")
+            if not 1 <= item.quantity <= 999:
+                raise ValueError("Equipment quantity must be between 1 and 999.")
+            item_key = item.item_key or uuid.uuid4()
+            if item_key in seen_keys:
+                raise ValueError("Equipment items were duplicated. Refresh and try again.")
+            seen_keys.add(item_key)
+            prepared_equipment.append(
+                DraftEquipmentInput(item_key, clean_name, item.quantity, item.notes.strip())
+            )
+        for old in db.scalars(
+            select(WorkdayEquipmentItem).where(WorkdayEquipmentItem.revision_id == draft.id)
+        ):
+            db.delete(old)
+        for order, item in enumerate(prepared_equipment):
+            db.add(
+                WorkdayEquipmentItem(
+                    revision_id=draft.id,
+                    item_key=item.item_key,
+                    setup_id=setup.id if setup else None,
+                    setup_name_snapshot=setup.name if setup else "Custom",
+                    name=item.name,
+                    quantity=item.quantity,
+                    notes=item.notes,
+                    display_order=order,
+                )
+            )
     workday.lock_version += 1
     _sync_standard_travel(db, workday, draft)
     if commit:
@@ -1048,6 +1221,8 @@ def _publish(
     confirm_conflicts: bool = False,
     *,
     use_existing_transaction: bool,
+    reviewed_conflict_state: str | None = None,
+    require_stable_conflict_state: bool = False,
 ) -> WorkdayRevision:
     with nullcontext() if use_existing_transaction else db.begin():
         # Close the check-then-publish race between different Workdays.
@@ -1081,9 +1256,22 @@ def _publish(
         conflicts = operation_publication_conflicts(
             db, workday, draft, visible_region_ids=visible_regions
         )
+        current_conflict_state = _conflict_state(conflicts)
         if conflicts and not confirm_conflicts:
             raise PublishConflict(
-                "Roster conflicts changed or remain unresolved. Return to Preview and explicitly confirm Publish anyway."
+                "Roster conflicts changed or remain unresolved. Return to Preview and explicitly confirm Publish anyway.",
+                conflicts=tuple(conflicts),
+                conflict_state=current_conflict_state,
+            )
+        if (
+            conflicts
+            and require_stable_conflict_state
+            and reviewed_conflict_state != current_conflict_state
+        ):
+            raise PublishConflict(
+                "The destination conflicts changed. Review the current warnings before moving this Workday.",
+                conflicts=tuple(conflicts),
+                conflict_state=current_conflict_state,
             )
         previous = (
             db.get(WorkdayRevision, workday.current_published_revision_id)
@@ -1339,6 +1527,8 @@ def reschedule_published_workday(
     workday_id: uuid.UUID,
     new_date: date,
     actor_user_id: uuid.UUID,
+    confirm_conflicts: bool = False,
+    reviewed_conflict_state: str | None = None,
 ) -> Workday:
     """Move an immutable published roster by publishing a fresh linked Workday."""
     with db.begin():
@@ -1418,6 +1608,7 @@ def reschedule_published_workday(
             travel_departure_time=published.travel_departure_time,
             travel_to_hotel_minutes=published.travel_to_hotel_minutes,
             default_hotel=published.default_hotel,
+            default_hotel_address_snapshot=published.default_hotel_address_snapshot,
             hotel_to_track_minutes=published.hotel_to_track_minutes,
             return_travel_minutes=published.return_travel_minutes,
             pack_up_minutes=published.pack_up_minutes,
@@ -1456,6 +1647,17 @@ def reschedule_published_workday(
                     return_travel_minutes_override=old.return_travel_minutes_override,
                 )
             )
+        # Programme evidence belongs to the original meeting/date and is deliberately not
+        # inherited. Person allowance indicators are roster facts and remain attached to the
+        # copied people until a Manager deliberately changes them.
+        _copy_revision_children(
+            db,
+            published.id,
+            draft.id,
+            include_programme=False,
+            include_allowances=True,
+            include_equipment=True,
+        )
         replacement.current_draft_revision_id = draft.id
         _sync_standard_travel(db, replacement, draft)
         db.flush()
@@ -1465,8 +1667,10 @@ def reschedule_published_workday(
             draft.id,
             actor_user_id,
             replacement.lock_version,
-            True,
+            confirm_conflicts,
             use_existing_transaction=True,
+            reviewed_conflict_state=reviewed_conflict_state,
+            require_stable_conflict_state=True,
         )
 
         summary = (
@@ -1672,6 +1876,7 @@ def decline_published_assignment(
             travel_departure_time=published.travel_departure_time,
             travel_to_hotel_minutes=published.travel_to_hotel_minutes,
             default_hotel=published.default_hotel,
+            default_hotel_address_snapshot=published.default_hotel_address_snapshot,
             hotel_to_track_minutes=published.hotel_to_track_minutes,
             return_travel_minutes=published.return_travel_minutes,
             pack_up_minutes=published.pack_up_minutes,
@@ -1718,31 +1923,7 @@ def decline_published_assignment(
                     return_travel_minutes_override=old.return_travel_minutes_override,
                 )
             )
-        for item in db.scalars(select(ProgrammeItem).where(ProgrammeItem.revision_id == published.id)):
-            db.add(
-                ProgrammeItem(
-                    revision_id=new_revision.id,
-                    kind=item.kind,
-                    sequence=item.sequence,
-                    operational_time=item.operational_time,
-                    source_time=item.source_time,
-                    source_provider=item.source_provider,
-                    source_retrieved_at=item.source_retrieved_at,
-                    manual_override=item.manual_override,
-                )
-            )
-        for indicator in db.scalars(
-            select(AllowanceIndicator).where(AllowanceIndicator.revision_id == published.id)
-        ):
-            db.add(
-                AllowanceIndicator(
-                    revision_id=new_revision.id,
-                    person_id=indicator.person_id,
-                    kind=indicator.kind,
-                    entitlement_hours=indicator.entitlement_hours,
-                    explanation=indicator.explanation,
-                )
-            )
+        _copy_revision_children(db, published.id, new_revision.id)
         for application in db.scalars(
             select(OpenPositionApplication).where(
                 OpenPositionApplication.revision_id == published.id,

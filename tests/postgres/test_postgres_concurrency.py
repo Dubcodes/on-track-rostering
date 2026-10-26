@@ -1325,3 +1325,83 @@ def test_concurrent_overlapping_workday_publications_are_serialized(pg_factory) 
     assert len(published) == 1
     assert len(blocked) == 1
     assert "Publish anyway" in blocked[0]
+
+
+def test_concurrent_reschedules_to_overlapping_destinations_require_review(pg_factory) -> None:  # type: ignore[no-untyped-def]
+    user_id, region_id = _authority(pg_factory)
+    with pg_factory() as db:
+        person = Person(display_name=f"Concurrent move {uuid.uuid4().hex[:8]}")
+        db.add(person)
+        db.flush()
+        source_ids: list[uuid.UUID] = []
+        for index in range(2):
+            source = Workday(region_id=region_id, created_by_user_id=user_id)
+            db.add(source)
+            db.flush()
+            revision = WorkdayRevision(
+                workday_id=source.id,
+                revision_number=1,
+                state="PUBLISHED",
+                work_date=date(2032, 2, 1 + index),
+                title=f"Move source {index + 1}",
+                track_name_snapshot="Concurrency track",
+                start_time=time(9),
+                end_time=time(17),
+                created_by_user_id=user_id,
+                published_by_user_id=user_id,
+                published_at=utcnow(),
+            )
+            db.add(revision)
+            db.flush()
+            db.add(
+                Assignment(
+                    revision_id=revision.id,
+                    display_name_snapshot="Camera",
+                    person_id=person.id,
+                    person_name_snapshot=person.display_name,
+                    status="ASSIGNED",
+                )
+            )
+            source.current_published_revision_id = revision.id
+            source_ids.append(source.id)
+        db.commit()
+
+    barrier = threading.Barrier(2)
+    replacements: list[uuid.UUID] = []
+    blocked: list[PublishConflict] = []
+    errors: list[Exception] = []
+
+    def move(source_id: uuid.UUID) -> None:
+        try:
+            with pg_factory() as db:
+                barrier.wait(timeout=10)
+                replacement = reschedule_published_workday(
+                    db,
+                    workday_id=source_id,
+                    new_date=date(2032, 2, 5),
+                    actor_user_id=user_id,
+                )
+                replacements.append(replacement.id)
+        except PublishConflict as exc:
+            blocked.append(exc)
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=move, args=(source_id,)) for source_id in source_ids]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert errors == []
+    assert len(replacements) == 1
+    assert len(blocked) == 1
+    assert blocked[0].conflicts
+    with pg_factory() as db:
+        sources = [db.get(Workday, source_id) for source_id in source_ids]
+        assert sorted(source.status for source in sources) == ["ABANDONED", "SCHEDULED"]
+        assert db.scalar(
+            select(func.count()).select_from(Workday).where(
+                Workday.rescheduled_from_workday_id.in_(source_ids)
+            )
+        ) == 1

@@ -9,7 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditEvent, HumanChange
-from app.catalog.models import BasePosition, CrewGroup, Region, Track, TrackMap, Vehicle
+from app.catalog.models import (
+    BasePosition,
+    CrewGroup,
+    EquipmentSetup,
+    EquipmentSetupItem,
+    OperationalPlace,
+    Region,
+    Track,
+    TrackMap,
+    Vehicle,
+)
 from app.core.csv_safe import spreadsheet_safe_cell
 from app.external_calendar.models import (
     ExternalCalendarEvent,
@@ -25,6 +35,7 @@ from app.rostering.models import (
     ProgrammeItem,
     TravelLeg,
     Workday,
+    WorkdayEquipmentItem,
     WorkdayRevision,
 )
 
@@ -65,6 +76,21 @@ def safe_data_export(db: Session) -> bytes:
             "vehicles.csv",
             Vehicle,
             ("id", "name", "category", "model", "home_region_id", "fuel_type", "lifecycle"),
+        ),
+        (
+            "operational_places.csv",
+            OperationalPlace,
+            ("id", "region_id", "name", "address", "kind", "lifecycle", "lock_version"),
+        ),
+        (
+            "equipment_setups.csv",
+            EquipmentSetup,
+            ("id", "region_id", "name", "notes", "lifecycle", "lock_version"),
+        ),
+        (
+            "equipment_setup_items.csv",
+            EquipmentSetupItem,
+            ("id", "setup_id", "item_key", "name", "quantity", "notes", "display_order"),
         ),
         (
             "people.csv",
@@ -128,6 +154,7 @@ def safe_data_export(db: Session) -> bytes:
                 "travel_departure_time",
                 "travel_to_hotel_minutes",
                 "default_hotel",
+                "default_hotel_address_snapshot",
                 "hotel_to_track_minutes",
                 "return_travel_minutes",
                 "pack_up_minutes",
@@ -135,6 +162,14 @@ def safe_data_export(db: Session) -> bytes:
                 "change_reason",
                 "created_at",
                 "published_at",
+            ),
+        ),
+        (
+            "workday_equipment_items.csv",
+            WorkdayEquipmentItem,
+            (
+                "id", "revision_id", "item_key", "setup_id", "setup_name_snapshot",
+                "name", "quantity", "notes", "display_order",
             ),
         ),
         (

@@ -831,9 +831,67 @@
       if (positionId) loadCrewPicker(row, positionId);
     });
   };
-  form.querySelector('[name="region_id"]')?.addEventListener("change", refreshCrew);
+  const regionSelect = form.querySelector('[name="region_id"]');
+  regionSelect?.addEventListener("change", refreshCrew);
   form.querySelector('[name="work_date"]')?.addEventListener("change", refreshCrew);
   form.querySelector('[name="track_id"]')?.addEventListener("change", refreshCrew);
+  const equipmentRows = form.querySelector("[data-workday-equipment-rows]");
+  const equipmentTemplate = document.querySelector("[data-workday-equipment-row]");
+  const setupData = document.querySelector("[data-equipment-setups]");
+  let equipmentSetups = setupData ? JSON.parse(setupData.textContent || "[]") : [];
+  const replacePlaceOptions = (selector, places) => {
+    const datalist = document.querySelector(selector);
+    if (!datalist) return;
+    datalist.replaceChildren(...places.map((place) => {
+      const option = document.createElement("option");
+      option.value = place.name;
+      option.textContent = place.address || "";
+      return option;
+    }));
+  };
+  const refreshOperationalOptions = async () => {
+    if (!form.dataset.operationalOptionsUrl || !regionSelect?.value) return;
+    const url = new URL(form.dataset.operationalOptionsUrl, window.location.origin);
+    url.searchParams.set("region_id", regionSelect.value);
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!response.ok) return;
+    const data = await response.json();
+    const places = Array.isArray(data.places) ? data.places : [];
+    equipmentSetups = Array.isArray(data.equipment_setups) ? data.equipment_setups : [];
+    replacePlaceOptions("#operational-destinations", places);
+    replacePlaceOptions(
+      "#operational-accommodation",
+      places.filter((place) => place.kind === "ACCOMMODATION"),
+    );
+    const setupSelect = form.querySelector("[data-equipment-setup]");
+    if (setupSelect) {
+      setupSelect.replaceChildren(new Option("Custom / none", ""));
+      equipmentSetups.forEach((setup) => setupSelect.add(new Option(setup.name, setup.id)));
+    }
+  };
+  regionSelect?.addEventListener("change", refreshOperationalOptions);
+  const addEquipmentRow = (item = {}) => {
+    if (!equipmentRows || !equipmentTemplate) return;
+    const fragment = equipmentTemplate.content.cloneNode(true);
+    fragment.querySelector('[name="equipment_item_key"]').value = item.key || crypto.randomUUID();
+    fragment.querySelector('[name="equipment_name"]').value = item.name || "";
+    fragment.querySelector('[name="equipment_quantity"]').value = item.quantity || 1;
+    fragment.querySelector('[name="equipment_notes"]').value = item.notes || "";
+    equipmentRows.append(fragment);
+  };
+  form.querySelector("[data-add-workday-equipment]")?.addEventListener("click", () => addEquipmentRow());
+  form.querySelector("[data-apply-equipment]")?.addEventListener("click", () => {
+    const selected = form.querySelector("[data-equipment-setup]")?.value;
+    const setup = equipmentSetups.find((row) => row.id === selected);
+    if (!setup) return;
+    if (equipmentRows.children.length && !window.confirm("Replace this Workday's equipment items with the selected setup?")) return;
+    equipmentRows.replaceChildren();
+    setup.items.forEach(addEquipmentRow);
+  });
+  equipmentRows?.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-remove-workday-equipment]");
+    if (remove) remove.closest(".equipment-row").remove();
+  });
   if (form.dataset.newMode === "1" && !list.children.length) applyPreset(false);
   document.addEventListener("pointerdown", (event) => document.querySelectorAll("[data-search-picker]").forEach((picker) => { if (!picker.contains(event.target)) closePicker(picker); }));
 })();

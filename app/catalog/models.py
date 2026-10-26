@@ -158,3 +158,68 @@ class Vehicle(Base):
     is_truck: Mapped[bool] = mapped_column(Boolean, default=False)
     seat_capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
+
+
+class OperationalPlace(Base):
+    """A reusable regional destination; Region.base_* remains the operational base."""
+
+    __tablename__ = "operational_places"
+    __table_args__ = (
+        Index(
+            "uq_operational_places_region_name_ci",
+            "region_id",
+            text("lower(name)"),
+            unique=True,
+        ),
+        CheckConstraint(
+            "kind IN ('ACCOMMODATION', 'DESTINATION')", name="operational_place_kind"
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    region_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("regions.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    kind: Mapped[str] = mapped_column(String(24), default="DESTINATION")
+    lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class EquipmentSetup(Base):
+    """Reusable regional IV/equipment configuration, independent of stock or assets."""
+
+    __tablename__ = "equipment_setups"
+    __table_args__ = (
+        Index(
+            "uq_equipment_setups_region_name_ci",
+            "region_id",
+            text("lower(name)"),
+            unique=True,
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    region_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("regions.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    notes: Mapped[str] = mapped_column(String(500), default="")
+    lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.ACTIVE.value)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class EquipmentSetupItem(Base):
+    __tablename__ = "equipment_setup_items"
+    __table_args__ = (
+        UniqueConstraint("setup_id", "item_key"),
+        CheckConstraint("quantity BETWEEN 1 AND 999", name="equipment_setup_item_quantity"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    setup_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("equipment_setups.id", ondelete="CASCADE"), index=True
+    )
+    item_key: Mapped[uuid.UUID] = mapped_column(Uuid, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(160))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    notes: Mapped[str] = mapped_column(String(500), default="")
+    display_order: Mapped[int] = mapped_column(Integer, default=0)

@@ -13,7 +13,7 @@ from app.core.enums import WorkdayStatus
 from app.core.holidays import holiday_for_date
 from app.identity.models import Person
 from app.positions.ordering import position_order
-from app.positions.service import eligibility
+from app.positions.service import bulk_eligibility
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.participation import active_published_assignments, person_day_participation
 from app.rostering.travel import effective_person_travel, transport_display
@@ -171,6 +171,10 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
         )
         .order_by(WorkdayRevision.work_date)
     ).all()
+    open_position_ids = {position.id for *_rest, position in open_rows}
+    open_eligibility = bulk_eligibility(
+        db, {actor.person_id}, open_position_ids
+    ) if open_position_ids else {}
     for workday, revision, region, palette_slot, _assignment, position in open_rows:
         if (
             workday.id in own_workday_ids
@@ -178,7 +182,7 @@ def month_items(db: Session, actor: Actor, start: date, end: date) -> list[dict[
             or not can_apply_for_open_position(actor, workday.region_id)
         ):
             continue
-        eligible, _reason = eligibility(db, actor.person_id, position.id)
+        eligible, _reason = open_eligibility[(actor.person_id, position.id)]
         if not eligible:
             continue
         result.append(

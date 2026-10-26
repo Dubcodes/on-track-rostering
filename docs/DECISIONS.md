@@ -163,3 +163,15 @@ Authentication middleware validates a presented device but never renews authenti
 ## 2026-10-23 — Web Push is an allowlisted outbound boundary
 
 User-supplied Web Push subscriptions are accepted only for the configured legitimate browser-push provider hosts, HTTPS on the default port, and DNS results that are all public. The same validation runs immediately before delivery. Redirects are disabled, response bodies and subscription material are bounded, and delivery uses a finite timeout. Application validation is complemented—not replaced—by deployment egress rules that deny internal, loopback, link-local and metadata destinations.
+
+## 2026-10-27 — operational places reuse existing base and Track concepts
+
+`Region.base_*` remains the operational base and `Track` remains the venue. The reusable catalogue adds Region-owned accommodation and other destinations only, with archive rather than historical mutation. Builder selection is a convenience that copies text/address into a revision snapshot; free text and manual durations always remain available. This avoids a second generic-place identity for existing bases or Tracks and introduces no geocoding dependency.
+
+## 2026-10-27 — IV setups are configuration snapshots, not inventory
+
+A regional equipment setup is a reusable list of human-readable items, quantities and optional notes. Applying it creates independently editable revision-owned snapshot rows. It does not encode stock, serialized assets, availability, allocation, depreciation or purchasing, and it remains separate from crew Position presets.
+
+## 2026-10-27 — group travel remains explicit at unresolved boundaries
+
+The standard overnight plan is the shared group default; Person-level rows express opt-out and accommodation/transport exceptions, and explicit TravelLegs describe the operation. The application does not infer per-leg parties, vehicle continuity or room allocations. Those extensions require a product decision because each changes audit, conflict and editing semantics.

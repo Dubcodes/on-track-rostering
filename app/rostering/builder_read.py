@@ -115,6 +115,7 @@ def crew_picker_views(
             .where(
                 WorkdayRevision.work_date == work_date,
                 Workday.status == WorkdayStatus.SCHEDULED.value,
+                Assignment.status == AssignmentStatus.ASSIGNED.value,
                 *( [Workday.id != exclude_workday_id] if exclude_workday_id else [] ),
                 Assignment.person_id.is_not(None),
             )
@@ -173,7 +174,7 @@ def crew_picker_views(
             )
             hint = HINT_LABELS[reason]
             if person.id in same_date_people:
-                hint += "; also rostered this date"
+                hint += "; published on another Workday this date — Preview checks actual overlap"
             region_name = region_names.get(person.home_region_id, "No primary region")
             context_label = region_name if person.home_region_id != region_id else ""
             if person.display_name in duplicate_names:

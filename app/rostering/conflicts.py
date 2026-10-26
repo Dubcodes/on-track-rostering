@@ -11,6 +11,9 @@ from app.core.enums import AssignmentStatus, WorkdayStatus
 from app.rostering.models import Assignment, Workday, WorkdayRevision
 from app.rostering.travel import TRANSPORT_VEHICLE, effective_person_interval
 
+# All persisted minute offsets are validated to 0..1440. A hotel/truck call can
+# therefore start at most one civil day early. A final event may roll to the next
+# day, followed by up to one day of pack-up and one day of return travel.
 _MAX_START_DAYS_BEFORE_WORKDAY = 1
 _MAX_FINISH_DAYS_AFTER_WORKDAY = 3
 
