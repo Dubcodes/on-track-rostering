@@ -6,7 +6,7 @@ Priority meanings: **P0** roster/security correctness, **P1** first operational 
 
 | Feature or problem | Status and evidence | What remains | Priority | Decision / dependencies / qualification |
 |---|---|---|---|---|
-| Cross-calendar scheduling conflicts | Implemented, pending exact-head CI; `app/rostering/conflicts.py`, Domain Rules and scheduling regression suites | Qualify PostgreSQL serialization and Builder Publish-anyway flow; then perform the listed staging acceptance cases | P0 | No new product decision; precedes operational roster use |
+| Cross-calendar scheduling conflicts | Implemented and qualified in CI at `5e315353…`; `app/rostering/conflicts.py`, Domain Rules and scheduling regression suites | Perform the listed staging acceptance cases after a separately authorized deployment | P0 | No new product decision; live acceptance precedes operational roster use |
 | Legacy Person/email integrity convergence | Partially implemented; diagnostics and service guards exist, but Architecture records the deferred database constraint | Reconcile real duplicates/mismatches, then add the safe partial case-insensitive constraint if evidence permits | P0 | Explicit record-by-record decisions; must precede clean production import |
 | Full staging permission/privacy matrix | Implemented in code, pending live verification; `docs/STAGING_QUALIFICATION.md`, security audit and Build Status | Exercise every role, Region, private detail, recovery and fresh-auth boundary against the deployed candidate | P0 | Requires an explicitly authorized staging deployment and representative accounts |
 | Reusable hotels and locations | Not implemented; current revisions/assignments store text and address snapshots (`docs/IMPLEMENTATION_INVENTORY.md`) | Design canonical reusable place records, lifecycle, Region ownership, selection and snapshot rules | P1 | Product/domain design first; foundation for group travel |
@@ -27,7 +27,7 @@ Priority meanings: **P0** roster/security correctness, **P1** first operational 
 
 ## Recommended sequence
 
-1. Qualify and stage-accept cross-calendar conflict detection, then complete the permission/privacy matrix.
+1. Stage-accept the qualified cross-calendar conflict detection, then complete the permission/privacy matrix.
 2. Resolve the truck-driver boundary and design reusable places; implement reusable hotel/location records.
 3. Build group travel/accommodation and multi-leg coordination on that place model, then define IV/event configuration reuse.
 4. Complete physical-device, offline, push, provider and backup/restore evidence for the first operational release.

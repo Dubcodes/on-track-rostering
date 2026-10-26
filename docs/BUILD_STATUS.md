@@ -1,12 +1,8 @@
 # Build status — 2026-10-26
 
-## Current development candidate
-
-The working candidate after `c5b2e4a86d5f934c9cfb2ce6964e217e41859db4` corrects cross-calendar Person/Vehicle conflict detection, shares parent/generated-Travel checks between Preview and Publish, and closes concurrent different-Workday publication validation on PostgreSQL. It is not a qualified baseline until its exact committed GitHub head passes the release gate. `docs/REMAINING_WORK.md` is now the maintained prioritized backlog.
-
 ## Application-behavior qualification baseline and deployment boundary
 
-The current qualified application-behavior baseline is exact SHA `4422bea51e22255297a7e126409096fcd3dcc622` (release-gate run `40147775820`): **383 PostgreSQL-backed tests** and **80 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-4422bea51e22255297a7e126409096fcd3dcc622` with digest `sha256:0a0077422a03619074f805009d14a83831077842eccd989bd888c83ff7c5feb9`. The sole Alembic head is `a3d8c1f4e720`.
+The current qualified application-behavior baseline is exact SHA `5e315353d95bbfb084413ff65c5eb1398d2fc5a2` (release-gate run `40231356215`): **398 PostgreSQL-backed tests** and **81 Playwright tests** passed, the dependency/security gate passed, production and staging Compose contracts passed, and the qualified image was published as immutable tag `ghcr.io/dubcodes/on-track-rostering:sha-5e315353d95bbfb084413ff65c5eb1398d2fc5a2` with digest `sha256:b27a7cc5e42000c212c9ed6c1b3bf0aa4c0bf16f117ea536fa0f2e11855a997f`. The sole Alembic head remains `a3d8c1f4e720`.
 
 Earlier SHAs, including `397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
 
@@ -23,6 +19,8 @@ Local development and qualification remain Docker-free. PostgreSQL integration, 
 ## Implemented
 
 - The qualified internet-facing security hardening baseline makes active grants the session boundary; protects pending/active Manager and Admin accounts; invalidates stale recovery artifacts on authority/lifecycle transitions; serializes TOTP, reset, pending-activation and final-Admin races; gives sessions absolute caps and route-owned cookies; centralizes safe login returns; throttles factor/challenge attempts; enforces privileged MFA pre-enrollment/readiness; constrains Web Push outbound destinations/redirects/responses; separates spreadsheet-safe and exact CSV; and authorizes Track maps through Region Crew View or current published assignment.
+
+- Scheduling conflict detection compares complete effective civil-date intervals across same, overnight and adjacent dates for People and Vehicles, including previous-day hotel/truck starts and generated Travel. It excludes inactive/history and coordinated parent/Travel false matches, deduplicates current-publication/active-draft and multi-Position warnings, redacts unauthorized Region detail, revalidates Publish-anyway decisions, and serializes different-Workday PostgreSQL publication checks.
 
 - The operational UX refinement adds one-POST, content-versioned Track-map activation with a neutral map canvas and explicit enlarged zoom controls; atomic Person-plus-setup-link onboarding; authoritative setup-panel refresh after continuous Person save; a structured role-first, multi-Region permission editor bounded by existing policy; searchable Advanced Accounts; two-minute User/device/action-bound fresh-action intents with one-step completion after reauthentication; PIN-first and separate password login modes over one backend; friendly device labels plus current/other/all-device revocation; authoritative invitation metadata and ordinary post-activation sessions; reduced assigned-Contractor coworker visibility with HTML/API parity; single-Region Crew simplification; Day information hierarchy; icon-only fortnight markers; and clearer offer-preference semantics.
 
