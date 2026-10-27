@@ -989,16 +989,21 @@ def test_builder_applies_reusable_place_and_adjustable_iv_snapshot(browser_site)
     page.locator('[name="day_type"]').select_option("OTHER:")
     page.locator('[name="region_id"]').select_option(values["region_id"])
     page.locator('[name="track_id"]').select_option(values["track_id"])
+    page.locator("details", has=page.get_by_text("Notes & secondary details", exact=True)).locator(
+        "summary"
+    ).click()
     page.locator('[name="title"]').fill("Browser equipment preparation")
     page.locator('[name="start_time"]').fill("09:00")
     page.locator('[name="end_time"]').fill("17:00")
+    page.locator("details.builder-travel-panel > summary").click()
     page.locator('[name="default_hotel"]').fill(values["operational_place_name"])
+    page.locator('[data-equipment-setup]').locator("xpath=ancestor::details/summary").click()
     page.locator('[name="equipment_setup_id"]').select_option(values["equipment_setup_id"])
     page.locator("[data-apply-equipment]").click()
     rows = page.locator("[data-workday-equipment-rows] .equipment-row")
     assert rows.count() == 2
     rows.nth(0).locator('[name="equipment_quantity"]').fill("3")
-    page.get_by_role("button", name="Save & Preview").click()
+    page.get_by_role("button", name="Save & Preview", exact=True).click()
     page.wait_for_url("**/preview")
     assert page.get_by_role("heading", name="IV equipment").is_visible()
     assert "3 × Browser camera" in page.locator("body").inner_text()
@@ -2502,11 +2507,12 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
     ).first.inner_text().casefold().endswith(" crew")
     assert person_picker.get_by_text("Other regions", exact=True).is_visible()
     same_date_messages = person_picker.get_by_text(
-        "No position history recorded; also rostered this date", exact=True
+        "No position history recorded; published on another Workday this date — Preview checks actual overlap",
+        exact=True,
     )
     assert same_date_messages.first.is_visible()
     same_date_warning = person_picker.locator(
-        '.same-date-warning[title="Already rostered on this date"]'
+        '.same-date-warning[title="Published on another Workday this date; Preview checks actual overlap"]'
     ).first
     assert same_date_warning.is_visible()
     assert same_date_warning.inner_text() == "!"
@@ -2640,7 +2646,8 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         position_aware_option.wait_for(state="visible")
         assert "Preferred or approved" in position_aware_option.inner_text()
         new_same_date_messages = new_person_picker.get_by_text(
-            "No position history recorded; also rostered this date", exact=True
+            "No position history recorded; published on another Workday this date — Preview checks actual overlap",
+            exact=True,
         )
         assert new_same_date_messages.first.is_visible()
         new_person_input.fill("John Smith")
@@ -2679,7 +2686,9 @@ def test_key_pages_are_responsive(browser_site, width: int) -> None:  # type: ig
         ".builder-application-row strong", has_text="Browser Crew Member"
     ).is_visible()
     assert applications.get_by_role("button", name="Select", exact=True).is_visible()
-    assert applications.get_by_text("also rostered this date", exact=False).is_visible()
+    assert applications.get_by_text(
+        "published on another Workday this date", exact=False
+    ).is_visible()
     _assert_no_horizontal_overflow(page)
     page.goto(base_url + f"/manage/workdays/{values['workday_id']}/preview")
     assert page.get_by_text("Publication preview", exact=True).is_visible()
