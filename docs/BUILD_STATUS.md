@@ -8,6 +8,10 @@ Local Windows checks for that implementation passed compilation, Ruff, PostgreSQ
 
 Earlier SHAs, including `397740ff1506e0e7cbc5dcc4f1e441c8b35e6a8d`, remain historical qualified checkpoints. They are not the current implementation baseline and are not assertions about the version running in staging or production. A later documentation-only head may receive its own exact-head gate without changing this application-behavior baseline.
 
+The current qualified exact source head is documentation-reconciliation commit `5dd5b77a52552ab1c5265302d8ebf81539cf5079`, release-gate `40425690832`. The same **406 PostgreSQL-backed tests** and **82 Playwright tests** passed, with immutable image digest `sha256:e285b88d21226eda5374df04e3a57e479c890b3e7f5eac924015bf51773eebcf` and Alembic head `b4e9d2a7f130`. This does not replace the application-behavior checkpoint above; it identifies the exact qualified repository and image selected for staging.
+
+The cross-region oversight candidate is open as GitHub PR `#2` on branch `codex/cross-region-oversight`. PR release-gate `42370128015` qualified candidate head `5c117e9b2cfbc7433f8792b62b6ab24530720ea7` through its GitHub merge ref: **410 PostgreSQL 17.6-backed tests** and **82 Playwright tests** passed, revision `c5a7e2d9f410` applied through the complete chain and repeated upgrade, dependency/security and Compose checks passed, and the application image built with embedded merge-ref identity. Pull-request workflows do not publish GHCR images or update `:staging`; the candidate is not merged, selected for staging or deployed. The final PR head must retain its own successful exact-head check after documentation reconciliation.
+
 An operational deployment candidate is identified by all three of the following, resolved when the candidate is deliberately selected:
 
 - the exact selected commit SHA;
@@ -75,7 +79,7 @@ These are historical checkpoints, not the current qualification baseline.
 
 `docs/REMAINING_WORK.md` is the maintained backlog and recommended development sequence. This file records qualification state rather than duplicating that ledger.
 
-The private staging environment is initialized and reachable with a bootstrap Admin, but its last recorded Administration build predates this candidate. No redeploy is authorized here. After a separate deployment decision, follow `docs/STAGING_QUALIFICATION.md`; the broader clean-data rehearsal remains a separately authorized phase under `docs/STAGING_RESET_REIMPORT.md`.
+The private staging environment is initialized and reachable with a bootstrap Admin. Operator checks on 28 October 2026 confirmed application and scheduler on qualified image `5dd5b77a52552ab1c5265302d8ebf81539cf5079`, PostgreSQL at `b4e9d2a7f130`, and application/database/scheduler readiness passing; the public login and health endpoints reconfirmed the application build and public health on 6 November. That is deployment evidence, not full staging acceptance. No redeploy is authorized here. Continue with `docs/STAGING_QUALIFICATION.md`; the backup/restore proof, disposable-data workflow matrix and broader clean-data rehearsal remain separately authorized phases.
 
 ## Known architecture constraint
 
