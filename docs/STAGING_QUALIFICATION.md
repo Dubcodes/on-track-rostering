@@ -19,8 +19,13 @@ When executing a row, record date/time, the build SHA shown in Administration, r
 
 | Check | Status | Evidence |
 |---|---|---|
-| HTTPS staging is reachable | PASS | User observed the real private HTTPS deployment. |
-| Public hostname is `ontrackrostering.dubcodesmedia.com` | PASS | User observed the public URL. |
+| HTTPS staging is reachable | PASS | Direct public GET observed 27 October 2026, rechecked 28 October and again 6 November 2026. Cloudflare served the HTTPS application and login surface. |
+| Public hostname is `ontrackrostering.dubcodesmedia.com` | PASS | Directly observed at the configured public URL on 27 October 2026. |
+| Current deployed build identity | PASS | The 27 October public observation of `c5b2e4a…` is historical. On 28 October 2026 the operator confirmed both application and scheduler were using qualified image `5dd5b77a52552ab1c5265302d8ebf81539cf5079`; the public login reported that full build again on 6 November 2026. Re-observe the exact container image ID/digest at the start of the acceptance cycle. |
+| Qualification of the currently deployed build | PASS | Exact-head release-gate `40425690832` for `5dd5b77a52552ab1c5265302d8ebf81539cf5079` passed 406 PostgreSQL-backed tests, 82 Playwright tests and the dependency/security, Compose and image checks; published digest `sha256:e285b88d21226eda5374df04e3a57e479c890b3e7f5eac924015bf51773eebcf`. This proves image qualification, not live workflow acceptance. |
+| Public security-header smoke | PASS | Login/health responses returned HSTS (`max-age=31536000; includeSubDomains`), CSP, `X-Content-Type-Options`, same-origin Referrer Policy and restrictive Permissions Policy through Cloudflare on 27 October 2026 and again on 28 October. Direct-origin denial and proxy-network correctness remain unobserved. |
+| Public authentication entry points | PASS | PIN-first and separate password pages rendered. Passkey entry was offered. Public signup returned the configured closed-request message. No credential, throttle, session or account mutation was attempted. |
+| GitHub `main` branch protection | FAIL | Read-only GitHub API reported `main` unprotected on 27 October 2026 and again on 6 November 2026. This blocks a production-readiness claim until required release checks, force-push/deletion restrictions and review policy are configured and re-observed. |
 | Historical footer visibly reported `ee8af0d5dcd215c6df02f113ef8c8bf43ee936f2` | PASS | Historical user observation from before the global footer was removed; it is not evidence for the current candidate. |
 | PostgreSQL initialized | PASS | Real staging database initialization completed. |
 | Bootstrap Admin creation | PASS | `python -m app.cli create-admin` completed once in staging. Do not recreate it. |
@@ -42,30 +47,85 @@ At the start of each staging qualification cycle, select a qualified candidate d
 - `SELECTED_DIGEST` — the digest published for `SELECTED_IMAGE`; and
 - `ALEMBIC_HEAD` — the migration head expected from that selected source.
 
-All candidate-specific checks below refer to that selected qualified SHA and remain **PENDING** until the private staging stack is deliberately reset/redeployed and observed.
+All candidate-specific checks below refer to that selected qualified SHA. The deployment/readiness facts explicitly recorded as PASS were observed on 28 October 2026; every workflow row remains **PENDING** until separately exercised against the real deployment.
 
-**Current operator context at the time of writing:** application-behavior SHA `4422bea51e22255297a7e126409096fcd3dcc622` passed exact-head release-gate run `40147775820` with **383 PostgreSQL-backed tests** and **80 Playwright tests**. Its immutable image is `ghcr.io/dubcodes/on-track-rostering:sha-4422bea51e22255297a7e126409096fcd3dcc622`, digest `sha256:0a0077422a03619074f805009d14a83831077842eccd989bd888c83ff7c5feb9`, with Alembic head `a3d8c1f4e720`. The gate also published the matching `:staging` tag, but CI did not deploy it. The staging environment is initialized, reachable and has its bootstrap Admin, but this candidate is not claimed as deployed and all unobserved candidate-specific rows remain PENDING. Re-resolve and record every field immediately before a qualification cycle begins.
+**Selected candidate for the next qualification cycle:** source SHA `5dd5b77a52552ab1c5265302d8ebf81539cf5079`, exact-head release-gate `40425690832`, immutable image `ghcr.io/dubcodes/on-track-rostering:sha-5dd5b77a52552ab1c5265302d8ebf81539cf5079`, digest `sha256:e285b88d21226eda5374df04e3a57e479c890b3e7f5eac924015bf51773eebcf`, and Alembic head `b4e9d2a7f130`. The gate passed **406 PostgreSQL-backed tests**, **82 Playwright tests**, dependency/security audit, both Compose contracts and embedded-build verification.
+
+The local cross-region oversight worktree is a later uncommitted release candidate, not the selected staging candidate. It introduces additive index-only revision `c5a7e2d9f410`; do not expect that head in staging or deploy it until an exact GitHub SHA has passed the full PostgreSQL and Playwright gate and is separately selected.
+
+On 6 November 2026 an anonymous read-only GHCR manifest request reconfirmed that the immutable selected tag resolves with HTTP 200 to `sha256:e285b88d21226eda5374df04e3a57e479c890b3e7f5eac924015bf51773eebcf` as a Docker v2 manifest. GitHub `origin/main` and release-gate `40425690832` still both resolved to exact SHA `5dd5b77a52552ab1c5265302d8ebf81539cf5079`; no newer source was substituted.
+
+Direct public observation on 27 October 2026 showed staging still running `c5b2e4a…`; that observation was superseded by the 28 October operator checks. Those checks confirmed application and scheduler on `5dd5b77…`, PostgreSQL at `b4e9d2a7f130`, and application, database and scheduler readiness passing. The newer workflows are therefore present but **not live-accepted**. Re-resolve the image, migration and readiness facts at the beginning of the next acceptance cycle; do not redeploy merely to repeat the completed upgrade.
+
+### Migration delta for the selected candidate
+
+Source inspection establishes one schema revision between the deployed source line and the selected candidate: `a3d8c1f4e720 → b4e9d2a7f130`. It creates `operational_places`, `equipment_setups`, `equipment_setup_items` and `workday_equipment_items`, including Region/revision foreign keys, lifecycle and quantity checks, stable item uniqueness and case-insensitive Region/name indexes. It also adds `workday_revisions.default_hotel_address_snapshot` as non-null with an empty-string server default so existing rows remain valid. There is no data backfill, existing-row rewrite, table/column removal or new staging environment variable, and the staging Compose/configuration contract is unchanged. PostgreSQL transactional DDL and Alembic version tracking make a completed revision repeat-safe, but the operator must still confirm the live starting version and startup result; no automatic downgrade is approved.
+
+## Qualification execution order
+
+Use the detailed rows below as the evidence record. Execute them in this order so prerequisites are established once and failures do not contaminate later evidence.
+
+1. **Read-only preflight:** record current build, app/scheduler image IDs and digests, Compose project, services, volumes, network, tunnel target, health, migration head, readiness panel, `production-check`, scheduler heartbeat and redacted logs. Stop if app and scheduler differ, production resources are attached, or backups cannot be made.
+2. **Backup qualification:** create and validate the PostgreSQL plus `/app/data` recovery set under a separately approved maintenance window. Do not combine this with a reset, restore or import.
+3. **Baseline smoke:** re-prove exact build `5dd5b77…`, migration `b4e9d2a7f130`, app/database/scheduler health, retained Admin access, retained Track-map data, clean logs and matching app/scheduler images without redeploying.
+4. **Disposable identity/security:** create dedicated demo identities, then exercise login modes, invitation/reset, devices, fresh authentication, TOTP/recovery, optional passkey and final-Admin safeguards. Perform privacy/authorization checks with independent browser profiles.
+5. **Master-data foundations:** qualify regional authority, canonical Position behavior, Vehicles, reusable operational places, IV setups, map lifecycle and immutable address/equipment snapshots.
+6. **Authoritative roster workflow:** run Manager create → Builder → Preview → Publish → Employee read → edit/republish/history, then incomplete Workdays, generated Travel, capacity/driver behavior, leave, Open Positions, decline and notifications.
+7. **Conflict and reschedule scenarios:** cover Person/Vehicle same-day and adjacent-day overlaps, exact boundaries, cross-Region redaction, generated Travel, concurrent revalidation and destination-conflict rescheduling. A failed or declined reschedule confirmation must leave the source and generated Travel intact.
+8. **Employee/privacy/device matrix:** exercise every role, Month/List/Day, Hours, offline namespace, logout/account switching, responsive widths and physical devices. Do not infer server authorization from hidden controls.
+9. **Providers and background work:** observe one complete scheduler cycle, component-isolated provider failures, Contractor maintenance, reminders/outbox, deliberate Push-disabled behavior or staging-only real delivery, and last-good programme/map evidence.
+10. **Restart and recovery window:** only under separate operational authority, prove app/scheduler/full-stack restart persistence and rehearse isolated restore of both PostgreSQL and `/app/data`.
+
+Before any real employee access, phases 1–8 are release-critical. Real Push delivery may remain deliberately disabled if the deployment records that choice; destructive restore rehearsal, representative-volume performance and provider availability may remain pending only with an explicit operational risk decision.
+
+## Actual staging identity and future change controls
+
+The selected candidate upgrade has already occurred. These controls apply to read-only verification now and to any separately authorized future change; they do not authorize a redeploy.
+
+1. In Portainer, open only the stack displayed as `on-track-rostering`. The observed Compose project label is also `on-track-rostering`, while container names use the `on-track-rostering-staging_*` prefix and the repository declares `on-track-rostering-staging`. Do not use the display name, container prefix or repository declaration as a substitute for inspecting the live labels.
+2. Record the current image ID and repo digest for both app and scheduler. Confirm they match one another and record the current application build from Administration or the public login `data-build-id`.
+3. Confirm the attached volumes are exactly `ontrack_staging_postgres_data` and `ontrack_staging_app_data`, the network is `ontrack_staging_internal`, neither app nor database publishes a host port, and the Cloudflare/reverse proxy reaches `staging_app:8000` only through the intended private network. Do not proceed if any production/shared resource appears.
+4. Preserve the existing staging database credentials, `ONTRACK_SECRET_KEY`, `ONTRACK_CREDENTIAL_PEPPER`, allowed-host/trusted-proxy settings, exact WebAuthn origin/RP ID, VAPID choice and all MFA enrollment state. Verify variable presence and identity without copying values into evidence. Never regenerate or silently replace them during an image update.
+5. Create a timestamped PostgreSQL custom-format dump and a separate copy of the entire staging `/app/data` volume as described in `BACKUP_RESTORE.md`. Verify `pg_restore --list`, dump size, SHA-256 checksum and readable app-data contents; record PostgreSQL version, deployed SHA and creation time. Keep an encrypted copy outside the host and all On Track volumes. The Admin CSV export is not a backup.
+6. Confirm rollback choices before changing the stack: the verified two-part backup, the current qualified image/digest, and the selected qualified image/digest. Migration `b4e9d2a7f130` is additive: it creates place/equipment tables and adds a defaulted snapshot column. Do not plan an automatic Alembic downgrade; restore both backup parts if schema/data rollback is genuinely required.
+7. For any future update, pin `STAGING_ONTRACK_IMAGE` to the chosen immutable `sha-<commit>` image. The Portainer stack is Git-backed and was observed performing periodic GitOps checks; a mutable `:staging` reference can change runtime content on a later pull/reconcile and cannot support stable acceptance evidence.
+8. Only with separate explicit update authorization, redeploy without deleting/recreating volumes, changing environment values, running `create-admin`, or enabling Push.
+9. After any future update, confirm both app and scheduler run the chosen image and digest. Verify the exact Alembic head independently; do not infer it from readiness alone. Check `/health/live`, `/health/ready`, authenticated `/health/scheduler`, Administration build/readiness, `production-check`, and redacted startup/scheduler logs.
+10. For the present acceptance cycle, confirm the existing Admin can still authenticate, existing MFA/passkeys are retained, one known database record remains, retained Track-map files are readable, and an authorized map write remains possible. Then begin the ordered acceptance phases above.
+
+If post-update validation fails, preserve the failed container/log/database state and stop acceptance. Do not reset, downgrade or restore automatically. First establish whether `b4e9d2a7f130` committed and whether the failure is image, configuration, schema or data related. The previous qualified image may be re-pinned only after confirming compatibility with the additive migrated schema; otherwise recovery means a separately authorized two-part restore of the verified PostgreSQL and `/app/data` backup. Never restore only one part when Track-map/database consistency matters.
+
+The deployment operator can collect the required preflight facts on the Portainer host without rendering environment values or changing state. Resolve and inspect live containers by the observed labels, and stop if the result is not exactly one intended container per service:
+
+```sh
+docker ps --filter label=com.docker.compose.project=on-track-rostering --format '{{.ID}} {{.Names}} {{.Image}} {{.Label "com.docker.compose.service"}}'
+docker inspect --format '{{.Name}} project={{index .Config.Labels "com.docker.compose.project"}} service={{index .Config.Labels "com.docker.compose.service"}} image={{.Config.Image}} image_id={{.Image}} mounts={{range .Mounts}}{{.Name}}:{{.Destination}} {{end}} ports={{json .NetworkSettings.Ports}} networks={{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' VERIFIED_CONTAINER_ID
+docker exec VERIFIED_APP_CONTAINER_ID sh -c 'cat /app/.ontrack-build-id'
+docker exec VERIFIED_DB_CONTAINER_ID sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version;"'
+```
+
+Do not use `docker compose config` without a narrow output option because a fully rendered configuration can expose secret environment values. Record only service/image IDs, volume/network/port identity, the build SHA, migration version and safe health statuses.
 
 ## Infrastructure and persistence
 
 | Check | Status | Operator evidence / procedure |
 |---|---|---|
-| `GET /health/live` returns healthy | PENDING | Record status and response. |
-| `GET /health/ready` reaches PostgreSQL | PENDING | Record status and response. |
-| `GET /health/scheduler` reports a recent completed tick | PENDING | Confirm 200 and a fresh completion timestamp after the scheduler starts. |
-| Admin deployment-readiness panel and `production-check` agree | PENDING | Record statuses only; never record configured values. |
-| App container reports healthy | PENDING | Record Portainer health only; do not expose secrets. |
-| PostgreSQL container reports healthy | PENDING | Record health only. |
-| Startup migration reaches Alembic head | PENDING | Confirm startup reaches the recorded `ALEMBIC_HEAD` for the selected qualified SHA. |
+| `GET /health/live` returns healthy | PASS | Direct unauthenticated GET returned 200 on 27/28 October and again on 6 November 2026; the public login then reported build `5dd5b77…`. Recheck at acceptance start. |
+| `GET /health/ready` reaches PostgreSQL | PASS | Direct unauthenticated GET returned 200 on 27/28 October and again on 6 November 2026. The 28 October post-upgrade operator check separately reported database readiness with Alembic `b4e9d2a7f130`. Recheck at acceptance start. |
+| `GET /health/scheduler` reports a recent completed tick | PASS | Operator check on 28 October 2026 reported scheduler readiness passing. Re-observe the completion timestamp at the start of the acceptance cycle. |
+| Admin deployment-readiness panel and `production-check` agree | PENDING | Application/database/scheduler readiness was reported passing on 28 October, but agreement between both intentional diagnostic surfaces was not separately evidenced. Record statuses only; never record configured values. |
+| App container reports healthy | PASS | Operator check on 28 October 2026 reported application readiness passing on `5dd5b77…`. Re-observe container health and image identity together. |
+| PostgreSQL container reports healthy | PASS | Operator check on 28 October 2026 reported database readiness passing. |
+| Startup migration reaches Alembic head | PASS | Operator check on 28 October 2026 confirmed PostgreSQL at `b4e9d2a7f130`, the selected source head. |
 | Repeated app restart keeps Alembic idempotent | PENDING | Restart only the app safely; confirm no migration error. |
 | Session and database state survive app restart | PENDING | Create demo state, restart app, re-check it. |
 | Scheduler state survives/restarts correctly | PENDING | Record heartbeat before and after a safe scheduler restart; confirm due-state resumes without a duplicate concurrent owner. |
-| Correct new build SHA appears after redeploy | PENDING | Administration build/version information must report the exact `SELECTED_SHA` recorded for this qualification cycle. |
+| Correct new build SHA appears after redeploy | PASS | Operator check on 28 October 2026 confirmed both application and scheduler on selected qualified image `5dd5b77…`; re-observe the full ID/digest for the acceptance record. |
 | Startup/runtime logs have no unexpected errors | PENDING | Review app logs after redeploy and smoke flow. |
 | Scheduler logs have no unexpected errors | PENDING | Review one complete tick; source, notification and Contractor maintenance failures remain isolated and intelligible. |
 | Source refresh logs are clean | PENDING | Confirm no unexpected Love Racing programme/map refresh errors; retain evidence without private payloads. |
-| No production/shared database volume is attached | PENDING | Verify stack service/volume names without changing them. |
-| Staging app has no host-published port | PENDING | After redeploy, verify tunnel reaches `staging_app:8000` over `ontrack_staging_internal`. |
+| No production/shared database volume is attached | PASS | Operator observed staging volumes `ontrack_staging_postgres_data` and `ontrack_staging_app_data` on 28 October 2026. Re-inspect mounts before maintenance; names alone do not prove ownership. |
+| Staging app has no host-published port | PASS | Operator observed no host-published application or database ports and network `ontrack_staging_internal` on 28 October 2026. Direct-origin denial and tunnel routing still require separate verification. |
 
 ## Authentication and account security
 
@@ -265,7 +325,8 @@ Create demo-only Admin, Manager, SubManager, Employee, Contractor, and Viewer ac
 | Person-level synchronized travel | PENDING | Change travel on one of a Person's rows and confirm the shared plan and combined span. |
 | Regional and borrowed Vehicles | PENDING | Confirm Manager own-region create/edit/archive, Builder selection of another Region's active borrowed Vehicle, and unchanged Vehicle ownership after save/publish. |
 | Base Position ordering | PENDING | Confirm configured catalogue order is used operationally. |
-| Audit scope and redaction | PENDING | Confirm Admin global/Manager regional reads and redacted detail; Sub-Manager/read-only denial. |
+| Audit scope and redaction | PENDING | Confirm Admin global reads, complete managed-Workday-Region records, and Sub-Manager/read-only denial. |
+| Cross-region employee Audit oversight | PENDING | Publish a Christchurch Workday containing Northern and Christchurch People. Northern Manager automatically sees only the Northern employee's safe addition/Position/timing/removal impacts, responsible actor, timestamp, Christchurch Region and published revision context; no unrelated employee, accommodation/private note, draft or edit control appears. The event appears once if both visibility paths apply. |
 | Leave management and warning override | PENDING | Create inclusive leave, observe Builder/Preview warning, and deliberately save an authorized override. |
 | ASSIGNED / OPEN / TBC / MANAGER_ACTION_REQUIRED | PENDING | Verify distinct states. |
 | Assignment/private note controls | PENDING | Verify visibility separately. |
@@ -379,10 +440,11 @@ Use demo-only People and the documented conservative three-column format.
 | Check | Status | Expected result |
 |---|---|---|
 | Published effective span | PENDING | Current publication only. |
+| Primary-Region employee oversight across Workday Regions | PENDING | Northern Manager sees every current published Northern Person span on Northern, Central and Christchurch Workdays with useful Track/Workday-Region labels, while an unrelated Christchurch Person on a Northern Workday remains absent. |
 | Multiple assignments combine | PENDING | Earliest start, latest finish, no duplicated time. |
 | Overnight work | PENDING | Correct cross-midnight duration. |
 | Fortnight totals/boundaries | PENDING | Correct anchor and grouping. |
-| Team Hours filters | PENDING | Name search, Crew-group filter and Region filter narrow displayed People without changing authoritative totals. |
+| Team Hours filters | PENDING | Name search, Crew-group filter and Primary-Region filter narrow authorized People without changing any selected Person's cross-Workday-Region total; forged Region/Person requests expose nothing. |
 | Persisted fortnight anchor | PENDING | Change the Admin setting and confirm Hours uses it after reload. |
 | Public/regional holiday marker | PENDING | Person geography drives empty-cell marker. |
 | Break deduction | PENDING | No automatic deduction. |
@@ -466,5 +528,5 @@ These items do not block active staging development unless they reveal a structu
 | Production hostname and WebAuthn RP identity | NOT IN CURRENT SCOPE | Freeze before enrolment. |
 | Production VAPID and real Push qualification | NOT IN CURRENT SCOPE | Requires provider/device setup. |
 | Production monitoring/alerting | NOT IN CURRENT SCOPE | Operations design. |
-| Branch protection/release controls | NOT IN CURRENT SCOPE | Production release governance. |
+| Branch protection/release controls | FAIL | GitHub reported `main` unprotected on 27 October 2026 and again on 6 November 2026. Configure and directly verify required release-gate enforcement before production promotion. |
 | Immutable release tag/image | NOT IN CURRENT SCOPE | Required at Foundation freeze/promotion, not each active staging change. |
