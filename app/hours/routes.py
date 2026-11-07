@@ -140,6 +140,9 @@ def management_hours(
     if visible_region_ids is not None:
         region_statement = region_statement.where(Region.id.in_(visible_region_ids))
     region_options = list(db.scalars(region_statement.order_by(Region.name)))
+    allowed_region_filters = {str(region.id) for region in region_options}
+    if region_id and region_id not in allowed_region_filters:
+        raise HTTPException(403, "Hours Region is outside your employee oversight scope.")
     visible_group_ids = {
         crew_group_id for person_groups in memberships.values() for crew_group_id in person_groups
     }

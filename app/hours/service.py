@@ -221,7 +221,10 @@ def published_hours(
         if region_ids is not None:
             if not region_ids:
                 return []
-            statement = statement.where(Workday.region_id.in_(region_ids))
+            # Management Hours is employee oversight, not a regional calendar.
+            # A Manager is responsible for People whose home Region they manage,
+            # including those People's published work in another Region.
+            statement = statement.where(Person.home_region_id.in_(region_ids))
     else:
         if actor.person_id is None:
             return []

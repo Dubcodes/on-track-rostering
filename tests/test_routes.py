@@ -6236,6 +6236,314 @@ def test_vehicle_management_and_audit_are_region_scoped(routed_db) -> None:  # t
     assert "regional.visible" in global_audit.text and "regional.hidden" in global_audit.text
 
 
+def test_audit_route_shows_redacted_cross_region_employee_publication(
+    routed_db,
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (northern_id, _track_id, _position_id, northern_person_id) = routed_db
+    with factory() as db:
+        southern = db.scalar(select(Region).where(Region.id != northern_id))
+        northern_person = db.get(Person, northern_person_id)
+        southern_person = db.scalar(
+            select(Person).where(Person.home_region_id == southern.id)
+        )
+        southern_manager = User(
+            email="southern-manager@example.test",
+            display_name="Southern Manager",
+            credential_hash=hash_credential("223344"),
+            credential_kind="pin",
+        )
+        db.add(southern_manager)
+        db.flush()
+        db.add(
+            RoleGrant(
+                user_id=southern_manager.id,
+                role=Role.MANAGER.value,
+                region_id=southern.id,
+            )
+        )
+        workday = Workday(
+            region_id=southern.id,
+            created_by_user_id=southern_manager.id,
+        )
+        db.add(workday)
+        db.flush()
+        north_slot, south_slot = uuid.uuid4(), uuid.uuid4()
+        previous = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=date(2026, 11, 7),
+            title="Southern Race Day",
+            track_name_snapshot="Southern Track",
+            start_time=time(8),
+            end_time=time(17),
+            created_by_user_id=southern_manager.id,
+            published_by_user_id=southern_manager.id,
+        )
+        db.add(previous)
+        db.flush()
+        db.add_all(
+            [
+                Assignment(
+                    revision_id=previous.id,
+                    slot_key=north_slot,
+                    display_name_snapshot="CCU 1",
+                    person_id=northern_person.id,
+                    person_name_snapshot=northern_person.display_name,
+                    status="ASSIGNED",
+                    start_time=time(8),
+                ),
+                Assignment(
+                    revision_id=previous.id,
+                    slot_key=south_slot,
+                    display_name_snapshot="VT",
+                    person_id=southern_person.id,
+                    person_name_snapshot=southern_person.display_name,
+                    status="ASSIGNED",
+                    accommodation_name="Private southern hotel",
+                ),
+            ]
+        )
+        current = WorkdayRevision(
+            workday_id=workday.id,
+            revision_number=2,
+            state="PUBLISHED",
+            work_date=previous.work_date,
+            title=previous.title,
+            track_name_snapshot=previous.track_name_snapshot,
+            start_time=previous.start_time,
+            end_time=previous.end_time,
+            created_by_user_id=southern_manager.id,
+            published_by_user_id=southern_manager.id,
+        )
+        db.add(current)
+        db.flush()
+        db.add_all(
+            [
+                Assignment(
+                    revision_id=current.id,
+                    slot_key=north_slot,
+                    display_name_snapshot="CCU 2",
+                    person_id=northern_person.id,
+                    person_name_snapshot=northern_person.display_name,
+                    status="ASSIGNED",
+                    start_time=time(7, 30),
+                ),
+                Assignment(
+                    revision_id=current.id,
+                    slot_key=south_slot,
+                    display_name_snapshot="VT",
+                    person_id=southern_person.id,
+                    person_name_snapshot=southern_person.display_name,
+                    status="ASSIGNED",
+                    accommodation_name="Another private southern hotel",
+                ),
+            ]
+        )
+        workday.current_published_revision_id = current.id
+        record_audit(
+            db,
+            "workday.published",
+            "workday",
+            workday.id,
+            southern_manager.id,
+            region_id=southern.id,
+            detail={"revision": 2, "revision_id": str(current.id)},
+        )
+        record_audit(
+            db,
+            "southern.private_admin",
+            "user",
+            southern_manager.id,
+            southern_manager.id,
+            region_id=southern.id,
+            detail={"private_note": "Do not disclose"},
+        )
+        record_audit(
+            db,
+            "workday.draft_saved",
+            "workday",
+            workday.id,
+            southern_manager.id,
+            region_id=southern.id,
+        )
+        quiet_region = Region(name="Quiet Region")
+        db.add(quiet_region)
+        db.flush()
+        local_before_flood = record_audit(
+            db,
+            "northern.visible.before_flood",
+            "region",
+            northern_id,
+            southern_manager.id,
+            region_id=northern_id,
+        )
+        local_before_flood.occurred_at = datetime(2026, 11, 1, 0, 0, tzinfo=UTC)
+        local_boundary_event = record_audit(
+            db,
+            "northern.visible.local_date",
+            "region",
+            northern_id,
+            southern_manager.id,
+            region_id=northern_id,
+        )
+        local_boundary_event.occurred_at = datetime(2026, 11, 6, 11, 30, tzinfo=UTC)
+        db.add_all(
+            [
+                AuditEvent(
+                    actor_user_id=southern_manager.id,
+                    action=f"southern.unrelated.{index}",
+                    target_type="region",
+                    target_id=str(southern.id),
+                    region_id=southern.id,
+                    detail={},
+                    occurred_at=datetime(2026, 11, 2, 0, 0, tzinfo=UTC),
+                )
+                for index in range(1600)
+            ]
+        )
+        db.add_all(
+            [
+                AuditEvent(
+                    actor_user_id=southern_manager.id,
+                    action=f"northern.noise.{index}",
+                    target_type="region",
+                    target_id=str(northern_id),
+                    region_id=northern_id,
+                    detail={},
+                    occurred_at=datetime(2026, 11, 3, 0, 0, tzinfo=UTC),
+                )
+                for index in range(600)
+            ]
+        )
+        db.commit()
+        southern_id = southern.id
+        southern_person_id = southern_person.id
+        workday_id = workday.id
+        quiet_region_id = quiet_region.id
+
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+    audit = manager.get("/manage/audit")
+    assert audit.status_code == 200
+    assert "Cross-region employee oversight · read-only" in audit.text
+    assert "Southern Track" in audit.text
+    assert "Published revision 2" in audit.text
+    assert "Southern Manager" in audit.text
+    assert "Amy Crew" in audit.text
+    assert "Position changed from CCU 1 to CCU 2" in audit.text
+    assert "Start for CCU 2 changed from 08:00 to 07:30" in audit.text
+    assert "South Crew" not in audit.text
+    assert "private southern hotel" not in audit.text.casefold()
+    assert "southern.private admin" not in audit.text
+    assert "workday.draft saved" not in audit.text
+    assert "Do not disclose" not in audit.text
+    assert "southern.unrelated" not in audit.text
+    targeted_history = manager.get(
+        "/manage/audit?action=northern.visible.before_flood"
+    )
+    assert targeted_history.status_code == 200
+    assert "northern.visible.before flood" in targeted_history.text
+    local_date = manager.get("/manage/audit?date_from=2026-11-07&date_to=2026-11-07")
+    assert local_date.status_code == 200
+    assert "northern.visible.local date" in local_date.text
+    utc_date = manager.get("/manage/audit?date_from=2026-11-06&date_to=2026-11-06")
+    assert utc_date.status_code == 200
+    assert "northern.visible.local date" not in utc_date.text
+    filtered = manager.get(f"/manage/audit?person_id={northern_person_id}")
+    assert filtered.status_code == 200 and "Southern Track" in filtered.text
+    assert manager.get(f"/manage/audit?person_id={southern_person_id}").status_code == 403
+    assert manager.get(f"/manage/audit?region_id={southern_id}").status_code == 200
+    assert manager.get(f"/manage/workdays/{workday_id}").status_code == 403
+
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+    admin_audit = admin.get("/manage/audit")
+    assert "Amy Crew" in admin_audit.text and "South Crew" in admin_audit.text
+    assert "southern.private admin" in admin_audit.text
+    empty_region = admin.get(f"/manage/audit?region_id={quiet_region_id}")
+    assert empty_region.status_code == 200
+    assert "No audit events match these filters" in empty_region.text
+
+
+def test_team_hours_route_uses_employee_region_not_workday_region(
+    routed_db,
+) -> None:  # type: ignore[no-untyped-def]
+    factory, (northern_id, _track_id, _position_id, northern_person_id) = routed_db
+    start, _end = fortnight_bounds(0, anchor=date(2026, 8, 31))
+    with factory() as db:
+        southern = db.scalar(select(Region).where(Region.id != northern_id))
+        northern_person = db.get(Person, northern_person_id)
+        southern_person = db.scalar(
+            select(Person).where(Person.home_region_id == southern.id)
+        )
+        manager = db.scalar(select(User).where(User.email == "manager@example.test"))
+        southern_day = Workday(region_id=southern.id, created_by_user_id=manager.id)
+        northern_day = Workday(region_id=northern_id, created_by_user_id=manager.id)
+        db.add_all([southern_day, northern_day])
+        db.flush()
+        southern_revision = WorkdayRevision(
+            workday_id=southern_day.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=start,
+            title="Cross-region event",
+            track_name_snapshot="Southern Track",
+            start_time=time(8),
+            end_time=time(18),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        northern_revision = WorkdayRevision(
+            workday_id=northern_day.id,
+            revision_number=1,
+            state="PUBLISHED",
+            work_date=start + timedelta(days=1),
+            title="Northern event",
+            track_name_snapshot="Northern Track",
+            start_time=time(8),
+            end_time=time(16),
+            created_by_user_id=manager.id,
+            published_by_user_id=manager.id,
+        )
+        db.add_all([southern_revision, northern_revision])
+        db.flush()
+        db.add_all(
+            [
+                Assignment(
+                    revision_id=southern_revision.id,
+                    display_name_snapshot="CCU",
+                    person_id=northern_person.id,
+                    person_name_snapshot=northern_person.display_name,
+                    status="ASSIGNED",
+                ),
+                Assignment(
+                    revision_id=northern_revision.id,
+                    display_name_snapshot="VT",
+                    person_id=southern_person.id,
+                    person_name_snapshot=southern_person.display_name,
+                    status="ASSIGNED",
+                ),
+            ]
+        )
+        southern_day.current_published_revision_id = southern_revision.id
+        northern_day.current_published_revision_id = northern_revision.id
+        db.commit()
+        southern_id = southern.id
+
+    client = TestClient(app)
+    _login(client, "manager@example.test", "123456")
+    hours = client.get("/manage/hours")
+    assert hours.status_code == 200
+    assert "Amy Crew" in hours.text and "Southern Track" in hours.text
+    assert "South Crew" not in hours.text
+    assert client.get("/manage/hours?q=South+Crew").status_code == 200
+    assert "No People match these filters" in client.get(
+        "/manage/hours?q=South+Crew"
+    ).text
+    assert client.get(f"/manage/hours?region_id={southern_id}").status_code == 403
+
+
 def test_position_display_order_controls_builder_picker(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, _track_id, position_id, _person_id) = routed_db
     with factory() as db:
