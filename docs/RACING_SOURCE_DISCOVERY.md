@@ -22,13 +22,26 @@ This document records the implemented adapter contract and the observed public-s
 - Observed behavior: one response covers races and trials and is the preferred source. The site can apply an upstream bot challenge; this is surfaced as a component error rather than bypassed.
 - Failure modes: HTTP/challenge response, invalid outer JSON, invalid nested JSON, or malformed individual records. Invalid records are warnings; a wholly unusable response is fatal.
 
-The official `https://events.loveracing.nz/` calendar is stable structured HTML and is used as a race-meeting fallback if the RaceInfo endpoint is unavailable. Each event tile exposes a date, meeting title, venue text, and details link. It does not provide the complete trials calendar. Its generated date/venue key is stable enough for provider deduplication but is weaker than `DayID`.
+The official `https://events.loveracing.nz/` calendar is stable structured HTML and is used as a race-meeting fallback if the RaceInfo endpoint is unavailable. Each event tile exposes a date, meeting title, venue text, and details link. It does not provide the complete trials calendar. Current event links may lead to official club sites rather than RaceInfo. On Track therefore retains a namespaced date/venue identity for reconciliation but never inserts that synthetic identity into a RaceInfo URL. Only an exact trusted Love Racing `RaceInfo/<DayID>/Meeting-Overview.aspx` link can promote a fallback tile to an official detail identity.
 
 No documented public Love Racing API was found. No authentication, cookie capture, challenge bypass, or unofficial source is used.
 
-Love Racing calendar discovery uses the public `RaceInfo.aspx/GetCalendarEvents` website endpoint. Detailed Race and Trial programmes use public `RaceInfo/<meeting-id>/Meeting-Overview.aspx` pages. The strict parser accepts Race/Start and Heat/Time tables, retains the complete numbered sequence in observation evidence, and exposes structured first/last/count summaries. Invalid, duplicate, conflicting, or non-contiguous schedules become awaiting/partial evidence and are never guessed.
+Love Racing calendar discovery uses the public `RaceInfo.aspx/GetCalendarEvents` website endpoint. Detailed Race and Trial programmes use public `RaceInfo/<meeting-id>/Meeting-Overview.aspx` pages, where the meeting ID must be a verified numeric DayID. The strict parser validates the official title's date and Track, accepts Race/Start and Heat/Time tables, retains the complete numbered sequence in observation evidence, and exposes structured first/last/count summaries. A recognized matching official page without a schedule is awaiting publication; partial, conflicting or non-contiguous schedules remain partial evidence. Meeting-not-found pages, unrelated HTML, wrong meeting/type pages and upstream challenges are explicit failures rather than false awaiting schedules.
 
-The scheduler owns bounded detail refresh for both Race and Trial meetings, including failure backoff and last-good retention. Complete schedules stop routine polling apart from the existing deliberate confirmation window. Ordinary event pages have no per-event Refresh button; provider-wide Admin diagnostics remain available. TAB is not a configured provider.
+### Live re-verification — 8 November 2026
+
+Bounded read-only checks against the official public pages established:
+
+- Calendar DayID `55989`, Tauherenikau on 8 November, returned a complete eight-race programme from 13:10 to 17:25.
+- DayID `55990`, Te Aroha on 10 November, returned a complete eight-race programme from 12:35 to 16:50.
+- Trial DayID `56491`, Te Aroha on 10 November, returned a valid Heat/Time programme (one published heat at 12:00 at the time checked).
+- DayID `56002`, Te Aroha on 25 November, was a genuine matching `Meetings / Program Approved` page without a published schedule and is classified as awaiting.
+- An invalid numeric meeting ID returned HTTP 200 with `MEETING NOT FOUND`; HTTP success alone is therefore not accepted as programme evidence.
+- Current Tauherenikau and Te Aroha fallback event links led to club sites and supplied no verified RaceInfo DayID. Their date, venue and type remain useful, but programme detail stays explicitly unavailable until authoritative calendar evidence reconciles the same canonical event.
+
+These observations are dated source evidence, not an availability guarantee. No authentication, browser impersonation or challenge bypass was used.
+
+The scheduler owns bounded detail refresh for both Race and Trial meetings with verified DayIDs, including failure backoff and last-good retention. Same-date work is ordered oldest-check first so the bounded batch progresses fairly. Complete schedules stop routine polling apart from the existing deliberate confirmation window. Ordinary event pages have no per-event Refresh button; provider-wide Admin diagnostics distinguish missing official identity, awaiting, partial, request failure, invalid structure, access restriction and retained valid times. TAB is not a configured provider.
 
 Month presentation may associate independent same-Track/date/discipline Race and Trial rows when both first times are known and differ by no more than 180 minutes. This never merges source rows or authoritative Workdays.
 

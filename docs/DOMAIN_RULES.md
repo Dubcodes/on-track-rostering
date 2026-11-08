@@ -1,7 +1,7 @@
 # Domain rules
 
 - On Track stores authoritative workdays directly. External calendar/programme records are planning assistance.
-- Same-provider observations with the same stable meeting identity may correct programme facts. A partial or awaiting schedule never downgrades a complete programme. Date or Track identity changes remain conflicts for review.
+- Same-provider observations with the same verified stable meeting identity may correct programme facts. A partial or awaiting schedule never replaces any part of an already complete first/last/count/status bundle. Date or Track identity changes remain conflicts for review. Synthetic fallback identities may reconcile calendar evidence but are never valid programme-detail IDs.
 - Source facts may update only an unpublished linked draft automatically. Published revisions are immutable; applying the latest programme creates or updates a private draft and still requires Preview → Publish.
 - Automatic Track maps come only from trusted Love Racing hosts and validated JPEG/PNG/WebP content. A Manager's manual image for their Region takes precedence until explicitly reset; a failed refresh retains the last good automatic image. Track-map refresh is independent of a racing-provider toggle.
 - A source Track identity maps to one existing canonical Track UUID and inherits that Track's Region. Online Sources never owns a second map Region or map reference, never silently confirms a fuzzy suggestion, and never creates another Track when the canonical Track already exists.
