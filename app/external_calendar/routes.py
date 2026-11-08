@@ -34,6 +34,7 @@ from app.external_calendar.models import (
     ExternalEventObservation,
     ExternalTrackMapping,
 )
+from app.external_calendar.providers.love_racing import love_racing_day_id
 from app.external_calendar.refresh import ensure_provider_states, refresh_provider
 from app.external_calendar.service import (
     adopt_external_event,
@@ -303,25 +304,73 @@ def _sources_response(request: Request, db: Session, *, refresh_result=None):
         select(ExternalCalendarEvent)
         .where(
             programme_identity_exists,
-            ExternalCalendarEvent.event_kind == "RACE",
+            ExternalCalendarEvent.event_kind.in_(("RACE", "TRIAL")),
             ExternalCalendarEvent.event_date >= today,
         )
     )
     if region_ids is not None:
         programme_query = programme_query.join(Track).where(Track.region_id.in_(region_ids))
     programme_events = list(db.scalars(programme_query))
+    valid_programme_event_ids = {
+        row.event_id
+        for row in observations
+        if row.provider == "LOVE_RACING"
+        and row.event_id is not None
+        and love_racing_day_id(row.provider_event_id) is not None
+    }
+    valid_programme_events = [
+        event for event in programme_events if event.id in valid_programme_event_ids
+    ]
+    def detail_error_starts(event: ExternalCalendarEvent, prefix: str) -> bool:
+        return bool((event.latest_detail_error or "").startswith(prefix))
+
     provider_metrics["LOVE_RACING"].update(
         {
-            "programme_complete": sum(event.programme_status == "COMPLETE" for event in programme_events),
-            "programme_partial": sum(
-                event.programme_status in {"PARTIAL", "AWAITING_SCHEDULE", "DISCOVERED"}
-                for event in programme_events
+            "programme_complete": sum(
+                event.programme_status == "COMPLETE" for event in valid_programme_events
             ),
-            "programme_failed": sum(event.detail_failure_count > 0 for event in programme_events),
-            "programme_never_checked": sum(event.detail_checked_at is None for event in programme_events),
+            "programme_partial": sum(
+                event.programme_status == "PARTIAL" for event in valid_programme_events
+            ),
+            "programme_awaiting": sum(
+                event.programme_status in {"AWAITING_SCHEDULE", "DISCOVERED"}
+                for event in valid_programme_events
+            ),
+            "programme_identity_unavailable": len(programme_events) - len(valid_programme_events),
+            "programme_failed": sum(
+                event.detail_failure_count > 0
+                and not detail_error_starts(event, "INVALID_STRUCTURE:")
+                and not detail_error_starts(event, "ACCESS_RESTRICTED:")
+                for event in valid_programme_events
+            ),
+            "programme_invalid": sum(
+                detail_error_starts(event, "INVALID_STRUCTURE:")
+                for event in valid_programme_events
+            ),
+            "programme_restricted": sum(
+                detail_error_starts(event, "ACCESS_RESTRICTED:")
+                for event in valid_programme_events
+            ),
+            "programme_retained_after_failure": sum(
+                event.detail_failure_count > 0
+                and event.programme_status in {"COMPLETE", "PARTIAL"}
+                and any(
+                    value is not None
+                    for value in (
+                        event.first_race_time,
+                        event.last_race_time,
+                        event.first_trial_time,
+                        event.last_trial_time,
+                    )
+                )
+                for event in valid_programme_events
+            ),
+            "programme_never_checked": sum(
+                event.detail_checked_at is None for event in valid_programme_events
+            ),
             "programme_near_term_failed": sum(
                 event.detail_failure_count > 0 and (event.event_date - today).days <= 3
-                for event in programme_events
+                for event in valid_programme_events
             ),
         }
     )
@@ -569,6 +618,15 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
     if track is None or (visible_regions is not None and track.region_id not in visible_regions):
         raise HTTPException(404, "External event not found")
     workday = db.scalar(select(Workday).where(Workday.external_event_id == event.id))
+    programme_identity_available = any(
+        love_racing_day_id(row.provider_event_id) is not None
+        for row in db.scalars(
+            select(ExternalEventObservation).where(
+                ExternalEventObservation.event_id == event.id,
+                ExternalEventObservation.provider == "LOVE_RACING",
+            )
+        )
+    )
     return templates.TemplateResponse(
         "external_event.html",
         context(
@@ -577,6 +635,7 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
             track=track,
             workday=workday,
             evidence=event_evidence(db, event),
+            programme_identity_available=programme_identity_available,
             can_build=bool(track and can_manage_region(request.state.actor, track.region_id)),
             presentation=track_token(track.palette_slot if track else None),
         ),

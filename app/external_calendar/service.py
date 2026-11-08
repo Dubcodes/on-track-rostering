@@ -24,6 +24,22 @@ CANONICAL_FIELDS = (
     "meeting_name", "programme_status", "first_trial_time", "last_trial_time",
     "trial_count", "first_race_time", "last_race_time", "race_count", "status",
 )
+_PROGRAMME_STATUS_RANK = {
+    "DISCOVERED": 0,
+    "AWAITING_SCHEDULE": 1,
+    "PARTIAL": 2,
+    "COMPLETE": 3,
+}
+
+
+def _protected_programme_fields(event_kind: str) -> set[str]:
+    prefix = "race" if event_kind == "RACE" else "trial"
+    return {
+        "programme_status",
+        f"first_{prefix}_time",
+        f"last_{prefix}_time",
+        f"{prefix}_count",
+    }
 
 
 @dataclass(frozen=True)
@@ -207,14 +223,24 @@ def reconcile_observation(
         provenance = {key: list(sources) for key, sources in (event.field_provenance or {}).items()}
         enriched = False
         conflict = identity_conflict
+        incoming_programme_status = value.facts.get("programme_status")
+        preserve_complete_programme = bool(
+            event.programme_status == "COMPLETE"
+            and incoming_programme_status not in {None, "COMPLETE"}
+        )
+        protected_programme_fields = _protected_programme_fields(event.event_kind)
         for field in CANONICAL_FIELDS:
             raw = value.facts.get(field)
             incoming = parse_time(str(raw)) if raw and field.endswith("_time") else raw
             current = getattr(event, field)
+            if preserve_complete_programme and field in protected_programme_fields:
+                incoming = None
             if (
                 field == "programme_status"
-                and current == "COMPLETE"
-                and incoming in {"PARTIAL", "AWAITING_SCHEDULE", "DISCOVERED"}
+                and incoming in _PROGRAMME_STATUS_RANK
+                and current in _PROGRAMME_STATUS_RANK
+                and _PROGRAMME_STATUS_RANK[str(incoming)]
+                < _PROGRAMME_STATUS_RANK[str(current)]
             ):
                 incoming = None
             if incoming is not None and (current is None or state == "CREATED"):

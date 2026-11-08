@@ -4,6 +4,7 @@ import json
 import re
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
+from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 from app.external_calendar.adapters import NormalizedProviderResult
@@ -35,6 +36,40 @@ _MONTHS = {
 }
 _MEETING_TYPES = {"P": "RACE", "R": "RACE", "T": "TRIAL"}
 _NEW_ZEALAND = ZoneInfo("Pacific/Auckland")
+_DAY_ID = re.compile(r"^[1-9]\d{0,11}$")
+_MEETING_PATH = re.compile(
+    r"^/RaceInfo/(?P<day_id>[1-9]\d{0,11})/Meeting-Overview\.aspx$",
+    re.IGNORECASE,
+)
+
+
+def love_racing_day_id(value: object) -> str | None:
+    candidate = str(value or "").strip()
+    return candidate if _DAY_ID.fullmatch(candidate) else None
+
+
+def official_day_id_from_href(href: str | None) -> str | None:
+    if not href:
+        return None
+    try:
+        parsed = urlsplit(urljoin(EVENTS_URL, href))
+        port = parsed.port
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    match = _MEETING_PATH.fullmatch(parsed.path)
+    if not (
+        parsed.scheme.casefold() == "https"
+        and host in {"loveracing.nz", "www.loveracing.nz"}
+        and parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+        and not parsed.query
+        and not parsed.fragment
+        and match
+    ):
+        return None
+    return love_racing_day_id(match.group("day_id"))
 
 
 class _EventTileParser(HTMLParser):
@@ -46,6 +81,8 @@ class _EventTileParser(HTMLParser):
         self.capture_depth: int | None = None
         self.current: dict[str, str] = {}
         self.rows: list[dict[str, str]] = []
+        self.body_paragraph_depth: int | None = None
+        self.body_paragraph_text: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
@@ -66,12 +103,28 @@ class _EventTileParser(HTMLParser):
                 self.capture_depth = self.depth
             elif tag == "a" and values.get("href"):
                 self.current.setdefault("href", values["href"] or "")
+            if (
+                tag == "p"
+                and self.capture == "body"
+                and "venue" not in self.current
+                and self.body_paragraph_depth is None
+            ):
+                self.body_paragraph_depth = self.depth
+                self.body_paragraph_text = []
 
     def handle_data(self, data: str) -> None:
         if self.tile_depth is not None and self.capture and data.strip():
             self.current[self.capture] = f"{self.current.get(self.capture, '')} {data.strip()}".strip()
+        if self.body_paragraph_depth is not None and data.strip():
+            self.body_paragraph_text.append(data.strip())
 
     def handle_endtag(self, tag: str) -> None:
+        if self.body_paragraph_depth == self.depth and tag == "p":
+            venue = " ".join(self.body_paragraph_text).strip()
+            if venue:
+                self.current.setdefault("venue", venue)
+            self.body_paragraph_depth = None
+            self.body_paragraph_text = []
         if self.capture_depth == self.depth:
             self.capture = None
             self.capture_depth = None
@@ -106,12 +159,14 @@ def parse_event_tiles(html: str, *, reference: date) -> tuple[list[ProviderObser
         except ValueError:
             warnings.append("Love Racing event tile had an invalid date.")
             continue
-        body = " ".join(row["body"].split())
+        body = " ".join((row.get("venue") or row["body"]).split())
         track = body.split(",")[-1].strip()
         if not track:
             warnings.append("Love Racing event tile had no venue.")
             continue
-        provider_id = f"race:{event_date.isoformat()}:{normalized_key(track)}"
+        provider_id = official_day_id_from_href(row.get("href")) or (
+            f"fallback:race:{event_date.isoformat()}:{normalized_key(track)}"
+        )
         observations.append(
             ProviderObservation(
                 provider="LOVE_RACING",
@@ -150,7 +205,9 @@ def parse_calendar_json(raw: str) -> tuple[list[ProviderObservation], list[str]]
             # RaceInfo encodes NZ midnight as an absolute ASP.NET timestamp.
             event_date = datetime.fromtimestamp(millis / 1000, tz=UTC).astimezone(_NEW_ZEALAND).date()
             track = str(record["Racecourse"]).strip()
-            provider_id = str(record.get("DayID") or f"{kind.lower()}:{event_date}:{normalized_key(track)}")
+            provider_id = love_racing_day_id(record.get("DayID")) or (
+                f"calendar:{kind.lower()}:{event_date}:{normalized_key(track)}"
+            )
             if not track:
                 raise ValueError
         except (AttributeError, KeyError, TypeError, ValueError):
