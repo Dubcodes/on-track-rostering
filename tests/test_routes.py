@@ -3716,10 +3716,12 @@ def test_race_programme_health_presentation_and_manual_retry_authorization(
     sources = manager.get("/admin/online-sources")
     assert sources.status_code == 200
     assert "Programme detail" in sources.text
-    assert "Failed upcoming" in sources.text
+    assert "Request failed" in sources.text
     assert "Programme detail warning" in sources.text
     programme_detail = sources.text.split("<h3>Programme detail</h3>", 1)[1].split("</dl>", 1)[0]
-    assert "<dt>Partial / Awaiting</dt><dd>1</dd>" in programme_detail
+    assert "<dt>Partial</dt><dd>1</dd>" in programme_detail
+    assert "<dt>Awaiting schedule</dt><dd>0</dd>" in programme_detail
+    assert "<dt>Valid times retained after failure</dt><dd>1</dd>" in programme_detail
 
     assert manager.post(
         f"/external-events/{event_id}/refresh-programme",

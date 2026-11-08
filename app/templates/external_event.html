@@ -38,11 +38,12 @@
   </div>
 
   {% if event.event_kind in ('RACE', 'TRIAL') %}
-  <p class="muted programme-source-status"><strong>Love Racing</strong> · Programme {{ event.programme_status|replace('_', ' ')|lower }} · Checked {{ event.detail_checked_at|display_datetime if event.detail_checked_at else 'never' }}</p>
+  <p class="muted programme-source-status"><strong>Love Racing</strong> · {% if not programme_identity_available %}Programme detail unavailable — the fallback calendar supplied no verified official meeting ID{% else %}Programme {{ event.programme_status|replace('_', ' ')|lower }} · Checked {{ event.detail_checked_at|display_datetime if event.detail_checked_at else 'never' }}{% if event.detail_failure_count and (event.first_race_time or event.first_trial_time) %} · valid previously retrieved times retained{% endif %}{% endif %}</p>
   <details class="source-programme-diagnostics">
     <summary>Programme source diagnostics</summary>
     <dl class="source-metrics">
       <dt>Programme status</dt><dd>{{ event.programme_status|replace('_', ' ')|title }}</dd>
+      <dt>Official meeting ID</dt><dd>{{ 'Available' if programme_identity_available else 'Unavailable from calendar source' }}</dd>
       <dt>Last detail check</dt><dd>{{ event.detail_checked_at|display_datetime if event.detail_checked_at else 'Never' }}</dd>
       {% if event.detail_failure_count %}<dt>Failure count</dt><dd>{{ event.detail_failure_count }}</dd>{% endif %}
       {% if event.latest_detail_error %}<dt>Latest detail error</dt><dd>{{ event.latest_detail_error }}</dd>{% endif %}
