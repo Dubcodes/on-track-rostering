@@ -3340,6 +3340,8 @@ def test_notice_holiday_hours_and_fresh_auth_browser_flows(browser_site, width: 
     page.goto(base_url + "/manage/audit")
     assert page.get_by_role("heading", name="Audit", exact=True).is_visible()
     assert page.locator('select[name="region_id"]').is_visible()
+    assert page.locator('select[name="person_id"]').is_visible()
+    assert page.locator('select[name="actor_id"]').is_visible()
     assert page.locator('input[name="search"]').is_visible()
     _assert_no_horizontal_overflow(page)
     assert not errors

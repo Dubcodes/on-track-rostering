@@ -20,8 +20,14 @@ from app.external_calendar.http import (
     SourceHTTPError,
     _ValidatedRedirectHandler,
 )
-from app.external_calendar.models import ExternalEventObservation, TransitionSourceReference
+from app.external_calendar.models import (
+    ExternalCalendarEvent,
+    ExternalEventObservation,
+    TransitionSourceReference,
+)
 from app.external_calendar.programme import (
+    ProgrammeAccessRestrictedError,
+    ProgrammeStructureError,
     failure_backoff,
     parse_love_racing_programme,
     parse_programme_clock,
@@ -247,6 +253,40 @@ def test_programme_parser_handles_love_racing_clocks_and_meeting_heading() -> No
             raise AssertionError(f"{value} should be rejected as a programme clock")
 
 
+def test_programme_parser_distinguishes_awaiting_invalid_and_restricted_pages() -> None:
+    awaiting = parse_love_racing_programme(
+        """<html><head><title>Race Meeting for RACING TE AROHA at TE AROHA on
+        25 NOV 2026 | LOVERACING.NZ</title></head><body>
+        <h1>Meetings / Program Approved</h1><h2>Racing Te Aroha @ Te Aroha</h2>
+        <table><tr><td>1</td><td>HARCOURTS MAIDEN</td></tr></table></body></html>""",
+        event_kind="RACE",
+        expected_date=date(2026, 11, 25),
+        expected_track_name="Te Aroha",
+    )
+    assert awaiting.status == "AWAITING_SCHEDULE"
+    assert awaiting.diagnostics == ("Race schedule has not been published yet.",)
+
+    with pytest.raises(ProgrammeStructureError, match="meeting was not found"):
+        parse_love_racing_programme(
+            "<html><head><title>Race Meeting for MEETING NOT FOUND at UNKNOWN on "
+            "25 NOV 2026 | LOVERACING.NZ</title></head></html>",
+            expected_date=date(2026, 11, 25),
+            expected_track_name="Te Aroha",
+        )
+    with pytest.raises(ProgrammeStructureError, match="structure"):
+        parse_love_racing_programme("<html><title>Unrelated page</title><body>News</body></html>")
+    with pytest.raises(ProgrammeAccessRestrictedError, match="restricted"):
+        parse_love_racing_programme(
+            "<html><title>Just a moment...</title><script src='/cdn-cgi/challenge-platform/x'></script></html>"
+        )
+    with pytest.raises(ProgrammeStructureError, match="Track did not match"):
+        parse_love_racing_programme(
+            _taupo_programme_html(),
+            expected_date=date(2026, 10, 9),
+            expected_track_name="Te Aroha",
+        )
+
+
 def test_trial_heat_programme_uses_same_strict_sequence_contract() -> None:
     complete = parse_love_racing_programme(
         """<h2>Trials at Te Rapa</h2><table><tr><th>Heat</th><th>Time</th></tr>
@@ -446,6 +486,44 @@ def test_programme_cadence_and_backoff_are_deterministic() -> None:
     assert failure_backoff(99) == timedelta(hours=6)
 
 
+def test_synthetic_fallback_identity_waits_for_authoritative_day_id_without_duplicate(db) -> None:  # type: ignore[no-untyped-def]
+    _user, _region, _track = _foundation(db)
+    fallback, state = reconcile_observation(
+        db,
+        ProviderObservation(
+            provider="LOVE_RACING",
+            provider_event_id="fallback:race:2026-10-09:te rapa",
+            event_date=date(2026, 10, 9),
+            source_track_name="Te Rapa",
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            facts={"status": "SCHEDULED", "meeting_name": "Te Rapa Raceday"},
+            raw_payload={"url": "https://waikatoracing.co.nz/event"},
+        ),
+    )
+    assert fallback is not None and state == "CREATED"
+    now = datetime(2026, 10, 8, 9, tzinfo=ZoneInfo("Pacific/Auckland"))
+    assert due_love_racing_events(db, now=now) == []
+
+    authoritative, state = reconcile_observation(
+        db,
+        ProviderObservation(
+            provider="LOVE_RACING",
+            provider_event_id="55962",
+            event_date=date(2026, 10, 9),
+            source_track_name="Te Rapa",
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            facts={"status": "SCHEDULED", "meeting_name": "Te Rapa Raceday"},
+            raw_payload={"DayID": "55962"},
+        ),
+    )
+    assert authoritative is not None and authoritative.id == fallback.id
+    assert state == "MATCHED"
+    assert [event.id for event in due_love_racing_events(db, now=now)] == [fallback.id]
+    assert db.scalar(select(func.count()).select_from(ExternalCalendarEvent)) == 1
+
+
 def _taupo_programme_html(*, last_race: str = "5:24 pm", updated: str = "09/10/2026 2:45 pm") -> str:
     rows = (
         (1, "12:34 pm"),
@@ -460,7 +538,8 @@ def _taupo_programme_html(*, last_race: str = "5:24 pm", updated: str = "09/10/2
     )
     return "".join(
         (
-            "<html><head><title>RaceInfo | Meetings / Fields</title></head><body>",
+            "<html><head><title>Race Meeting for RACING TAUPO at TAUPO on "
+            "9 OCT 2026 | LOVERACING.NZ</title></head><body>",
             f"<h2>Racing Taupo @ Taupo Last updated {updated}</h2>",
             "<table class=\"programme-header\"><tr><th>Race</th><th>Start</th>",
             "<th>Name</th><th>Conditions &amp; Distance</th></tr></table>",
@@ -477,7 +556,12 @@ def _taupo_programme_html(*, last_race: str = "5:24 pm", updated: str = "09/10/2
 
 def test_due_taupo_programme_refresh_reconciles_and_adopts_unpublished_draft(db) -> None:  # type: ignore[no-untyped-def]
     user, region, _track = _foundation(db)
-    taupo = Track(name="Taupo", region_id=region.id, palette_slot=2)
+    taupo = Track(
+        name="Taupo",
+        region_id=region.id,
+        palette_slot=2,
+        default_travel_minutes=45,
+    )
     db.add(taupo)
     db.flush()
     confirm_track_mapping(db, "LOVE_RACING", "Taupo", taupo.id, user.id)
@@ -499,14 +583,15 @@ def test_due_taupo_programme_refresh_reconciles_and_adopts_unpublished_draft(db)
     assert [row.id for row in due_love_racing_events(db, now=now)] == [event.id]
 
     class FailingClient:
-        def get(self, _url: str, *, accept: str):  # type: ignore[no-untyped-def]
+        def get(self, _url: str, *, accept: str, destination_validator=None):  # type: ignore[no-untyped-def]
             assert accept == "text/html"
+            assert destination_validator is not None and destination_validator(_url)
             raise SourceHTTPError("Source returned HTTP 503.")
 
     failed = refresh_love_racing_programme(db, event, client=FailingClient())
     assert (failed.outcome, failed.programme_status) == ("ERROR", None)
     assert event.detail_failure_count == 1
-    assert event.latest_detail_error == "SourceHTTPError: Source returned HTTP 503."
+    assert event.latest_detail_error == "SOURCE_FAILURE: Source returned HTTP 503."
     assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 1
 
     class ProgrammeClient:
@@ -514,9 +599,10 @@ def test_due_taupo_programme_refresh_reconciles_and_adopts_unpublished_draft(db)
             self.urls: list[str] = []
             self.body = body
 
-        def get(self, url: str, *, accept: str) -> HTTPResponse:
+        def get(self, url: str, *, accept: str, destination_validator=None) -> HTTPResponse:
             self.urls.append(url)
             assert accept == "text/html"
+            assert destination_validator is not None and destination_validator(url)
             return HTTPResponse(url=url, status=200, content_type="text/html", body=self.body.encode())
 
     client = ProgrammeClient(_taupo_programme_html())
@@ -554,13 +640,91 @@ def test_due_taupo_programme_refresh_reconciles_and_adopts_unpublished_draft(db)
         time(12, 34),
         time(17, 24),
     )
+    assert (
+        draft.on_track_time,
+        draft.start_time,
+        draft.return_travel_minutes,
+        draft.end_time,
+    ) == (time(10, 30), time(9, 45), 45, time(19, 30))
 
-    changed_fact = ProgrammeClient(_taupo_programme_html(last_race="5:30 pm"))
+    changed_fact = ProgrammeClient(
+        _taupo_programme_html(last_race="5:40 pm").replace("12:34 pm", "1:04 pm")
+    )
     changed_result = refresh_love_racing_programme(db, event, client=changed_fact)
     assert (changed_result.outcome, changed_result.programme_status) == ("ENRICHED", "COMPLETE")
-    assert event.last_race_time == time(17, 30)
-    assert draft.last_race_time == time(17, 30)
+    assert (event.first_race_time, event.last_race_time) == (time(13, 4), time(17, 40))
+    assert (draft.first_race_time, draft.last_race_time) == (time(13, 4), time(17, 40))
+    assert (draft.on_track_time, draft.start_time, draft.end_time) == (
+        time(11),
+        time(10, 15),
+        time(19, 45),
+    )
     assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 3
+
+    draft.on_track_time = time(10, 45)
+    draft.on_track_time_is_override = True
+    draft.start_time = time(9, 30)
+    draft.start_time_is_override = True
+    draft.end_time = time(20)
+    draft.end_time_is_override = True
+    manual_override_result = refresh_love_racing_programme(
+        db,
+        event,
+        client=ProgrammeClient(
+            _taupo_programme_html(last_race="5:55 pm").replace("12:34 pm", "1:19 pm")
+        ),
+    )
+    assert (manual_override_result.outcome, manual_override_result.programme_status) == (
+        "ENRICHED",
+        "COMPLETE",
+    )
+    assert (draft.first_race_time, draft.last_race_time) == (time(13, 19), time(17, 55))
+    assert (draft.on_track_time, draft.start_time, draft.end_time) == (
+        time(10, 45),
+        time(9, 30),
+        time(20),
+    )
+    assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 4
+
+    invalid_page = ProgrammeClient(
+        "<html><head><title>Race Meeting for MEETING NOT FOUND at UNKNOWN on "
+        "9 OCT 2026 | LOVERACING.NZ</title></head></html>"
+    )
+    invalid_result = refresh_love_racing_programme(db, event, client=invalid_page)
+    assert (invalid_result.outcome, invalid_result.programme_status) == ("ERROR", None)
+    assert event.programme_status == "COMPLETE"
+    assert (event.race_count, event.first_race_time, event.last_race_time) == (
+        9,
+        time(13, 19),
+        time(17, 55),
+    )
+    assert event.latest_detail_error == (
+        "INVALID_STRUCTURE: Official programme page reported that the meeting was not found."
+    )
+    assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 4
+
+    draft.state = "PUBLISHED"
+    workday.current_published_revision_id = draft.id
+    workday.current_draft_revision_id = None
+    post_publish_result = refresh_love_racing_programme(
+        db,
+        event,
+        client=ProgrammeClient(
+            _taupo_programme_html(last_race="6:10 pm").replace("12:34 pm", "1:34 pm")
+        ),
+    )
+    assert (post_publish_result.outcome, post_publish_result.programme_status) == (
+        "ENRICHED",
+        "COMPLETE",
+    )
+    assert (event.first_race_time, event.last_race_time) == (time(13, 34), time(18, 10))
+    assert (draft.first_race_time, draft.last_race_time) == (time(13, 19), time(17, 55))
+    assert (draft.on_track_time, draft.start_time, draft.end_time) == (
+        time(10, 45),
+        time(9, 30),
+        time(20),
+    )
+    assert db.scalar(select(func.count()).select_from(ExternalEventObservation)) == 5
 
 
 def test_scheduler_tick_skips_disabled_love_racing_details_but_refreshes_maps(db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -665,12 +829,12 @@ def test_same_provider_updates_facts_but_partial_never_erases_complete(db) -> No
         }
     )
     same, state = reconcile_observation(db, changed)
-    assert same.id == event.id and state == "ENRICHED"
+    assert same.id == event.id and state == "MATCHED"
     assert same.programme_status == "COMPLETE"
     assert (same.race_count, same.first_race_time, same.last_race_time) == (
-        9,
-        time(12, 15),
-        time(17, 5),
+        8,
+        time(12, 10),
+        time(16, 30),
     )
     assert db.get(User, user.id) is not None and db.get(Track, track.id) is not None
 

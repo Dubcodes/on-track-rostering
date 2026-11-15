@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from html.parser import HTMLParser
 
 
@@ -34,6 +34,14 @@ class ProgrammeResult:
     @property
     def trials(self) -> tuple[tuple[int, time | None], ...]:
         return self.races if self.event_kind == "TRIAL" else ()
+
+
+class ProgrammeStructureError(ValueError):
+    """The source returned HTML, but not a valid programme document."""
+
+
+class ProgrammeAccessRestrictedError(ProgrammeStructureError):
+    """The source returned a challenge or access-restriction document."""
 
 
 class _ProgrammeParser(HTMLParser):
@@ -141,6 +149,7 @@ def _meeting_name(candidates: list[str]) -> str | None:
                 or "meeting overview" in key
                 or "meetings / fields" in key
                 or "loveracing" in key
+                or key.startswith("race meeting for ")
             ):
                 continue
             if re.search(r"\brace\s+\d+\b", clean, re.IGNORECASE):
@@ -181,16 +190,57 @@ def parse_programme_clock(value: str) -> time:
     return time(hour, minute)
 
 
-def parse_love_racing_programme(html: str, *, event_kind: str = "RACE") -> ProgrammeResult:
+def parse_love_racing_programme(
+    html: str,
+    *,
+    event_kind: str = "RACE",
+    expected_date: date | None = None,
+    expected_track_name: str | None = None,
+) -> ProgrammeResult:
     event_kind = event_kind.upper()
     if event_kind not in {"RACE", "TRIAL"}:
         raise ValueError("Programme kind must be RACE or TRIAL.")
     sequence_label = "Race" if event_kind == "RACE" else "Heat"
     sequence_header = sequence_label.casefold()
-    time_header_label = "Start" if event_kind == "RACE" else "Time"
     time_headers = {"start", "scheduled start"} if event_kind == "RACE" else {"time", "scheduled time"}
+    challenge_markers = (
+        "<title>just a moment",
+        "cf-chl-",
+        "/cdn-cgi/challenge-platform/",
+        "enable javascript and cookies to continue",
+        "attention required! | cloudflare",
+        "captcha challenge",
+    )
+    folded_html = html.casefold()
+    if any(marker in folded_html for marker in challenge_markers):
+        raise ProgrammeAccessRestrictedError(
+            "Official programme access was restricted by the upstream site."
+        )
     parser = _ProgrammeParser()
     parser.feed(html)
+    title_text = " ".join("".join(parser.title_parts).split())
+    if "meeting not found" in title_text.casefold():
+        raise ProgrammeStructureError("Official programme page reported that the meeting was not found.")
+    identity = re.fullmatch(
+        r"Race Meeting for .+? at (?P<track>.+?) on "
+        r"(?P<date>\d{1,2} [A-Za-z]{3} \d{4}) \| LOVERACING\.NZ",
+        title_text,
+        flags=re.IGNORECASE,
+    )
+    if expected_date is not None or expected_track_name is not None:
+        if identity is None:
+            raise ProgrammeStructureError("Official meeting identity was missing from the programme page.")
+        try:
+            page_date = datetime.strptime(identity.group("date"), "%d %b %Y").date()
+        except ValueError as exc:
+            raise ProgrammeStructureError("Official meeting date was invalid.") from exc
+        if expected_date is not None and page_date != expected_date:
+            raise ProgrammeStructureError("Official meeting date did not match the calendar event.")
+        if expected_track_name is not None and (
+            " ".join(identity.group("track").split()).casefold()
+            != " ".join(expected_track_name.split()).casefold()
+        ):
+            raise ProgrammeStructureError("Official meeting Track did not match the calendar event.")
     candidates: dict[int, list[time | None]] = {}
     saw_header = False
     diagnostics: list[str] = []
@@ -204,6 +254,21 @@ def parse_love_racing_programme(html: str, *, event_kind: str = "RACE") -> Progr
             continue
         saw_header = True
         header_tables.append(table)
+
+    headings = {" ".join(value.split()).casefold() for value in parser.titles}
+    page_kind = None
+    if any("meetings / trial" in value for value in headings):
+        page_kind = "TRIAL"
+    elif any(
+        marker in value
+        for value in headings
+        for marker in ("meetings / fields", "meetings / program approved", "meetings / results")
+    ):
+        page_kind = "RACE"
+    if page_kind is not None and page_kind != event_kind:
+        raise ProgrammeStructureError("Official programme type did not match the calendar event.")
+    if not saw_header and page_kind != event_kind:
+        raise ProgrammeStructureError("Expected programme structure was not found in the source page.")
 
     race_tables = overview_tables if saw_header and overview_tables else header_tables
     for table in race_tables:
@@ -242,7 +307,7 @@ def parse_love_racing_programme(html: str, *, event_kind: str = "RACE") -> Progr
     else:
         status = "AWAITING_SCHEDULE"
     if not saw_header:
-        diagnostics.append(f"{sequence_label}/{time_header_label} summary header was not found.")
+        diagnostics.append(f"{sequence_label} schedule has not been published yet.")
     if candidates and not contiguous:
         diagnostics.append(f"{sequence_label} numbers were not a contiguous sequence.")
     return ProgrammeResult(

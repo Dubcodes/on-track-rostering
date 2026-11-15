@@ -17,7 +17,11 @@ from app.external_calendar.providers.hrnz import (
     parse_race_ics,
     parse_trials_diary,
 )
-from app.external_calendar.providers.love_racing import parse_calendar_json, parse_event_tiles
+from app.external_calendar.providers.love_racing import (
+    love_racing_day_id,
+    parse_calendar_json,
+    parse_event_tiles,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "external_calendar"
 
@@ -35,8 +39,28 @@ def test_love_racing_event_tiles_parse_official_race_shape():
     event = observations[0]
     assert event.event_date == date(2026, 9, 23)
     assert event.source_track_name == "Phar Lap Raceway"
+    assert event.provider_event_id.startswith("fallback:race:2026-09-23:")
     assert event.event_kind == "RACE"
     assert event.discipline == "THOROUGHBRED"
+
+
+def test_love_racing_fallback_uses_only_verified_official_day_id_and_primary_venue() -> None:
+    html = """<div class="tile"><div class="tile__heading">Meeting</div>
+    <div class="tile__info-string">WEDNESDAY 11 NOVEMBER</div>
+    <div class="tile__body"><p>Canterbury JC, Riccarton Park</p>
+    <p><strong>New Zealand Cup Week - Day 2</strong></p></div>
+    <a href="https://loveracing.nz/RaceInfo/55991/Meeting-Overview.aspx">Details</a></div>
+    <div class="tile"><div class="tile__heading">Club event</div>
+    <div class="tile__info-string">FRIDAY 13 NOVEMBER</div>
+    <div class="tile__body"><p>Waverley RC, Waverley</p></div>
+    <a href="https://events.loveracing.nz/waverley-feature-raceday">Details</a></div>"""
+    observations, warnings = parse_event_tiles(html, reference=date(2026, 11, 1))
+    assert warnings == []
+    assert observations[0].source_track_name == "Riccarton Park"
+    assert observations[0].provider_event_id == "55991"
+    assert observations[1].provider_event_id == "fallback:race:2026-11-13:waverley"
+    assert love_racing_day_id(observations[0].provider_event_id) == "55991"
+    assert love_racing_day_id(observations[1].provider_event_id) is None
 
 
 def test_love_racing_calendar_distinguishes_trials_and_warns_on_bad_record():
@@ -61,6 +85,19 @@ def test_love_racing_calendar_accepts_known_types_and_uses_new_zealand_date():
     assert [item.event_kind for item in observations] == ["RACE", "RACE"]
     assert {item.event_date for item in observations} == {date(2026, 9, 1)}
     assert warnings == ["Love Racing calendar record used unknown WebMeetingType X."]
+
+
+def test_love_racing_calendar_does_not_promote_missing_or_malformed_day_ids() -> None:
+    raw = (
+        '[{"DayID":"race:guess","RaceDate":"/Date(1788177600000)/",'
+        '"WebMeetingType":"R","Racecourse":"Ruakaka"},'
+        '{"RaceDate":"/Date(1788177600000)/","WebMeetingType":"T",'
+        '"Racecourse":"Foxton"}]'
+    )
+    observations, warnings = parse_calendar_json(raw)
+    assert warnings == []
+    assert observations[0].provider_event_id == "calendar:race:2026-09-01:ruakaka"
+    assert observations[1].provider_event_id == "calendar:trial:2026-09-01:foxton"
 
 
 def test_love_racing_invalid_contract_fails_controlled():

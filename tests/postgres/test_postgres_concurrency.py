@@ -458,6 +458,7 @@ def test_postgres_person_email_advisory_lock_serializes_concurrent_creation(pg_f
 
 def test_postgres_programme_queries_deduplicate_json_events(pg_factory) -> None:  # type: ignore[no-untyped-def]
     suffix = uuid.uuid4().hex[:10]
+    day_id = str(int(suffix[:9], 16) + 1)
     with pg_factory() as db:
         region = Region(name=f"Programme Region {suffix}")
         admin = User(
@@ -489,7 +490,7 @@ def test_postgres_programme_queries_deduplicate_json_events(pg_factory) -> None:
                 ExternalEventObservation(
                     event_id=event.id,
                     provider="LOVE_RACING",
-                    provider_event_id=f"programme-{suffix}",
+                    provider_event_id=day_id,
                     payload_hash=f"programme-{suffix}-{index}",
                     source_track_name="Programme Track",
                     parsed_facts={},
@@ -522,7 +523,8 @@ def test_postgres_programme_queries_deduplicate_json_events(pg_factory) -> None:
         response = client.get("/admin/online-sources")
     assert response.status_code == 200
     programme_detail = response.text.split("<h3>Programme detail</h3>", 1)[1].split("</dl>", 1)[0]
-    assert "<dt>Partial / Awaiting</dt><dd>1</dd>" in programme_detail
+    assert "<dt>Partial</dt><dd>1</dd>" in programme_detail
+    assert "<dt>Awaiting schedule</dt><dd>0</dd>" in programme_detail
 
 
 def test_simultaneous_track_creation_allocates_distinct_palette_slots(pg_factory) -> None:  # type: ignore[no-untyped-def]
