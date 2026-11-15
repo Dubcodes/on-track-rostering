@@ -1309,7 +1309,14 @@ def _publish(
                         travel_workday.id,
                         actor_user_id,
                         region_id=travel_workday.region_id,
-                        detail={"from": before, "to": WorkdayStatus.CANCELLED.value, "generated": True},
+                        detail={
+                            "from": before,
+                            "to": WorkdayStatus.CANCELLED.value,
+                            "generated": True,
+                            "revision_id": str(
+                                travel_workday.current_published_revision_id or ""
+                            ),
+                        },
                     )
                     record_event(
                         db,
@@ -1343,7 +1350,11 @@ def _publish(
                         travel_workday.id,
                         actor_user_id,
                         region_id=travel_workday.region_id,
-                        detail={"to": WorkdayStatus.SCHEDULED.value, "generated": True},
+                        detail={
+                            "to": WorkdayStatus.SCHEDULED.value,
+                            "generated": True,
+                            "revision_id": str(travel_draft.id),
+                        },
                     )
         assigned = list(
             db.scalars(
@@ -1412,7 +1423,7 @@ def _publish(
             workday.id,
             actor_user_id,
             region_id=workday.region_id,
-            detail={"revision": draft.revision_number},
+            detail={"revision": draft.revision_number, "revision_id": str(draft.id)},
         )
         record_event(
             db,
@@ -1435,7 +1446,11 @@ def _publish(
                 travel_workday.id,
                 actor_user_id,
                 region_id=travel_workday.region_id,
-                detail={"revision": travel_draft.revision_number, "generated": True},
+                detail={
+                    "revision": travel_draft.revision_number,
+                    "revision_id": str(travel_draft.id),
+                    "generated": True,
+                },
             )
             record_event(
                 db,
@@ -1722,6 +1737,7 @@ def reschedule_published_workday(
             region_id=source.region_id,
             detail={
                 "replacement_workday_id": str(replacement.id),
+                "revision_id": str(published.id),
                 "from": published.work_date.isoformat(),
                 "to": new_date.isoformat(),
                 "detached_draft_revision_id": str(source_draft_id) if source_draft_id else None,
@@ -1968,7 +1984,17 @@ def decline_published_assignment(
             workday.id,
             actor_user_id,
             region_id=workday.region_id,
-            detail={"slot_key": str(slot_key), "result": status_label},
+            detail={
+                "slot_key": str(slot_key),
+                "result": status_label,
+                "revision_id": str(new_revision.id),
+                "person_id": str(target.person_id),
+                "person_name_snapshot": target.person_name_snapshot or "Crew member",
+                "summary": (
+                    f"Declined {target.display_name_snapshot}; position is "
+                    f"{status_label.lower()}."
+                ),
+            },
         )
         event_type = (
             "OPEN_POSITION_AVAILABLE"

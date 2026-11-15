@@ -90,9 +90,11 @@ Roster publication and decline record deterministic event keys in the same datab
 
 Manager and Admin may administer regional tracks and scoped accounts. Region policy/lifecycle and the current global Crew Group/Base Position catalogues require Admin. Sub-Manager retains practical roster mutation but has no broad account or catalogue administration. Managers may administer ordinary linked Employee, Casual, Contractor and Sub-manager access in their Regions after fresh authentication, including policy-permitted Person-level grants; Admin alone may grant Manager or control active Manager/Admin security. Historical workday snapshots are never rewritten by catalogue rename, colour, or lifecycle changes.
 
+The Workday's Region owns roster mutation. A Manager may select People from any Region on an authorized Workday without home-Region approval, while the Person's Primary Region owns employee oversight. That oversight includes complete published Hours and published employee-impact accountability across Regions, but never destination-Region draft, calendar, edit, approval or publication authority.
+
 ## Hours are derived from publication snapshots
 
-Fortnight views calculate from the configured anchor and current published assignment spans. They do not infer breaks or deduct them, handle overnight spans, and show holiday and allowance markers without treating allowances as time. Employee access is personal; management access follows explicit regional visibility policy.
+Fortnight views calculate from the configured anchor and current published assignment spans. They do not infer breaks or deduct them, handle overnight spans, and show holiday and allowance markers without treating allowances as time. Employee access is personal. Management selects People by Primary Region responsibility and then includes every current published assignment for those People irrespective of Workday Region; Workday-region filtering must never truncate an authorized Person's total.
 
 ## Flexible multi-Position participation
 
@@ -104,7 +106,7 @@ Base Position display order is editable catalogue data, not business identity. A
 
 ## Audit reads remain redacted and scoped
 
-`AuditEvent` is security-redacted at write time. Admin may read the global audit stream; Managers may read only Regions they administer. Sub-Managers and read-only roles do not gain administrative audit access, and the UI presents human summaries with structured redacted detail rather than raw event JSON.
+`AuditEvent` is security-redacted at write time. Admin reads the global stream. Managers read complete events for Workday Regions they administer plus a derived employee-impact projection of immutable published revisions when an out-of-region Workday affects a Person from a managed Primary Region. The projection resolves old and new assignment slots so additions, replacements, Position/timing changes and removals remain attributable after the current roster changes. It exposes only the affected managed employee, safe change summary, responsible actor, timestamp, Workday Region and publication context; unrelated People, private notes, accommodation details, draft activity and general destination-Region administration remain hidden. Sub-Managers and read-only roles do not gain administrative Audit access.
 
 ## Leave is an operational warning
 

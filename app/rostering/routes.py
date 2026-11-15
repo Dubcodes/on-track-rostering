@@ -1012,7 +1012,14 @@ def update_workday_status(
                 generated.id,
                 request.state.user.id,
                 region_id=generated.region_id,
-                detail={"from": generated_before, "to": generated_status, "generated": True},
+                detail={
+                    "from": generated_before,
+                    "to": generated_status,
+                    "generated": True,
+                    "revision_id": str(
+                        generated.current_published_revision_id or ""
+                    ),
+                },
             )
     record_audit(
         db,
@@ -1021,7 +1028,11 @@ def update_workday_status(
         workday.id,
         request.state.user.id,
         region_id=workday.region_id,
-        detail={"from": before, "to": status},
+        detail={
+            "from": before,
+            "to": status,
+            "revision_id": str(workday.current_published_revision_id or ""),
+        },
     )
     record_event(
         db,
