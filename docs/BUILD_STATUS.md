@@ -14,6 +14,8 @@ The cross-region oversight candidate remains open as GitHub PR `#2` on branch `c
 
 PR `#3` now carries a non-deploying merge of that candidate with the separately qualified Love Racing reliability work. Release-gate `43684686944` qualified combined code head `6196b2e276d731bdc0833420c403ff853507f50c`: **414 PostgreSQL 17.6-backed tests** and **82 Playwright tests** passed; the complete Alembic chain advanced to `c5a7e2d9f410` and a repeated upgrade passed; dependency/security, JavaScript, static analysis and both Compose contracts passed; and the application image built with the embedded candidate identity. Pull-request workflows publish no GHCR image and do not update `:staging`; neither milestone is merged or deployed. A later documentation-only descendant may have its own exact-head gate without changing this combined application-behavior checkpoint.
 
+Stacked PR `#4`, `codex/calendar-source-visibility`, targets PR `#3`'s combined branch without changing the Alembic head. Release-gate `44067694347` qualified application/documentation head `e52da3ba81712f5547fee1f6005d1588935c5e18`: **418 PostgreSQL-backed tests** and **84 Playwright tests** passed, the complete migration chain through `c5a7e2d9f410` and repeated upgrade passed, dependency/security and both Compose contracts passed, and the application image built with the pull-request merge identity embedded. The PR workflow correctly skipped GHCR and `:staging` publication, so it produced no deployable registry digest and did not redeploy staging. The candidate remains open, stacked and undeployed.
+
 An operational deployment candidate is identified by all three of the following, resolved when the candidate is deliberately selected:
 
 - the exact selected commit SHA;
