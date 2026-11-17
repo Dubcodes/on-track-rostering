@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.auth.policy import Actor, can_view_published, external_calendar_region_ids
 from app.catalog.models import Track
 from app.catalog.presentation import track_token
+from app.core.enums import Role
 from app.core.time import local_today
 from app.external_calendar.models import CalendarDisplayPreference, ExternalCalendarEvent
 from app.identity.models import Person
@@ -107,6 +108,7 @@ def external_calendar_items(
                 "date": event.event_date,
                 "track": track.name if track else event.external_track_name or "Track unresolved",
                 "track_id": event.track_id,
+                "region_id": track.region_id if track else None,
                 "discipline": event.discipline,
                 "kind": event.event_kind,
                 "time": event.first_trial_time or event.first_race_time,
@@ -159,29 +161,110 @@ def external_calendar_items(
 def personal_external_calendar_items(
     db: Session, actor: Actor, start: date, end: date
 ) -> list[dict[str, object]]:
-    """Return source-only planning after the Primary Region roster horizon."""
-    if actor.person_id is None or actor.is_contractor:
+    """Return role-appropriate planning without conflating User and Person."""
+    if actor.is_contractor:
         return []
-    home_region_id = db.scalar(
-        select(Person.home_region_id).where(Person.id == actor.person_id)
-    )
-    if home_region_id is None:
-        return []
-    horizon = db.scalar(
-        select(func.max(WorkdayRevision.work_date))
-        .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
-        .where(
-            Workday.region_id == home_region_id,
-            Workday.status == "SCHEDULED",
+
+    today = local_today()
+    if actor.is_admin:
+        planning_start = max(start, today)
+        return (
+            external_calendar_items(db, actor, planning_start, end)
+            if planning_start < end
+            else []
         )
+
+    management_roles = {Role.MANAGER.value, Role.SUB_MANAGER.value}
+    management_region_ids = {
+        region_id
+        for region_id, roles in actor.regional_roles.items()
+        if roles & management_roles
+    }
+    home_region_id = (
+        db.scalar(select(Person.home_region_id).where(Person.id == actor.person_id))
+        if actor.person_id is not None
+        else None
     )
-    planning_start = max(start, horizon + timedelta(days=1) if horizon else local_today())
-    if planning_start >= end:
+    home_planning_start: date | None = None
+    if home_region_id is not None:
+        horizon = db.scalar(
+            select(func.max(WorkdayRevision.work_date))
+            .join(Workday, Workday.current_published_revision_id == WorkdayRevision.id)
+            .where(
+                Workday.region_id == home_region_id,
+                Workday.status == "SCHEDULED",
+            )
+        )
+        home_planning_start = max(
+            start, horizon + timedelta(days=1) if horizon else today
+        )
+
+    visible_region_ids = set(management_region_ids)
+    if home_region_id is not None:
+        visible_region_ids.add(home_region_id)
+    if not visible_region_ids:
         return []
-    return external_calendar_items(
+
+    management_planning_start = max(start, today)
+    starts = [
+        value
+        for value in (
+            management_planning_start if management_region_ids else None,
+            home_planning_start,
+        )
+        if value is not None
+    ]
+    if not starts or min(starts) >= end:
+        return []
+
+    items = external_calendar_items(
         db,
         actor,
-        planning_start,
+        min(starts),
         end,
-        region_ids_override={home_region_id},
+        region_ids_override=visible_region_ids,
     )
+    return [
+        item
+        for item in items
+        if (
+            item["region_id"] in management_region_ids
+            and item["date"] >= management_planning_start
+        )
+        or (
+            home_region_id is not None
+            and item["region_id"] == home_region_id
+            and home_planning_start is not None
+            and item["date"] >= home_planning_start
+        )
+    ]
+
+
+def personal_external_calendar_message(
+    db: Session,
+    actor: Actor,
+    start: date,
+    end: date,
+    items: list[dict[str, object]],
+) -> str | None:
+    """Explain an empty planning feed without disclosing unauthorized meetings."""
+    if items or actor.is_contractor:
+        return None
+    preference = calendar_preference(db, actor.user_id)
+    if not preference.show_thoroughbred and not preference.show_harness:
+        return "Racing information is hidden by your Calendar settings."
+    if end <= local_today():
+        return "Source planning meetings are shown from today onward."
+    if actor.is_admin or any(
+        roles & {Role.MANAGER.value, Role.SUB_MANAGER.value}
+        for roles in actor.regional_roles.values()
+    ):
+        return "No mapped upcoming racing meetings match your Regions and Calendar settings."
+    if actor.person_id is not None:
+        home_region_id = db.scalar(
+            select(Person.home_region_id).where(Person.id == actor.person_id)
+        )
+        if home_region_id is None:
+            return "Racing information needs a Primary Region on your Person profile."
+        return "No mapped racing meetings are available after your Region's published roster horizon."
+    return None

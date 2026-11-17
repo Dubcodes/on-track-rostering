@@ -82,6 +82,12 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
             credential_hash=hash_credential("123456"),
             credential_kind="pin",
         )
+        unlinked_manager = User(
+            email=f"unlinked-manager-{suffix}@example.com",
+            display_name="Unlinked Browser Manager",
+            credential_hash=hash_credential("135790"),
+            credential_kind="pin",
+        )
         employee = User(
             email=f"employee-{suffix}@example.com",
             display_name="Browser Employee",
@@ -139,6 +145,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
                 cross_region,
                 group,
                 manager,
+                unlinked_manager,
                 employee,
                 admin,
                 viewer,
@@ -240,6 +247,11 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
                 UserPersonLink(user_id=submanager.id, person_id=submanager_person.id),
                 RoleGrant(user_id=employee.id, role=Role.EMPLOYEE.value, region_id=region.id),
                 RoleGrant(user_id=manager.id, role=Role.MANAGER.value, region_id=region.id),
+                RoleGrant(
+                    user_id=unlinked_manager.id,
+                    role=Role.MANAGER.value,
+                    region_id=region.id,
+                ),
                 RoleGrant(user_id=submanager.id, role=Role.SUB_MANAGER.value, region_id=region.id),
                 RoleGrant(user_id=admin.id, role=Role.ADMIN.value),
                 RoleGrant(user_id=viewer.id, role=Role.VIEWER.value, region_id=region.id),
@@ -842,6 +854,7 @@ def browser_site(tmp_path_factory):  # type: ignore[no-untyped-def]
         db.commit()
         values = {
             "manager": (manager.email, "123456"),
+            "unlinked_manager": (unlinked_manager.email, "135790"),
             "employee": (employee.email, "654321"),
             "admin": (admin.email, "12345678"),
             "viewer": (viewer.email, "112233"),
@@ -1383,6 +1396,31 @@ def test_external_source_import_preferences_and_detail(browser_site, width: int)
     _capture_page(page, f"external-event-minimal-{width}.png")
     event_link.click()
     page.wait_for_url(f"**{event_href}")
+    context.close()
+
+
+@pytest.mark.parametrize("width", [1280, 320])
+def test_unlinked_manager_can_plan_from_month_and_list(
+    browser_site, width: int
+) -> None:  # type: ignore[no-untyped-def]
+    browser, base_url, values = browser_site
+    context = browser.new_context(viewport={"width": width, "height": 900})
+    page = context.new_page()
+    _login(page, base_url, values["unlinked_manager"])
+
+    page.goto(base_url + values["external_event_month_url"])
+    event_href = f'/external-events/{values["external_event_id"]}'
+    event_card = page.locator(f'a[href="{event_href}"]')
+    assert event_card.count() == 1
+    assert event_card.get_by_text("Planning · Race · Thoroughbred", exact=False).count() == 1
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(base_url + values["external_event_month_url"] + "&view=list")
+    list_card = page.locator(f'a[href="{event_href}"]')
+    assert list_card.count() == 1
+    list_card.click()
+    assert page.get_by_role("button", name="Build this race day").count() == 1
+    _assert_no_horizontal_overflow(page)
     context.close()
 
 

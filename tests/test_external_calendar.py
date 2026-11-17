@@ -17,7 +17,11 @@ from app.external_calendar.models import (
     ExternalProviderState,
     ExternalTrackMapping,
 )
-from app.external_calendar.read_models import external_calendar_items, personal_external_calendar_items
+from app.external_calendar.read_models import (
+    external_calendar_items,
+    personal_external_calendar_items,
+    personal_external_calendar_message,
+)
 from app.external_calendar.refresh import refresh_provider
 from app.external_calendar.service import (
     ProviderObservation,
@@ -278,10 +282,114 @@ def test_external_items_are_region_scoped_and_contractors_get_no_planning_feed(d
     assert external_calendar_items(db, contractor, date(2026, 9, 1), date(2026, 10, 1)) == []
 
 
+def test_management_planning_does_not_require_person_link_and_stays_region_scoped(
+    db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        "app.external_calendar.read_models.local_today", lambda: date(2026, 11, 17)
+    )
+    user, northern, northern_track = foundation(db)
+    central = Region(name="Central")
+    southern = Region(name="Southern")
+    linked_person = Person(display_name="Linked Manager", home_region_id=northern.id)
+    db.add_all([central, southern, linked_person])
+    db.flush()
+    central_track = Track(name="Awapuni", region_id=central.id, palette_slot=2)
+    southern_track = Track(name="Riccarton", region_id=southern.id, palette_slot=3)
+    db.add_all([central_track, southern_track])
+    db.flush()
+    db.add_all(
+        [
+            ExternalCalendarEvent(
+                event_date=event_date,
+                track_id=track.id,
+                discipline="THOROUGHBRED",
+                event_kind="RACE",
+            )
+            for event_date, track in (
+                (date(2026, 11, 16), northern_track),
+                (date(2026, 11, 18), northern_track),
+                (date(2026, 11, 19), central_track),
+                (date(2026, 11, 20), southern_track),
+            )
+        ]
+    )
+    db.flush()
+    unlinked_manager = Actor(
+        user.id,
+        None,
+        frozenset(),
+        {
+            northern.id: frozenset({"MANAGER"}),
+            central.id: frozenset({"MANAGER"}),
+        },
+    )
+    linked_manager = Actor(
+        user.id,
+        linked_person.id,
+        frozenset(),
+        {
+            northern.id: frozenset({"MANAGER"}),
+            central.id: frozenset({"MANAGER"}),
+        },
+    )
+    admin = Actor(user.id, None, frozenset({"ADMIN"}), {})
+    linked_admin = Actor(user.id, linked_person.id, frozenset({"ADMIN"}), {})
+    submanager = Actor(
+        user.id,
+        None,
+        frozenset(),
+        {northern.id: frozenset({"SUB_MANAGER"})},
+    )
+
+    assert [
+        item["track"]
+        for item in personal_external_calendar_items(
+            db, unlinked_manager, date(2026, 11, 1), date(2026, 12, 1)
+        )
+    ] == ["Te Rapa", "Awapuni"]
+    assert [
+        item["track"]
+        for item in personal_external_calendar_items(
+            db, linked_manager, date(2026, 11, 1), date(2026, 12, 1)
+        )
+    ] == ["Te Rapa", "Awapuni"]
+    assert [
+        item["track"]
+        for item in personal_external_calendar_items(
+            db, admin, date(2026, 11, 1), date(2026, 12, 1)
+        )
+    ] == ["Te Rapa", "Awapuni", "Riccarton"]
+    assert [
+        item["track"]
+        for item in personal_external_calendar_items(
+            db, linked_admin, date(2026, 11, 1), date(2026, 12, 1)
+        )
+    ] == ["Te Rapa", "Awapuni", "Riccarton"]
+    assert [
+        item["track"]
+        for item in personal_external_calendar_items(
+            db, submanager, date(2026, 11, 1), date(2026, 12, 1)
+        )
+    ] == ["Te Rapa"]
+    assert personal_external_calendar_items(
+        db,
+        Actor(user.id, None, frozenset(), {northern.id: frozenset({"VIEWER"})}),
+        date(2026, 11, 1),
+        date(2026, 12, 1),
+    ) == []
+    assert personal_external_calendar_items(
+        db,
+        Actor(user.id, linked_person.id, frozenset(), {northern.id: frozenset({"CONTRACTOR"})}),
+        date(2026, 11, 1),
+        date(2026, 12, 1),
+    ) == []
+
+
 def test_personal_external_planning_uses_primary_region_scheduled_horizon(db) -> None:  # type: ignore[no-untyped-def]
     user, northern, track = foundation(db)
     central = Region(name="Central")
-    person = Person(display_name="Linked Manager", home_region_id=northern.id)
+    person = Person(display_name="Linked Employee", home_region_id=northern.id)
     db.add_all([central, person])
     db.flush()
     central_track = Track(name="Awapuni", region_id=central.id, palette_slot=2)
@@ -333,16 +441,62 @@ def test_personal_external_planning_uses_primary_region_scheduled_horizon(db) ->
         ]
     )
     db.flush()
-    linked_manager = actor(user, northern, "MANAGER", person.id)
+    linked_employee = actor(user, northern, "EMPLOYEE", person.id)
 
     items = personal_external_calendar_items(
-        db, linked_manager, date(2027, 1, 1), date(2027, 2, 1)
+        db, linked_employee, date(2027, 1, 1), date(2027, 2, 1)
     )
 
     assert [item["date"] for item in items] == [date(2027, 1, 18), date(2027, 1, 21)]
     assert personal_external_calendar_items(
         db, actor(user, northern, "CONTRACTOR", person.id), date(2027, 1, 1), date(2027, 2, 1)
     ) == []
+
+
+def test_empty_planning_message_explains_preferences_and_missing_primary_region(
+    db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        "app.external_calendar.read_models.local_today", lambda: date(2026, 11, 17)
+    )
+    user, northern, _track = foundation(db)
+    manager = actor(user, northern, "MANAGER")
+    assert personal_external_calendar_message(
+        db, manager, date(2026, 11, 1), date(2026, 12, 1), []
+    ) == "No mapped upcoming racing meetings match your Regions and Calendar settings."
+    db.add(
+        CalendarDisplayPreference(
+            user_id=user.id,
+            show_thoroughbred=False,
+            show_harness=False,
+            show_trials=False,
+        )
+    )
+    db.flush()
+    assert personal_external_calendar_message(
+        db, manager, date(2026, 11, 1), date(2026, 12, 1), []
+    ) == "Racing information is hidden by your Calendar settings."
+
+    other_user = User(
+        email="regionless@example.test",
+        display_name="Regionless Employee",
+        credential_hash="unused",
+    )
+    regionless = Person(display_name="Regionless Employee")
+    db.add_all([other_user, regionless])
+    db.flush()
+    assert personal_external_calendar_message(
+        db,
+        Actor(
+            other_user.id,
+            regionless.id,
+            frozenset(),
+            {northern.id: frozenset({"EMPLOYEE"})},
+        ),
+        date(2026, 11, 1),
+        date(2026, 12, 1),
+        [],
+    ) == "Racing information needs a Primary Region on your Person profile."
 
 
 def test_private_adoption_remains_visible_then_published_link_suppresses(db):  # type: ignore[no-untyped-def]
@@ -711,6 +865,87 @@ def test_mapping_import_is_previewable_idempotent_and_reconciles_pending(db):  #
     apply_bundle(db, bundle, user.id)
     db.flush()
     assert db.scalar(select(func.count()).select_from(ExternalTrackMapping)) == mapping_count
+
+
+def test_mapping_replay_enriches_existing_unpublished_draft_without_touching_publication(
+    db,
+) -> None:  # type: ignore[no-untyped-def]
+    user, region, track = foundation(db)
+    event, state = reconcile_observation(
+        db,
+        ProviderObservation(
+            provider="API",
+            provider_event_id="api-planning-event",
+            event_date=date(2026, 9, 20),
+            source_track_name="Te Rapa Racecourse",
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            facts={"status": "SCHEDULED"},
+            raw_payload={"status": "SCHEDULED"},
+        ),
+    )
+    assert state == "CREATED" and event is not None
+    workday, created = adopt_external_event(db, event.id, actor(user, region, "MANAGER"))
+    assert created
+    draft = db.get(WorkdayRevision, workday.current_draft_revision_id)
+    assert draft.first_race_time is None
+    db.add(
+        ExternalEventObservation(
+            provider="HRNZ",
+            provider_event_id="earlier-unmapped-programme",
+            payload_hash="earlier-unmapped-programme",
+            source_track_name="Te Rapa",
+            parsed_facts={
+                "event_date": "2026-09-20",
+                "discipline": "THOROUGHBRED",
+                "event_kind": "RACE",
+                "programme_status": "COMPLETE",
+                "first_race_time": "12:30",
+                "last_race_time": "17:10",
+                "race_count": 9,
+            },
+            raw_payload={},
+        )
+    )
+    db.flush()
+
+    confirm_track_mapping(db, "HRNZ", "Te Rapa", track.id, user.id)
+
+    assert event.programme_status == "COMPLETE"
+    assert (event.first_race_time, event.last_race_time, event.race_count) == (
+        time(12, 30),
+        time(17, 10),
+        9,
+    )
+    assert (draft.first_race_time, draft.last_race_time, draft.race_count) == (
+        time(12, 30),
+        time(17, 10),
+        9,
+    )
+    draft.state = "PUBLISHED"
+    workday.current_published_revision_id = draft.id
+    workday.current_draft_revision_id = None
+    db.flush()
+    db.add(
+        ExternalEventObservation(
+            provider="HRNZ",
+            provider_event_id="later-unmapped-programme",
+            payload_hash="later-unmapped-programme",
+            source_track_name="Te Rapa",
+            parsed_facts={
+                "event_date": "2026-09-20",
+                "discipline": "THOROUGHBRED",
+                "event_kind": "RACE",
+                "meeting_name": "Updated external title",
+            },
+            raw_payload={},
+        )
+    )
+    db.flush()
+
+    confirm_track_mapping(db, "HRNZ", "Te Rapa", track.id, user.id)
+
+    assert draft.title != "Updated external title"
 
 
 def test_mapping_import_supports_bundle_track_and_blocks_conflict_missing_or_invalid(db):  # type: ignore[no-untyped-def]

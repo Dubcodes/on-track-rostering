@@ -28,7 +28,7 @@ No documented public Love Racing API was found. No authentication, cookie captur
 
 Love Racing calendar discovery uses the public `RaceInfo.aspx/GetCalendarEvents` website endpoint. Detailed Race and Trial programmes use public `RaceInfo/<meeting-id>/Meeting-Overview.aspx` pages, where the meeting ID must be a verified numeric DayID. The strict parser validates the official title's date and Track, accepts Race/Start and Heat/Time tables, retains the complete numbered sequence in observation evidence, and exposes structured first/last/count summaries. A recognized matching official page without a schedule is awaiting publication; partial, conflicting or non-contiguous schedules remain partial evidence. Meeting-not-found pages, unrelated HTML, wrong meeting/type pages and upstream challenges are explicit failures rather than false awaiting schedules.
 
-### Live re-verification — 8 November 2026
+### Live re-verification — 8 and 17 November 2026
 
 Bounded read-only checks against the official public pages established:
 
@@ -38,6 +38,8 @@ Bounded read-only checks against the official public pages established:
 - DayID `56002`, Te Aroha on 25 November, was a genuine matching `Meetings / Program Approved` page without a published schedule and is classified as awaiting.
 - An invalid numeric meeting ID returned HTTP 200 with `MEETING NOT FOUND`; HTTP success alone is therefore not accepted as programme evidence.
 - Current Tauherenikau and Te Aroha fallback event links led to club sites and supplied no verified RaceInfo DayID. Their date, venue and type remain useful, but programme detail stays explicitly unavailable until authoritative calendar evidence reconciles the same canonical event.
+- On 17 November the official calendar endpoint returned 15 valid Race/Trial observations for 17–30 November with no parser warnings, including verified DayID `55997` for Phar Lap Raceway on 18 November. The official page exposed eight races from 13:19 to 17:23, confirming that the current parser contract has representative complete source data to consume.
+- The exact application HTTP client received an upstream challenge for programme pages `55997`, `56002` and `56004` during that check. This is an access-restriction outcome, not an awaiting schedule or parser success. Search/browser retrieval of `55997` confirmed the published schedule, while `56002` and `56004` were still genuine matching Program Approved pages without a schedule in the indexed copies. Bounded retries and last-good retention remain the correct behavior; no browser impersonation or challenge bypass was added.
 
 These observations are dated source evidence, not an availability guarantee. No authentication, browser impersonation or challenge bypass was used.
 
@@ -72,7 +74,7 @@ Racing Dates rows identify the racing **club**, not necessarily the physical Tra
 
 The official programme index is `https://infohorse.hrnz.co.nz/datahrs/programmes/programm.htm`. It is optional enrichment for the HTML fallback. On Track reads the index only, retains programme title/identity and explicit venue evidence, and never fans out across the linked programme detail pages. Ambiguous matches stay unresolved.
 
-During local live smoke testing, the official Infohorse host returned HTTP 403 to the application service client even though the pages and ICS link are publicly visible. The adapter and offline contract tests cover both sources, but a deployment environment receiving the same response correctly reports the race component as `ERROR`. On Track does not impersonate a browser or bypass the upstream restriction.
+During local live smoke testing, the official Infohorse host returned HTTP 403 to the application service client even though the pages and ICS link are publicly visible. A bounded repeat on 17 November 2026 confirmed HTTP 403 for the official ICS, Racing Dates index and programme index using the exact application client; the independent `www.hrnz.co.nz` Trials Diary returned HTTP 200. The adapter and offline contract tests cover both sources, but a deployment environment receiving the same response correctly reports races/programme enrichment as `ERROR` while retaining successful trials as an independent component. On Track does not impersonate a browser or bypass the upstream restriction.
 
 HRNZ also documents an API at `https://harness.hrnz.co.nz/APIdoc/Version-1.1/`, but production access requires approval and is a paid service. It is therefore not used or represented as a public API.
 
@@ -110,3 +112,5 @@ HRNZ also documents an API at `https://harness.hrnz.co.nz/APIdoc/Version-1.1/`, 
 | Future API | None | Not configured |
 
 These rows are implementation evidence, not current staging or production qualification. In particular, HRNZ race discovery may remain unavailable from a deployment network while HRNZ trials, Love Racing, and manual roster entry continue independently.
+
+Canonical Track convergence and the operator decisions needed for the incomplete catalogue are recorded in [RACING_TRACK_CONVERGENCE.md](RACING_TRACK_CONVERGENCE.md).

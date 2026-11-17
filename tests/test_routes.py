@@ -3567,6 +3567,62 @@ def test_single_region_crew_calendar_omits_region_toolbar(routed_db) -> None:  #
     assert 'class="crew-toolbar"' not in crew.text
 
 
+def test_unlinked_admin_and_manager_render_scoped_source_planning_in_month_and_list(
+    routed_db, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        "app.external_calendar.read_models.local_today", lambda: date(2026, 11, 17)
+    )
+    factory, (region_id, track_id, _position_id, _person_id) = routed_db
+    with factory() as db:
+        southern = db.scalar(select(Region).where(Region.name == "Southern"))
+        southern_track = Track(
+            name="Riccarton Planning",
+            region_id=southern.id,
+            palette_slot=4,
+        )
+        db.add(southern_track)
+        db.flush()
+        northern_event = ExternalCalendarEvent(
+            event_date=date(2026, 11, 25),
+            track_id=track_id,
+            external_track_name="Ellerslie",
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            presentation_provider="LOVE_RACING",
+        )
+        southern_event = ExternalCalendarEvent(
+            event_date=date(2026, 11, 26),
+            track_id=southern_track.id,
+            external_track_name=southern_track.name,
+            discipline="THOROUGHBRED",
+            event_kind="RACE",
+            presentation_provider="LOVE_RACING",
+        )
+        db.add_all([northern_event, southern_event])
+        db.commit()
+        northern_event_id = northern_event.id
+        southern_event_id = southern_event.id
+
+    manager = TestClient(app)
+    _login(manager, "manager@example.test", "123456")
+    manager_month = manager.get("/month?year=2026&month=11")
+    manager_list = manager.get("/month?year=2026&month=11&view=list")
+    assert manager_month.status_code == 200 and manager_list.status_code == 200
+    assert "Ellerslie" in manager_month.text and "Ellerslie" in manager_list.text
+    assert "Planning · Race · Thoroughbred · Time TBC" in manager_month.text
+    assert "Riccarton Planning" not in manager_month.text
+    assert manager.get(f"/external-events/{northern_event_id}").status_code == 200
+    assert manager.get(f"/external-events/{southern_event_id}").status_code == 404
+
+    admin = TestClient(app)
+    _login(admin, "admin@example.test", "99887766")
+    admin_month = admin.get("/month?year=2026&month=11")
+    assert admin_month.status_code == 200
+    assert "Ellerslie" in admin_month.text and "Riccarton Planning" in admin_month.text
+    assert admin.get(f"/external-events/{southern_event_id}").status_code == 200
+
+
 def test_linked_day_and_external_event_share_safe_source_evidence(routed_db) -> None:  # type: ignore[no-untyped-def]
     factory, (region_id, track_id, position_id, person_id) = routed_db
     manual_workday_id = _publish_rows(

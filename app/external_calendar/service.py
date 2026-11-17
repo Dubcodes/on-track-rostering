@@ -404,13 +404,36 @@ def confirm_track_mapping(
         observation.event_id = event.id
         observation.mapping_state = "MAPPED"
         observation.reconciliation_state = "MATCHED"
+        previous = {field: getattr(event, field) for field in CANONICAL_FIELDS}
         provenance = dict(event.field_provenance or {})
         enriched = False
         conflict = False
+        incoming_programme_status = facts.get("programme_status")
+        preserve_complete_programme = bool(
+            event.programme_status == "COMPLETE"
+            and incoming_programme_status not in {None, "COMPLETE"}
+        )
+        protected_programme_fields = _protected_programme_fields(event.event_kind)
         for field in CANONICAL_FIELDS:
             raw = facts.get(field)
             incoming = parse_time(str(raw)) if raw and field.endswith("_time") else raw
-            if incoming is not None and getattr(event, field) is None:
+            current = getattr(event, field)
+            if preserve_complete_programme and field in protected_programme_fields:
+                incoming = None
+            if (
+                field == "programme_status"
+                and incoming in _PROGRAMME_STATUS_RANK
+                and current in _PROGRAMME_STATUS_RANK
+            ):
+                incoming_rank = _PROGRAMME_STATUS_RANK[str(incoming)]
+                current_rank = _PROGRAMME_STATUS_RANK[str(current)]
+                if incoming_rank < current_rank:
+                    incoming = None
+                elif incoming_rank > current_rank:
+                    setattr(event, field, incoming)
+                    current = incoming
+                    enriched = True
+            if incoming is not None and current is None:
                 setattr(event, field, incoming)
                 enriched = True
             elif incoming is not None and incoming != getattr(event, field):
@@ -422,6 +445,8 @@ def confirm_track_mapping(
             observation.reconciliation_state = "ENRICHED"
         if conflict:
             observation.reconciliation_state = "CONFLICT"
+        if not conflict:
+            _sync_unpublished_linked_draft(db, event, previous)
     return mapping
 
 

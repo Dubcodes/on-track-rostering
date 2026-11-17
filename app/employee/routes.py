@@ -55,6 +55,7 @@ from app.external_calendar.models import CalendarDisplayPreference, ExternalCale
 from app.external_calendar.read_models import (
     calendar_preference,
     personal_external_calendar_items,
+    personal_external_calendar_message,
 )
 from app.external_calendar.service import event_evidence
 from app.help.content import help_access, help_topic
@@ -132,6 +133,9 @@ def month_view(
     start, end = _month_bounds(year, month)
     items = month_items(db, request.state.actor, start, end)
     external_items = personal_external_calendar_items(db, request.state.actor, start, end)
+    external_calendar_message = personal_external_calendar_message(
+        db, request.state.actor, start, end, external_items
+    )
     for item in items:
         if item["category"] != "RACE_DAY":
             continue
@@ -236,6 +240,7 @@ def month_view(
             grid=grid,
             items_by_date=by_date,
             external_by_date=external_by_date,
+            external_calendar_message=external_calendar_message,
             week_minutes=week_minutes,
             next_up=upcoming,
             month_label=f"{calendar.month_name[month]} {year}",
